@@ -1,0 +1,3 @@
+# Patches must keep LF line endings or git apply fails against the pinned LF sources.
+*.patch text eol=lf
+*.sh text eol=lf
