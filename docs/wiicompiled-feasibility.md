@@ -570,3 +570,17 @@ No está validado píxel a píxel contra Dolphin.
   - En la caja de info van el disco, la carpeta (recortada por la izquierda si es larga), la casilla del acceso directo, el progreso y el resultado. El registro de compilación aparece en un panel a la derecha.
   - Sin `workspace\launcher\setup.png`, el Setup mantiene el estilo procedural.
   - **Verificado:** instalación completa con la ventana del Setup (inicio, progreso y "¡Listo!").
+
+## Mods (12 de octubre de 2026)
+
+- **Parche 22, `wiicompiled-mods`:**
+  - `runtime/src/mods.cpp` busca `<exe>/mods/<carpeta>` (con `mod.toml` opcional) y aplica los mods activos de `[mods] enabled` antes de iniciar aurora:
+    - `disc/` y `riivolution/` se registran con `RecompMod::RegisterDvdOverlayRoot`, el mecanismo de Wiicompiled que ya usaba Retro Rewind;
+    - `textures/` pasa a aurora como carpetas extra de reemplazo.
+  - aurora: `AuroraConfig.textureReplacementRoots` y `textureReplacementRootCount`. `build_index` indexa la carpeta del usuario y luego la de cada mod. Esto cambia la ABI de `AuroraConfig`, así que **hay que regenerar `native_prebuilt`** (`Prepare-NativePrebuilt.ps1`) antes de `Make-Payload.ps1`.
+  - Launcher: el botón MODS (arte) o la pestaña MODS (estilo dibujado) muestran un interruptor por mod y la fila ABRIR CARPETA DE MODS (crea `LEEME.txt`). Cada cambio pide relanzar el juego.
+- **Verificado:**
+  - el volcado de texturas exporta 32 texturas en el arranque;
+  - un mod local de prueba con la textura de la correa invertida se ve en el juego con el mod activo;
+  - la pantalla MODS activa el mod y lo guarda en `Config.toml`.
+- Guía para quien hace mods: `docs/mods.md`.

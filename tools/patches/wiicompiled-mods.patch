@@ -1,0 +1,533 @@
+diff --git a/aurora-main/include/aurora/aurora.h b/aurora-main/include/aurora/aurora.h
+index 00c478d..89aecbd 100644
+--- a/aurora-main/include/aurora/aurora.h
++++ b/aurora-main/include/aurora/aurora.h
+@@ -94,6 +94,10 @@ typedef struct {
+   bool pauseOnFocusLost;
+   bool allowTextureReplacements;
+   bool allowTextureDumps;
++  // Extra texture replacement folders (enabled mods), indexed after <userPath>/texture_replacements.
++  // When two folders hold the same texture, the earlier one wins. May be null.
++  const char* const* textureReplacementRoots;
++  size_t textureReplacementRootCount;
+   bool disableCopyFilter;
+   // When false, Aurora centers the first window. When true, windowPosX/Y are restored verbatim,
+   // including negative coordinates on monitors left of or above the primary display.
+diff --git a/aurora-main/lib/gfx/texture_replacement.cpp b/aurora-main/lib/gfx/texture_replacement.cpp
+index 6791381..7a9d91d 100644
+--- a/aurora-main/lib/gfx/texture_replacement.cpp
++++ b/aurora-main/lib/gfx/texture_replacement.cpp
+@@ -519,44 +519,52 @@ void build_index() noexcept {
+     return;
+   }
+ 
+-  std::error_code ec;
+-  for (std::filesystem::recursive_directory_iterator it(
+-           s_replacementRoot,
+-           std::filesystem::directory_options::skip_permission_denied |
+-               std::filesystem::directory_options::follow_directory_symlink,
+-           ec);
+-       it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+-    if (ec) {
+-      break;
++  std::vector<std::filesystem::path> roots{s_replacementRoot};
++  for (size_t i = 0; i < g_config.textureReplacementRootCount; ++i) {
++    if (g_config.textureReplacementRoots != nullptr && g_config.textureReplacementRoots[i] != nullptr) {
++      roots.push_back(fs_path_from_string(g_config.textureReplacementRoots[i]));
+     }
++  }
++  for (const auto& root : roots) {
++    std::error_code ec;
++    for (std::filesystem::recursive_directory_iterator it(
++             root,
++             std::filesystem::directory_options::skip_permission_denied |
++                 std::filesystem::directory_options::follow_directory_symlink,
++             ec);
++         it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
++      if (ec) {
++        break;
++      }
+ 
+-    if (!it->is_regular_file()) {
+-      continue;
+-    }
++      if (!it->is_regular_file()) {
++        continue;
++      }
+ 
+-    const auto& path = it->path();
++      const auto& path = it->path();
+ 
+-    if (is_relative_to(path, s_dumpRoot)) {
+-      continue;
+-    }
++      if (is_relative_to(path, s_dumpRoot)) {
++        continue;
++      }
+ 
+-    if (!iequals_ascii(fs_path_to_string(path.extension()), ".dds") && !iequals_ascii(fs_path_to_string(path.extension()), ".png")) {
+-      continue;
+-    }
++      if (!iequals_ascii(fs_path_to_string(path.extension()), ".dds") && !iequals_ascii(fs_path_to_string(path.extension()), ".png")) {
++        continue;
++      }
+ 
+-    if (is_sidecar_mip(fs_path_to_string(path.stem()))) {
+-      continue;
+-    }
++      if (is_sidecar_mip(fs_path_to_string(path.stem()))) {
++        continue;
++      }
+ 
+-    const auto parsed = parse_replacement_filename(fs_path_to_string(path.filename()));
+-    if (!parsed.has_value()) {
+-      continue;
+-    }
++      const auto parsed = parse_replacement_filename(fs_path_to_string(path.filename()));
++      if (!parsed.has_value()) {
++        continue;
++      }
+ 
+-    s_replacementIndex.try_emplace(*parsed, path);
++      s_replacementIndex.try_emplace(*parsed, path);
++    }
+   }
+ 
+-  Log.info("Indexed {} texture replacements", s_replacementIndex.size());
++  Log.info("Indexed {} texture replacements from {} folder(s)", s_replacementIndex.size(), roots.size());
+ }
+ 
+ const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {
+diff --git a/runtime/include/mods.h b/runtime/include/mods.h
+new file mode 100644
+index 0000000..d4311d5
+--- /dev/null
++++ b/runtime/include/mods.h
+@@ -0,0 +1,39 @@
++#pragma once
++
++#include <aurora/aurora.h>
++
++#include <filesystem>
++#include <string>
++#include <vector>
++
++// Player-installed mods: <exe dir>/mods/<folder>/ with an optional mod.toml
++// (name, author, version, description) and any of
++//   textures/      Dolphin-style texture replacements (tex1_<W>x<H>_<hash>...png/dds),
++//   disc/          files laid out like the disc's files/ tree, replacing the originals,
++//   riivolution/   Riivolution XMLs (the mod folder is then the virtual SD root).
++// Enabled folders are listed in Config.toml under [mods] enabled. Everything is read once at
++// start-up, so toggling a mod needs a restart (the launcher relaunches).
++namespace mods {
++
++struct Mod {
++    std::string id;  // folder name
++    std::string name;
++    std::string author;
++    std::string version;
++    std::string description;
++    std::filesystem::path root;
++    bool textures = false;
++    bool disc = false;
++    bool riivolution = false;
++    bool enabled = false;
++};
++
++std::filesystem::path Directory();
++std::vector<Mod> Discover();
++bool SetEnabled(const std::string& id, bool enabled);
++
++// Registers the enabled mods' disc/Riivolution overlays and texture folders. Call before
++// aurora_initialize; the texture folder strings stay alive for the process lifetime.
++void Apply(AuroraConfig& config);
++
++} // namespace mods
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index 8eed306..8135d12 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -50,6 +50,8 @@ struct RuntimeUserConfig {
+     std::optional<bool> showFps;
+     // [launcher] show_on_startup: the pre-boot settings screen (launcher.cpp).
+     std::optional<bool> launcherOnStartup;
++    // [mods] enabled: folder names under <exe dir>/mods that are switched on (mods.cpp).
++    std::optional<std::vector<std::string>> enabledMods;
+     std::optional<uint32_t> disabledPostProcessingPaths;
+     std::optional<float> audioVolume;
+     std::optional<float> audioMusicVolume;
+@@ -468,6 +470,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
+     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
+     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
+     config.launcherOnStartup = FindConfigValue<bool>(document, "launcher", "show_on_startup");
++    config.enabledMods = FindConfigValue<std::vector<std::string>>(document, "mods", "enabled");
+     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
+     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
+     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
+@@ -707,6 +710,16 @@ inline bool SetLauncherOnStartup(bool value) {
+     return WriteSetting("launcher", "show_on_startup", value ? "true" : "false");
+ }
+ 
++inline bool SetEnabledMods(const std::vector<std::string>& ids) {
++    Mutable().enabledMods = ids;
++    std::string list = "[";
++    for (size_t i = 0; i < ids.size(); ++i) {
++        if (i != 0) list += ", ";
++        list += FormatString(ids[i]);
++    }
++    return WriteSetting("mods", "enabled", list + "]");
++}
++
+ inline bool SetDisabledPostProcessingPaths(uint32_t value) {
+     Mutable().disabledPostProcessingPaths = value;
+     std::ostringstream formatted;
+@@ -971,6 +984,10 @@ inline bool LauncherOnStartup(bool fallback = true) {
+     return Get().launcherOnStartup.value_or(fallback);
+ }
+ 
++inline std::vector<std::string> EnabledMods() {
++    return Get().enabledMods.value_or(std::vector<std::string>{});
++}
++
+ inline std::string GraphicsApi(std::string fallback = "auto") {
+     return Get().graphicsApi.value_or(std::move(fallback));
+ }
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index f774c53..4aa9896 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -5,6 +5,7 @@
+ // WIICOMPILED_SKIP_LAUNCHER=1; the guest has not started yet, so that costs only the renderer
+ // start-up.
+ #include "launcher.h"
++#include "mods.h"
+ #include "power_pros_ui.h"
+ 
+ #include "aurora_events.h"
+@@ -35,6 +36,7 @@
+ 
+ #if defined(_WIN32)
+ #include <windows.h>
++#include <shellapi.h>
+ #else
+ #include <unistd.h>
+ #endif
+@@ -193,8 +195,42 @@ struct Option {
+     std::vector<std::string> choices;
+     int value = 0;
+     bool restart = true;
++    int mod = -1;  // index into the installed mods, or kOpenModsFolder
+ };
+ 
++constexpr int kOpenModsFolder = -2;
++constexpr int kModsTab = 4;  // after VIDEO, AUDIO, CONTROLES, INTERFAZ
++
++constexpr const char* kModsHelp =
++    "Abre la carpeta mods. Cada mod va en su propia carpeta, con un mod.toml opcional "
++    "(name, author, version, description) y alguna de estas carpetas:\n\n"
++    "  textures   texturas al estilo Dolphin\n"
++    "  disc   archivos que reemplazan los del disco\n"
++    "  riivolution   parches Riivolution (.xml)\n\n"
++    "Un mod solo debe traer sus propios archivos, nunca copias del juego.";
++
++constexpr const char* kModsReadme =
++    "MLB Power Pros 2008 - mods\r\n\r\n"
++    "Cada mod va en su propia carpeta dentro de esta, por ejemplo mods\\UniformesHD\\.\r\n"
++    "Dentro puede tener:\r\n"
++    "  mod.toml      name = \"...\", author = \"...\", version = \"...\", description = \"...\"\r\n"
++    "  textures\\     texturas de reemplazo al estilo Dolphin (tex1_<ancho>x<alto>_<hash>..._<formato>.png o .dds)\r\n"
++    "  disc\\         archivos con la misma ruta que en el disco (la carpeta files del disco)\r\n"
++    "  riivolution\\  parches Riivolution (.xml); la carpeta del mod hace de raiz de la SD\r\n\r\n"
++    "Los mods se activan en el launcher (MODS). Un mod solo debe incluir sus propios archivos,\r\n"
++    "nunca copias del juego.\r\n";
++
++void OpenModsFolder() {
++    const std::filesystem::path dir = mods::Directory();
++    std::error_code ec;
++    std::filesystem::create_directories(dir, ec);
++    const std::filesystem::path readme = dir / "LEEME.txt";
++    if (!std::filesystem::exists(readme, ec)) std::ofstream(readme, std::ios::binary) << kModsReadme;
++#if defined(_WIN32)
++    ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
++#endif
++}
++
+ struct Tab {
+     const char* name;
+     std::vector<Option> options;
+@@ -299,6 +335,31 @@ Result Run(int argc, char** argv) {
+                           "Muestra esta pantalla al abrir el juego. Se puede volver a activar en F10.", YesNo(), 1,
+                           false};
+ 
++    // MODS: one switch per folder under mods/, plus a row that opens the folder.
++    const std::vector<mods::Mod> installedMods = mods::Discover();
++    std::vector<std::string> modHelp;
++    modHelp.reserve(installedMods.size());
++    Tab modsTab{"MODS", {}, installedMods.empty() ? "Todavía no hay mods instalados." : nullptr};
++    modsTab.options.push_back({"ABRIR CARPETA DE MODS", kModsHelp, {"Abrir"}, 0, false, kOpenModsFolder});
++    for (size_t i = 0; i < installedMods.size(); ++i) {
++        const mods::Mod& m = installedMods[i];
++        std::string help = m.description.empty() ? std::string("Sin descripción.") : m.description;
++        if (!m.author.empty() || !m.version.empty()) {
++            help += "\n\n";
++            if (!m.author.empty()) help += "Autor: " + m.author;
++            if (!m.author.empty() && !m.version.empty()) help += "   ·   ";
++            if (!m.version.empty()) help += "Versión " + m.version;
++        }
++        std::string contents;
++        if (m.textures) contents += "texturas";
++        if (m.disc) contents += std::string(contents.empty() ? "" : ", ") + "archivos del disco";
++        if (m.riivolution) contents += std::string(contents.empty() ? "" : ", ") + "Riivolution";
++        help += "\n\nIncluye: " + (contents.empty() ? std::string("nada reconocible (textures, disc o riivolution)") : contents);
++        modHelp.push_back(std::move(help));
++        modsTab.options.push_back({m.name.c_str(), modHelp.back().c_str(), YesNo(), m.enabled ? 1 : 0, true,
++                                   static_cast<int>(i)});
++    }
++
+     std::vector<Tab> tabs{
+         {"VIDEO", {api, display, resolution, aspect, fps}},
+         {"AUDIO", {volume, mute}},
+@@ -308,11 +369,21 @@ Result Run(int argc, char** argv) {
+          "  WASD   stick\n  T F G H   stick C\n  Flechas   cruceta\n\nF10 durante la partida para reasignar."},
+         {"INTERFAZ", {launcherOption}},
+     };
++    tabs.push_back(std::move(modsTab));
+     auto option = [&](int tab, int index) -> Option& { return tabs[static_cast<size_t>(tab)].options[static_cast<size_t>(index)]; };
+ 
+     bool restart = false;
+     auto apply = [&](int tab, int index) {
+         const Option& o = option(tab, index);
++        if (o.mod == kOpenModsFolder) {
++            OpenModsFolder();
++            return;
++        }
++        if (o.mod >= 0) {
++            mods::SetEnabled(installedMods[static_cast<size_t>(o.mod)].id, o.value != 0);
++            restart = true;
++            return;
++        }
+         const std::string label = o.label;
+         if (label == api.label) RuntimeConfigFile::SetGraphicsApi(apis[static_cast<size_t>(o.value)].configName);
+         if (label == display.label) RuntimeConfigFile::SetDisplayMode(kDisplayModes[static_cast<size_t>(o.value)]);
+@@ -351,23 +422,37 @@ Result Run(int argc, char** argv) {
+     }
+     // WIICOMPILED_LAUNCHER_PAGE=settings opens the settings panel (screenshots).
+     const char* page = std::getenv("WIICOMPILED_LAUNCHER_PAGE");
+-    bool settingsOpen = page != nullptr && std::strcmp(page, "settings") == 0;
++    bool settingsOpen = page != nullptr && (std::strcmp(page, "settings") == 0 || std::strcmp(page, "mods") == 0);
++    // With the MoonInning art, MODS is its own screen (the settings panel showing only the MODS tab).
++    bool modsOnly = page != nullptr && std::strcmp(page, "mods") == 0;
+     const char* unfocused = std::getenv("WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT");
+     const bool unfocusedInput = unfocused != nullptr && std::strcmp(unfocused, "1") == 0;
+ 
+     constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
+     int menu = 0;
+-    int tab = 0;
++    int tab = modsOnly ? kModsTab : 0;
+     int row = 0;
++    // Tabs reachable with Q/E: all of them in the procedural look; with the art, the four settings
++    // tabs or only MODS.
++    auto tabRange = [&](int& first, int& count) {
++        first = art.ok && modsOnly ? kModsTab : 0;
++        count = !art.ok ? static_cast<int>(tabs.size()) : modsOnly ? 1 : kModsTab;
++    };
+     auto settingsKeys = [&] {
+         const int count = static_cast<int>(tabs[static_cast<size_t>(tab)].options.size());
+         if (Up()) row = (row + count - 1) % count;
+         if (Down()) row = (row + 1) % count;
+         if (Left()) change(tab, row, -1);
+         if (Right() || Accept()) change(tab, row, 1);
+-        const int tabCount = static_cast<int>(tabs.size());
+-        if (Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1})) tab = (tab + tabCount - 1) % tabCount, row = 0;
+-        if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1})) tab = (tab + 1) % tabCount, row = 0;
++        int first = 0;
++        int tabCount = 0;
++        tabRange(first, tabCount);
++        if (Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1})) {
++            tab = first + (tab - first + tabCount - 1) % tabCount, row = 0;
++        }
++        if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1})) {
++            tab = first + (tab - first + 1) % tabCount, row = 0;
++        }
+         return Back();
+     };
+     using Clock = std::chrono::steady_clock;
+@@ -413,7 +498,8 @@ Result Run(int argc, char** argv) {
+                     if (click && hit(r)) {
+                         menu = i;
+                         if (i == 0) choice = Choice::Play;
+-                        if (i == 1) settingsOpen = true, row = 0;
++                        if (i == 1) settingsOpen = true, modsOnly = false, tab = 0, row = 0;
++                        if (i == 2) settingsOpen = true, modsOnly = true, tab = kModsTab, row = 0;
+                         if (i == 3) choice = Choice::Quit;
+                     }
+                 }
+@@ -421,7 +507,7 @@ Result Run(int argc, char** argv) {
+                     const ArtRect& r = kArtButtons[static_cast<size_t>(i)];
+                     const float radius = (r.y1 - r.y0) * 0.5f * s;
+                     if (i != menu) {
+-                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(6, 24, 80, i == 2 ? 110 : 45), radius);
++                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(6, 24, 80, 45), radius);
+                         continue;
+                     }
+                     const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
+@@ -448,7 +534,7 @@ Result Run(int argc, char** argv) {
+                 // Info box (its baked example text was erased from main.png).
+                 const char* lines[] = {"¡A jugar! Arranca MLB Power Pros 2008.",
+                                        "API gráfica, pantalla, resolución, audio y controles.",
+-                                       "Próximamente: soporte para mods.", "Cierra el juego."};
++                                       "Activa o desactiva mods de texturas y archivos.", "Cierra el juego."};
+                 ShadowedText(dl, g_text, 31 * s, at(100, 777), IM_COL32_WHITE, lines[menu]);
+                 if (discReady) {
+                     DrawCheck(dl, at(100, 822), 22 * s, Rgba(120, 230, 110));
+@@ -471,13 +557,17 @@ Result Run(int argc, char** argv) {
+                 if (Down() || Right()) menu = (menu + 1) % n;
+                 if (Accept()) {
+                     if (menu == 0) choice = Choice::Play;
+-                    if (menu == 1) settingsOpen = true, row = 0;
++                    if (menu == 1) settingsOpen = true, modsOnly = false, tab = 0, row = 0;
++                    if (menu == 2) settingsOpen = true, modsOnly = true, tab = kModsTab, row = 0;
+                     if (menu == 3) choice = Choice::Quit;
+                 }
+             } else {
+                 // Settings: tabs, rows and help text are drawn on the erased panel of settings.png.
+-                for (int i = 0; i < static_cast<int>(tabs.size()) && i < static_cast<int>(kArtTabs.size()); ++i) {
+-                    const ArtRect& r = kArtTabs[static_cast<size_t>(i)];
++                int firstTab = 0;
++                int tabCount = 0;
++                tabRange(firstTab, tabCount);
++                for (int i = firstTab; i < firstTab + tabCount; ++i) {
++                    const ArtRect& r = kArtTabs[static_cast<size_t>(i - firstTab)];
+                     if (click && hit(r)) tab = i, row = 0;
+                     const float radius = (r.y1 - r.y0) * 0.5f * s;
+                     if (tab == i) {
+diff --git a/runtime/src/main.cpp b/runtime/src/main.cpp
+index 6707fc9..fde15ce 100644
+--- a/runtime/src/main.cpp
++++ b/runtime/src/main.cpp
+@@ -68,6 +68,7 @@
+ #include "fiber_manager.h"
+ #include "hle_stubs.h"
+ #include "launcher.h"
++#include "mods.h"
+ #include "runtime_config.h"
+ #include "runtime_log.h"
+ #include "runtime_product.h"
+@@ -1380,6 +1381,8 @@ int RuntimeMain(int argc, char** argv) {
+         auroraConfig.allowTextureReplacements = RuntimeConfigFile::TextureReplacements(false);
+         auroraConfig.allowTextureDumps = auroraConfig.allowTextureReplacements &&
+                                          RuntimeConfigFile::TextureDumps(false);
++        // Enabled player mods: texture folders for aurora, disc/Riivolution overlays for the DVD layer.
++        mods::Apply(auroraConfig);
+         // No vsync knob: aurora always configures a non-blocking present mode.
+         auroraConfig.desiredBackend = BACKEND_AUTO;
+         const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
+new file mode 100644
+index 0000000..ebd3b88
+--- /dev/null
++++ b/runtime/src/mods.cpp
+@@ -0,0 +1,103 @@
++#include "mods.h"
++
++#include "recomp_mod_loader.h"
++#include "runtime_config.h"
++#include "runtime_log.h"
++
++#include <aurora/aurora.h>
++
++#include <algorithm>
++#include <cctype>
++#include <fstream>
++
++namespace mods {
++namespace {
++
++std::string Utf8(const std::filesystem::path& path) {
++    const std::u8string text = path.u8string();
++    return std::string(text.begin(), text.end());
++}
++
++std::string Lower(std::string text) {
++    std::transform(text.begin(), text.end(), text.begin(),
++                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++    return text;
++}
++
++bool IsDirectory(const std::filesystem::path& path) {
++    std::error_code ec;
++    return std::filesystem::is_directory(path, ec);
++}
++
++} // namespace
++
++std::filesystem::path Directory() {
++    const auto base = RuntimeConfigFile::ExecutableDirectory().value_or(std::filesystem::current_path());
++    return base / "mods";
++}
++
++std::vector<Mod> Discover() {
++    std::vector<Mod> found;
++    const auto enabled = RuntimeConfigFile::EnabledMods();
++    std::error_code ec;
++    for (const auto& entry : std::filesystem::directory_iterator(Directory(), ec)) {
++        if (!entry.is_directory(ec)) continue;
++        Mod mod;
++        mod.root = entry.path();
++        mod.id = Utf8(entry.path().filename());
++        mod.name = mod.id;
++        const auto manifest = mod.root / "mod.toml";
++        if (std::filesystem::is_regular_file(manifest, ec)) {
++            try {
++                std::ifstream input(manifest, std::ios::binary);
++                const toml::value document = toml::parse(input, Utf8(manifest));
++                auto text = [&](const char* key, std::string& out) {
++                    try {
++                        out = toml::find<std::string>(document, std::string(key));
++                    } catch (const std::exception&) {  // optional field
++                    }
++                };
++                text("name", mod.name);
++                text("author", mod.author);
++                text("version", mod.version);
++                text("description", mod.description);
++            } catch (const std::exception& error) {
++                RT_LOG(RT_TAG_RUNTIME) << "mods: ignoring unreadable " << Utf8(manifest) << ": " << error.what()
++                                       << std::endl;
++            }
++        }
++        mod.textures = IsDirectory(mod.root / "textures");
++        mod.disc = IsDirectory(mod.root / "disc");
++        mod.riivolution = IsDirectory(mod.root / "riivolution");
++        mod.enabled = std::find(enabled.begin(), enabled.end(), mod.id) != enabled.end();
++        found.push_back(std::move(mod));
++    }
++    std::sort(found.begin(), found.end(), [](const Mod& a, const Mod& b) { return Lower(a.name) < Lower(b.name); });
++    return found;
++}
++
++bool SetEnabled(const std::string& id, bool enabled) {
++    auto list = RuntimeConfigFile::EnabledMods();
++    list.erase(std::remove(list.begin(), list.end(), id), list.end());
++    if (enabled) list.push_back(id);
++    return RuntimeConfigFile::SetEnabledMods(list);
++}
++
++void Apply(AuroraConfig& config) {
++    static std::vector<std::string> textureRoots;
++    static std::vector<const char*> texturePointers;
++    for (const Mod& mod : Discover()) {
++        if (!mod.enabled) continue;
++        RT_LOG(RT_TAG_RUNTIME) << "mods: enabled \"" << mod.name << "\" (" << Utf8(mod.root) << ")" << std::endl;
++        if (mod.riivolution) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root));
++        if (mod.disc) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root / "disc"));
++        if (mod.textures) textureRoots.push_back(Utf8(mod.root / "textures"));
++    }
++    if (textureRoots.empty()) return;
++    for (const std::string& root : textureRoots) texturePointers.push_back(root.c_str());
++    config.textureReplacementRoots = texturePointers.data();
++    config.textureReplacementRootCount = texturePointers.size();
++    config.allowTextureReplacements = true;
++}
++
++} // namespace mods

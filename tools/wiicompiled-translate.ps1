@@ -44,7 +44,7 @@ if (-not (Test-Path "$src\.git")) {
              'wiicompiled-byte-index-jump-tables', 'wiicompiled-mlb-pad-stick-range',
              'wiicompiled-pad-radial-deadzone', 'wiicompiled-preemption-point',
              'wiicompiled-copy-texture-pool', 'wiicompiled-perf-instrumentation',
-             'wiicompiled-launcher') {
+             'wiicompiled-launcher', 'wiicompiled-mods') {
         git -C $src apply (Join-Path $root "tools\patches\$patch.patch"); Invoke-Checked "patch $patch"
     }
     # The runtime CMake reads translator output from <src>/generated.

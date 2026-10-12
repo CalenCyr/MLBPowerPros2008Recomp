@@ -147,6 +147,8 @@ foreach ($name in 'config', 'wii_bootstrap') {
     if (Test-Path $dir) { Copy-Item $dir $game -Recurse -Force }
 }
 New-Item -ItemType File -Force (Join-Path $game 'portable.txt') | Out-Null
+# Player mods live here (the launcher's MODS screen); a reinstall never touches them.
+New-Item -ItemType Directory -Force (Join-Path $game 'mods') | Out-Null
 $userData = Join-Path $game 'UserData'
 New-Item -ItemType Directory -Force $userData | Out-Null
 $config = Join-Path $userData 'Config.toml'
