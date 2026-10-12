@@ -564,3 +564,9 @@ No está validado píxel a píxel contra Dolphin.
   - las chispas siguen a la selección y MODS muestra "Próximamente";
   - la entrada a ajustes y el cambio de pestaña funcionan;
   - las barras quedan rellenas en una ventana de 1920x1009.
+- **El Setup usa el mismo arte:** `prepare_mooninning_art.py` también genera `setup.png`, que es el fondo del menú con los cuatro botones en blanco.
+  - Se borran icono y texto con una mezcla por filas y se conserva la flecha. Los restos del contorno de la pelota se quitan con difusión.
+  - El Setup coloca sus acciones por color: naranja para la acción principal (ELEGIR DISCO, INSTALAR, JUGAR o REINTENTAR), azul para la secundaria (CAMBIAR DISCO, REINSTALAR o VER REGISTRO), verde para CARPETA y morado para SALIR o CANCELAR. Los botones sin uso quedan atenuados.
+  - En la caja de info van el disco, la carpeta (recortada por la izquierda si es larga), la casilla del acceso directo, el progreso y el resultado. El registro de compilación aparece en un panel a la derecha.
+  - Sin `workspace\launcher\setup.png`, el Setup mantiene el estilo procedural.
+  - **Verificado:** instalación completa con la ventana del Setup (inicio, progreso y "¡Listo!").

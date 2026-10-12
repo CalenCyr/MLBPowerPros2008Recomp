@@ -78,6 +78,16 @@ def main(assets: Path, out: Path) -> None:
     fill_cols(px, 86, 1592, 774, 853)    # info box text
     main_menu.save(out / "main.png", optimize=True)
 
+    # Setup window: same backdrop with blank buttons (icon and label erased, arrow kept) so the Setup
+    # can write its own actions on them. Each button's fill is a vertical gradient, so a row-wise
+    # blend across the icon and label leaves a clean pill.
+    for centre in (378, 476, 573, 672):  # JUGAR, AJUSTES, MODS, SALIR
+        fill_rows(px, 120, 560, centre - 30, centre + 31)
+    # Leftovers of the JUGAR baseball outline above and below the blended rows.
+    inpaint_where(px, 120, 212, 345, 412, lambda c: c[0] < 215 or c[2] > 120, grow=1)
+    inpaint_where(px, 130, 200, 338, 352, lambda c: c[0] < 200, grow=2)
+    main_menu.save(out / "setup.png", optimize=True)
+
     settings = Image.open(assets / "mooninning_settings_menu.png").convert("RGB")
     assert settings.size == (1672, 941), settings.size
     px = settings.load()
