@@ -14,6 +14,7 @@ mods\
     disc\          archivos que reemplazan los del disco
     riivolution\   parches Riivolution (.xml)
     project\       paquetes de project.bin (.pack/.dat/.arc) con su nombre
+    roster\        un roster de PowerUp / PowerUp+ (.dat)
 ```
 
 `mod.toml` es opcional; sin él se usa el nombre de la carpeta:
@@ -37,6 +38,7 @@ description = "Uniformes redibujados a 4x."
   - La copia se reutiliza mientras no cambien los mods ni el disco. Generarla tarda menos de un segundo en un SSD y ocupa 406 MB.
   - Si dos mods traen el mismo archivo, gana el primero en orden alfabético.
   - Es la forma correcta de repartir cambios de `project.bin`: el mod solo lleva sus `.pack`, nunca el archivo completo.
+- **`roster/`**: un roster de [PowerUp / PowerUp+](https://github.com/ogura-connection/PowerUpPlus) (el `.dat` de MLB Power Pros 2007). El juego lo convierte al formato de 2008 al arrancar y vale para todos los modos, **MLB Life incluido**. Detalles en `docs/roster-2008.md`.
 - **`riivolution/`**: XML de Riivolution (`<wiidisc>`) válidos para `RL8E54`. La carpeta del mod hace de raíz de la SD.
   - Los parches de archivos funcionan.
   - Los parches de **memoria** solo sirven para datos: el código del juego ya está traducido a nativo, así que cambiar instrucciones PowerPC en memoria no tiene efecto. Lo mismo pasa con los códigos Gecko/Action Replay que modifican código.

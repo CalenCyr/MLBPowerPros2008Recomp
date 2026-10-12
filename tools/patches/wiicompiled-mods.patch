@@ -100,10 +100,10 @@ index 6791381..7a9d91d 100644
  const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {
 diff --git a/runtime/include/mods.h b/runtime/include/mods.h
 new file mode 100644
-index 0000000..42a4c98
+index 0000000..5274ef9
 --- /dev/null
 +++ b/runtime/include/mods.h
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,45 @@
 +#pragma once
 +
 +#include <aurora/aurora.h>
@@ -118,7 +118,9 @@ index 0000000..42a4c98
 +//   disc/          files laid out like the disc's files/ tree, replacing the originals,
 +//   riivolution/   Riivolution XMLs (the mod folder is then the virtual SD root),
 +//   project/       PROJECT.BIN entries by name (e.g. PWM_mdl_uniform_MLB_BOS_00.pack); Apply builds a
-+//                  per-user PROJECT.BIN with them and serves it instead of the disc's.
++//                  per-user PROJECT.BIN with them and serves it instead of the disc's,
++//   roster/        a PowerUp / PowerUp+ roster (MLB Power Pros 2007 Wii save, *.dat), converted to
++//                  2008's game_data.pack on the player's PC; it applies to every mode, MLB Life too.
 +// Enabled folders are listed in Config.toml under [mods] enabled. Everything is read once at
 +// start-up, so toggling a mod needs a restart (the launcher relaunches).
 +namespace mods {
@@ -134,6 +136,7 @@ index 0000000..42a4c98
 +    bool disc = false;
 +    bool riivolution = false;
 +    bool project = false;
++    bool roster = false;
 +    bool enabled = false;
 +};
 +
@@ -196,7 +199,7 @@ index 8eed306..8135d12 100644
      return Get().graphicsApi.value_or(std::move(fallback));
  }
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
-index f774c53..e59a12c 100644
+index f774c53..6d248c7 100644
 --- a/runtime/src/launcher.cpp
 +++ b/runtime/src/launcher.cpp
 @@ -5,6 +5,7 @@
@@ -215,7 +218,7 @@ index f774c53..e59a12c 100644
  #else
  #include <unistd.h>
  #endif
-@@ -193,8 +195,44 @@ struct Option {
+@@ -193,8 +195,47 @@ struct Option {
      std::vector<std::string> choices;
      int value = 0;
      bool restart = true;
@@ -231,7 +234,8 @@ index f774c53..e59a12c 100644
 +    "  textures   texturas al estilo Dolphin\n"
 +    "  disc   archivos que reemplazan los del disco\n"
 +    "  riivolution   parches Riivolution (.xml)\n"
-+    "  project   paquetes .pack de project.bin\n\n"
++    "  project   paquetes .pack de project.bin\n"
++    "  roster   roster de PowerUp / PowerUp+ (.dat)\n\n"
 +    "Un mod solo debe traer sus propios archivos, nunca copias del juego.";
 +
 +constexpr const char* kModsReadme =
@@ -242,7 +246,9 @@ index f774c53..e59a12c 100644
 +    "  textures\\     texturas de reemplazo al estilo Dolphin (tex1_<ancho>x<alto>_<hash>..._<formato>.png o .dds)\r\n"
 +    "  disc\\         archivos con la misma ruta que en el disco (la carpeta files del disco)\r\n"
 +    "  riivolution\\  parches Riivolution (.xml); la carpeta del mod hace de raiz de la SD\r\n"
-+    "  project\\      paquetes de project.bin con su nombre (p. ej. PWM_mdl_uniform_MLB_BOS_00.pack)\r\n\r\n"
++    "  project\\      paquetes de project.bin con su nombre (p. ej. PWM_mdl_uniform_MLB_BOS_00.pack)\r\n"
++    "  roster\\       un roster de PowerUp / PowerUp+ (.dat de MLB Power Pros 2007); se convierte al iniciar\r\n"
++    "                y vale para todos los modos, MLB Life incluido\r\n\r\n"
 +    "Los mods se activan en el launcher (MODS). Un mod solo debe incluir sus propios archivos,\r\n"
 +    "nunca copias del juego.\r\n";
 +
@@ -260,7 +266,7 @@ index f774c53..e59a12c 100644
  struct Tab {
      const char* name;
      std::vector<Option> options;
-@@ -299,6 +337,32 @@ Result Run(int argc, char** argv) {
+@@ -299,6 +340,33 @@ Result Run(int argc, char** argv) {
                            "Muestra esta pantalla al abrir el juego. Se puede volver a activar en F10.", YesNo(), 1,
                            false};
  
@@ -284,6 +290,7 @@ index f774c53..e59a12c 100644
 +        if (m.disc) contents += std::string(contents.empty() ? "" : ", ") + "archivos del disco";
 +        if (m.riivolution) contents += std::string(contents.empty() ? "" : ", ") + "Riivolution";
 +        if (m.project) contents += std::string(contents.empty() ? "" : ", ") + "paquetes de project.bin";
++        if (m.roster) contents += std::string(contents.empty() ? "" : ", ") + "roster de PowerUp (todos los modos, también MLB Life)";
 +        help += "\n\nIncluye: " + (contents.empty() ? std::string("nada reconocible (textures, disc o riivolution)") : contents);
 +        modHelp.push_back(std::move(help));
 +        modsTab.options.push_back({m.name.c_str(), modHelp.back().c_str(), YesNo(), m.enabled ? 1 : 0, true,
@@ -293,7 +300,7 @@ index f774c53..e59a12c 100644
      std::vector<Tab> tabs{
          {"VIDEO", {api, display, resolution, aspect, fps}},
          {"AUDIO", {volume, mute}},
-@@ -308,11 +372,21 @@ Result Run(int argc, char** argv) {
+@@ -308,11 +376,21 @@ Result Run(int argc, char** argv) {
           "  WASD   stick\n  T F G H   stick C\n  Flechas   cruceta\n\nF10 durante la partida para reasignar."},
          {"INTERFAZ", {launcherOption}},
      };
@@ -315,7 +322,7 @@ index f774c53..e59a12c 100644
          const std::string label = o.label;
          if (label == api.label) RuntimeConfigFile::SetGraphicsApi(apis[static_cast<size_t>(o.value)].configName);
          if (label == display.label) RuntimeConfigFile::SetDisplayMode(kDisplayModes[static_cast<size_t>(o.value)]);
-@@ -351,23 +425,37 @@ Result Run(int argc, char** argv) {
+@@ -351,23 +429,37 @@ Result Run(int argc, char** argv) {
      }
      // WIICOMPILED_LAUNCHER_PAGE=settings opens the settings panel (screenshots).
      const char* page = std::getenv("WIICOMPILED_LAUNCHER_PAGE");
@@ -358,7 +365,7 @@ index f774c53..e59a12c 100644
          return Back();
      };
      using Clock = std::chrono::steady_clock;
-@@ -413,7 +501,8 @@ Result Run(int argc, char** argv) {
+@@ -413,7 +505,8 @@ Result Run(int argc, char** argv) {
                      if (click && hit(r)) {
                          menu = i;
                          if (i == 0) choice = Choice::Play;
@@ -368,7 +375,7 @@ index f774c53..e59a12c 100644
                          if (i == 3) choice = Choice::Quit;
                      }
                  }
-@@ -421,7 +510,7 @@ Result Run(int argc, char** argv) {
+@@ -421,7 +514,7 @@ Result Run(int argc, char** argv) {
                      const ArtRect& r = kArtButtons[static_cast<size_t>(i)];
                      const float radius = (r.y1 - r.y0) * 0.5f * s;
                      if (i != menu) {
@@ -377,7 +384,7 @@ index f774c53..e59a12c 100644
                          continue;
                      }
                      const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
-@@ -448,7 +537,7 @@ Result Run(int argc, char** argv) {
+@@ -448,7 +541,7 @@ Result Run(int argc, char** argv) {
                  // Info box (its baked example text was erased from main.png).
                  const char* lines[] = {"¡A jugar! Arranca MLB Power Pros 2008.",
                                         "API gráfica, pantalla, resolución, audio y controles.",
@@ -386,7 +393,7 @@ index f774c53..e59a12c 100644
                  ShadowedText(dl, g_text, 31 * s, at(100, 777), IM_COL32_WHITE, lines[menu]);
                  if (discReady) {
                      DrawCheck(dl, at(100, 822), 22 * s, Rgba(120, 230, 110));
-@@ -471,13 +560,17 @@ Result Run(int argc, char** argv) {
+@@ -471,13 +564,17 @@ Result Run(int argc, char** argv) {
                  if (Down() || Right()) menu = (menu + 1) % n;
                  if (Accept()) {
                      if (menu == 0) choice = Choice::Play;
@@ -430,10 +437,10 @@ index 6707fc9..fde15ce 100644
          const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
 new file mode 100644
-index 0000000..75890b5
+index 0000000..ee2319c
 --- /dev/null
 +++ b/runtime/src/mods.cpp
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,373 @@
 +#include "mods.h"
 +
 +#include "recomp_mod_loader.h"
@@ -446,6 +453,7 @@ index 0000000..75890b5
 +#include <cctype>
 +#include <chrono>
 +#include <cstdint>
++#include <cstring>
 +#include <fstream>
 +#include <map>
 +#include <sstream>
@@ -590,6 +598,7 @@ index 0000000..75890b5
 +        mod.disc = IsDirectory(mod.root / "disc");
 +        mod.riivolution = IsDirectory(mod.root / "riivolution");
 +        mod.project = IsDirectory(mod.root / "project");
++        mod.roster = IsDirectory(mod.root / "roster");
 +        mod.enabled = std::find(enabled.begin(), enabled.end(), mod.id) != enabled.end();
 +        found.push_back(std::move(mod));
 +    }
@@ -605,6 +614,126 @@ index 0000000..75890b5
 +}
 +
 +namespace {
++
++#include "roster_fields.inc"
++
++// A PowerUp / PowerUp+ roster is an MLB Power Pros 2007 Wii save (pm2maus.dat). 2008 keeps the same
++// roster block (1500 players of 0xB0 bytes, lineups, free agents, 32 teams) inside game_data.pack at
++// 0x20; the 2007 save holds it at 0x68C74. Teams, lineups and free agents copy over unchanged; player
++// fields are moved with kRosterFields (tools/roster/powerup_to_2008.py, docs/roster-2008.md).
++constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
++constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
++
++uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
++    uint32_t value = 0;
++    for (uint32_t i = 0; i < count; ++i) {
++        const uint32_t b = bit + i;
++        value = (value << 1) | ((record[b / 8] >> (7 - b % 8)) & 1u);
++    }
++    return value;
++}
++
++void SetBits(unsigned char* record, uint32_t bit, uint32_t count, uint32_t value) {
++    for (uint32_t i = 0; i < count; ++i) {
++        const uint32_t b = bit + i;
++        const unsigned char mask = static_cast<unsigned char>(0x80u >> (b % 8));
++        if ((value >> (count - 1 - i)) & 1u) {
++            record[b / 8] |= mask;
++        } else {
++            record[b / 8] &= static_cast<unsigned char>(~mask);
++        }
++    }
++}
++
++// Rebuilds `pack` (the player's own game_data.pack) with the roster of a PowerUp save.
++bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, std::string& error) {
++    if (save.size() < kSaveRoster2007 + kRosterBlock) {
++        error = "not an MLB Power Pros 2007 Wii save (pm2maus.dat)";
++        return false;
++    }
++    if (pack.size() != kPackRoster2008 + kRosterBlock || std::memcmp(pack.data(), "PACKWII ", 8) != 0) {
++        error = "unexpected game_data.pack";
++        return false;
++    }
++    const auto* oldBlock = reinterpret_cast<const unsigned char*>(save.data() + kSaveRoster2007);
++    auto* newBlock = reinterpret_cast<unsigned char*>(pack.data() + kPackRoster2008);
++    for (size_t i = 0; i < kRosterSlots; ++i) {
++        const unsigned char* from = oldBlock + i * kRosterPlayer;
++        unsigned char* to = newBlock + i * kRosterPlayer;
++        std::memset(to, 0, kRosterPlayer);
++        if (from[0] == 0 && from[1] == 0) continue;  // empty slot
++        std::memcpy(to, from, 0x5C);
++        std::memcpy(to + 0x60, from + 0x60, 0x0F);
++        for (const RosterField& field : kRosterFields) {
++            uint32_t value = GetBits(from, field.from, field.bits);
++            if (field.birthYear && value != 0) value += 1;  // PowerUp dates count from opening day 2007
++            SetBits(to, field.to, field.toBits, value);
++        }
++    }
++    const size_t players = kRosterSlots * kRosterPlayer;
++    std::memcpy(newBlock + players, oldBlock + players, kRosterBlock - players);
++    return true;
++}
++
++// One entry of PROJECT.BIN by name (lower case, no leading slash).
++bool ReadProjectEntry(const std::filesystem::path& original, const std::string& wanted, std::vector<char>& out) {
++    std::ifstream src(original, std::ios::binary);
++    std::vector<char> head(0x40);
++    if (!src.read(head.data(), static_cast<std::streamsize>(head.size()))) return false;
++    const uint32_t recordsOff = Be32(head, 0x14), orderOff = Be32(head, 0x28), namesOff = Be32(head, 0x2C),
++                   dataOff = Be32(head, 0x34);
++    std::vector<char> header(dataOff);
++    src.seekg(0);
++    src.read(header.data(), static_cast<std::streamsize>(header.size()));
++    for (uint32_t slot = 1; orderOff + slot * 8 + 8 <= namesOff; ++slot) {
++        const uint32_t index = Be32(header, orderOff + slot * 8);
++        const uint32_t start = Be32(header, orderOff + slot * 8 + 4);
++        if (index == 0 && start == 0) break;
++        const size_t record = recordsOff + static_cast<size_t>(index) * 0x1C;
++        std::string name(header.data() + namesOff + Be32(header, record + 4));
++        if (Lower(name.substr(name.rfind('/') == 0 ? 1 : 0)) != wanted) continue;
++        out.resize(Be32(header, record + 0x18));
++        src.seekg(static_cast<std::streamoff>(dataOff) + static_cast<std::streamoff>(start) * 0x800);
++        return static_cast<bool>(src.read(out.data(), static_cast<std::streamsize>(out.size())));
++    }
++    return false;
++}
++
++// roster/*.dat of a mod becomes a converted game_data.pack in the cache, rebuilt when the save changes.
++std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
++    namespace fs = std::filesystem;
++    std::error_code ec;
++    fs::path save;
++    for (const auto& file : fs::directory_iterator(mod.root / "roster", ec)) {
++        if (file.is_regular_file(ec) && Lower(Utf8(file.path().extension())) == ".dat") {
++            save = file.path();
++            break;
++        }
++    }
++    if (save.empty()) return {};
++    const fs::path base = cachePath != nullptr ? fs::path(reinterpret_cast<const char8_t*>(cachePath))
++                                               : Directory().parent_path();
++    const fs::path dir = base / "mods" / "roster" / mod.root.filename();
++    const fs::path pack = dir / "game_data.pack";
++    if (fs::is_regular_file(pack, ec) && fs::last_write_time(pack, ec) >= fs::last_write_time(save, ec)) return pack;
++    std::ifstream in(save, std::ios::binary);
++    const std::vector<char> saveData((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    std::vector<char> packData;
++    std::string error;
++    if (!ReadProjectEntry(RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin", "game_data.pack", packData)) {
++        error = "game_data.pack not found in the disc's PROJECT.BIN";
++    }
++    if (!error.empty() || !ConvertRoster(saveData, packData, error)) {
++        RT_LOG(RT_TAG_RUNTIME) << "mods: cannot load the roster " << Utf8(save) << ": " << error << std::endl;
++        return {};
++    }
++    fs::create_directories(dir, ec);
++    std::ofstream(pack, std::ios::binary | std::ios::trunc)
++        .write(packData.data(), static_cast<std::streamsize>(packData.size()));
++    RT_LOG(RT_TAG_RUNTIME) << "mods: converted roster " << Utf8(save.filename())
++                           << " (MLB Power Pros 2007 save) for 2008" << std::endl;
++    return pack;
++}
 +
 +// project/ packs of the enabled mods, merged into a per-user copy of PROJECT.BIN that is served as a
 +// disc overlay. The copy is rebuilt only when the original or any pack changes (size and time).
@@ -664,6 +793,11 @@ index 0000000..75890b5
 +        if (mod.riivolution) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root));
 +        if (mod.disc) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root / "disc"));
 +        if (mod.textures) textureRoots.push_back(Utf8(mod.root / "textures"));
++        if (mod.roster) {  // before project/: a roster .dat wins over the same mod's game_data.pack
++            if (const auto pack = ApplyRoster(mod, config.cachePath); !pack.empty()) {
++                packs.try_emplace("game_data.pack", pack);
++            }
++        }
 +        if (mod.project) {
 +            std::error_code ec;
 +            for (const auto& file : std::filesystem::directory_iterator(mod.root / "project", ec)) {
@@ -680,3 +814,133 @@ index 0000000..75890b5
 +}
 +
 +} // namespace mods
+diff --git a/runtime/src/roster_fields.inc b/runtime/src/roster_fields.inc
+new file mode 100644
+index 0000000..fa16394
+--- /dev/null
++++ b/runtime/src/roster_fields.inc
+@@ -0,0 +1,124 @@
++// Generated by tools/roster/powerup_to_2008.py --emit-cpp from PowerUp's GSPlayer.cs:
++// 2007 (bit, width) -> 2008 (bit, width) for every player field outside the byte ranges
++// copied as they are (0x00..0x5B, 0x60..0x6E). birthYear marks the year to move by +1.
++struct RosterField { uint16_t from, bits, to, toBits; bool birthYear; };
++constexpr RosterField kRosterFields[] = {
++    {0x2E0, 4, 0x2E0, 4, false},  // EyewearColor
++    {0x2E4, 8, 0x2E4, 9, false},  // BattingForm
++    {0x2EC, 8, 0x2ED, 9, false},  // PitchingForm
++    {0x2F4, 4, 0x2F6, 4, false},  // PrimaryPosition
++    {0x2F8, 3, 0x2FA, 3, false},  // PitcherCapability
++    {0x2FB, 3, 0x2FD, 3, false},  // CatcherCapability
++    {0x378, 2, 0x378, 2, false},  // HittingConsistency
++    {0x37A, 3, 0x37A, 3, false},  // HittingVersusLefty1
++    {0x380, 3, 0x37D, 3, false},  // ClutchHitter
++    {0x383, 1, 0x380, 1, false},  // IsTableSetter
++    {0x384, 2, 0x381, 2, false},  // Morale
++    {0x386, 1, 0x383, 1, false},  // IsSparkplug
++    {0x387, 1, 0x384, 1, false},  // IsRallyHitter
++    {0x388, 1, 0x385, 1, false},  // IsHotHitter
++    {0x389, 1, 0x386, 1, false},  // IsBackToBackHitter
++    {0x38A, 1, 0x387, 1, false},  // IsToughOut
++    {0x38B, 1, 0x388, 1, false},  // IsPushHitter
++    {0x38C, 1, 0x389, 1, false},  // IsSprayHitter
++    {0x38D, 2, 0x38A, 2, false},  // InfieldHitter
++    {0x38F, 1, 0x38C, 1, false},  // IsContactHitter
++    {0x390, 1, 0x38D, 1, false},  // IsPowerHitter
++    {0x391, 1, 0x38E, 1, false},  // IsGoodPinchHitter
++    {0x392, 1, 0x38F, 1, false},  // IsFreeSwinger
++    {0x393, 1, 0x390, 1, false},  // IsFirstballHitter
++    {0x394, 2, 0x391, 2, false},  // Bunting
++    {0x396, 2, 0x393, 2, false},  // WalkoffHitter
++    {0x398, 2, 0x395, 2, false},  // BasesLoadedHitter
++    {0x39A, 1, 0x397, 1, false},  // IsRefinedHitter
++    {0x39B, 1, 0x398, 1, false},  // IsIntimidatingHitter
++    {0x39C, 2, 0x399, 2, false},  // Stealing
++    {0x39E, 2, 0x39B, 2, false},  // BaseRunning
++    {0x3A0, 1, 0x39D, 1, false},  // WillSlideHeadFirst
++    {0x3A2, 1, 0x39F, 1, false},  // IsToughRunner
++    {0x3A3, 1, 0x3A0, 1, false},  // WillBreakupDoublePlay
++    {0x3A4, 2, 0x3A1, 2, false},  // Throwing
++    {0x3A6, 1, 0x3A3, 1, false},  // IsGoldGlover
++    {0x3A7, 1, 0x3A4, 1, false},  // CanBarehandCatch
++    {0x3A8, 1, 0x3A5, 1, false},  // CanSpiderCatch
++    {0x3A9, 1, 0x3A6, 1, false},  // IsErrorProne
++    {0x3AA, 3, 0x3A7, 3, false},  // Catching
++    {0x3AD, 1, 0x3AA, 1, false},  // IsGoodBlocker
++    {0x3AE, 1, 0x3AB, 1, false},  // IsTrashTalker
++    {0x3AF, 1, 0x3AC, 1, false},  // HasCannonArm
++    {0x3B2, 1, 0x3AF, 1, false},  // IsStar
++    {0x3B3, 2, 0x3B0, 2, false},  // SmallBall
++    {0x3B5, 2, 0x3B2, 2, false},  // SlugOrSlap
++    {0x3B7, 2, 0x3B4, 2, false},  // AggressiveOrPatientHitter
++    {0x3B9, 2, 0x3B6, 2, false},  // AggressiveOrCautiousBaseStealer
++    {0x3BC, 1, 0x3B9, 1, false},  // IsAggressiveBaserunner
++    {0x3BE, 1, 0x3BB, 1, false},  // IsAggressiveFielder
++    {0x3C0, 1, 0x3BD, 1, false},  // IsPivotMan
++    {0x3C1, 1, 0x3BE, 1, false},  // IsPullHitter
++    {0x3C2, 2, 0x3C0, 2, false},  // GoodOrPoorDayGame
++    {0x3C4, 2, 0x3C2, 2, false},  // GoodOrPoorRain
++    {0x3C8, 8, 0x3C6, 8, false},  // TopThrowingSpeedKMH
++    {0x3D0, 8, 0x3CE, 8, false},  // Control
++    {0x3D8, 8, 0x3D6, 8, false},  // Stamina
++    {0x3E0, 2, 0x3DE, 2, false},  // Recovery
++    {0x3E2, 2, 0x3E0, 2, false},  // PitchingConsistency
++    {0x3E4, 2, 0x3E2, 2, false},  // GroundBallOrFlyBallPitcher
++    {0x3E6, 2, 0x3E4, 2, false},  // SafeOrFatPitch
++    {0x3EE, 2, 0x3EC, 2, false},  // WithRunnersInScoringPosition
++    {0x3E8, 2, 0x3E6, 2, false},  // Spin
++    {0x3EA, 2, 0x3E8, 2, false},  // FastballLife
++    {0x3EC, 1, 0x3EA, 1, false},  // Gyroball
++    {0x3ED, 1, 0x3EB, 1, false},  // ShuttoSpin
++    {0x3F0, 2, 0x3EE, 2, false},  // Poise
++    {0x3F2, 2, 0x3F0, 2, false},  // Luck
++    {0x3F4, 2, 0x3F2, 2, false},  // Release
++    {0x3F6, 2, 0x3F4, 2, false},  // PitchingVersusLefty
++    {0x3F8, 1, 0x3F6, 1, false},  // PoorVersusRunner
++    {0x3F9, 1, 0x3F7, 1, false},  // GoodPickoff
++    {0x3FA, 1, 0x3F8, 1, false},  // GoodDelivery
++    {0x3FB, 1, 0x3F9, 1, false},  // GoodLowPitch
++    {0x3FC, 1, 0x3FA, 1, false},  // DoctorK
++    {0x3FD, 1, 0x3FB, 1, false},  // IsWalkProne
++    {0x3FE, 1, 0x3FC, 1, false},  // IsSandbag
++    {0x3FF, 1, 0x3FD, 1, false},  // HasPokerFace
++    {0x400, 1, 0x3FE, 1, false},  // IsIntimidatingPitcher
++    {0x401, 1, 0x3FF, 1, false},  // IsBattler
++    {0x402, 1, 0x400, 1, false},  // IsHotHead
++    {0x403, 1, 0x401, 1, false},  // IsSlowStarter
++    {0x404, 1, 0x402, 1, false},  // IsStarterFinisher
++    {0x405, 1, 0x403, 1, false},  // IsChokeArtist
++    {0x406, 1, 0x404, 1, false},  // HasGoodReflexes
++    {0x408, 1, 0x406, 1, false},  // HasGoodPace
++    {0x409, 2, 0x407, 2, false},  // PowerOrBreakingBallPitcher
++    {0x420, 11, 0x414, 11, true},  // BirthYear
++    {0x42B, 4, 0x420, 4, false},  // BirthMonth
++    {0x42F, 5, 0x424, 5, false},  // BirthDay
++    {0x440, 10, 0x42F, 10, false},  // BattingAveragePoints
++    {0x44A, 10, 0x440, 10, false},  // RunsBattedIn
++    {0x454, 10, 0x44A, 10, false},  // HomeRuns
++    {0x460, 14, 0x460, 14, false},  // EarnedRunAverage
++    {0x4A0, 5, 0x4A0, 5, false},  // FourSeamType
++    {0x4A5, 3, 0x4A5, 3, false},  // FourSeamMovement
++    {0x4A8, 5, 0x4A8, 5, false},  // Slider1Type
++    {0x4AD, 3, 0x4AD, 3, false},  // Slider1Movement
++    {0x4B0, 5, 0x4B0, 5, false},  // Curve1Type
++    {0x4B5, 3, 0x4B5, 3, false},  // Curve1Movement
++    {0x4B8, 5, 0x4B8, 5, false},  // Fork1Type
++    {0x4BD, 3, 0x4BD, 3, false},  // Fork1Movement
++    {0x4C0, 5, 0x4C0, 5, false},  // Sinker1Type
++    {0x4C5, 3, 0x4C5, 3, false},  // Sinker1Movement
++    {0x4C8, 5, 0x4C8, 5, false},  // SinkingFastball1Type
++    {0x4CD, 3, 0x4CD, 3, false},  // SinkingFastball1Movement
++    {0x4D0, 5, 0x4D0, 5, false},  // TwoSeamType
++    {0x4D5, 3, 0x4D5, 3, false},  // TwoSeamMovement
++    {0x4D8, 5, 0x4D8, 5, false},  // Slider2Type
++    {0x4DD, 3, 0x4DD, 3, false},  // Slider2Movement
++    {0x4E0, 5, 0x4E0, 5, false},  // Curve2Type
++    {0x4E5, 3, 0x4E5, 3, false},  // Curve2Movement
++    {0x4E8, 5, 0x4E8, 5, false},  // Fork2Type
++    {0x4ED, 3, 0x4ED, 3, false},  // Fork2Movement
++    {0x4F0, 5, 0x4F0, 5, false},  // Sinker2Type
++    {0x4F5, 3, 0x4F5, 3, false},  // Sinker2Movement
++    {0x4F8, 5, 0x4F8, 5, false},  // SinkingFastball2Type
++    {0x4FD, 3, 0x4FD, 3, false},  // SinkingFastball2Movement
++};
