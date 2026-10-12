@@ -6,3 +6,4 @@
 - Use short, targeted integration probes from saved states. Automate control sequences when needed. A full match is a later integration check, not a prerequisite for each code improvement.
 - Report linked/translated code separately from validated behavior. Match progress does not increase recomp coverage, and 100% experimental linking does not mean a complete native port.
 - Preserve generated game code. Runtime fixes must remain reproducible patches against pinned dependencies; private binaries, assets, saves and traces stay under local/.
+- Never commit or publish game content: no disc image, executable, assets (textures, models, audio, video, fonts), generated code, saves or byte dumps. User-facing features such as the launcher must not use game assets either. `tools/check_no_game_data.py` runs as the pre-commit hook; install it with `--install-hook` in a fresh clone.

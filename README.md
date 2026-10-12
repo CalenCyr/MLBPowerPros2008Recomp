@@ -48,7 +48,7 @@ Avance posterior del partido: se observaron contacto de la CPU, pelota en el cam
 
 La nueva DLL optimizada conserva el cálculo estricto y pasa las referencias de CPU disponibles. Una comparación de una misma pantalla, sin controles, registró un 71% más de avance de fotogramas del juego frente a la DLL inicial. El runtime informó alrededor del 25% de velocidad normal: todavía falta rendimiento jugable. La medición no representa FPS renderizados ni todo el partido.
 
-El documento aportado por el usuario se usa como referencia de alcance. La ubicación en el disco D es una instrucción directa del usuario. La imagen original permanece en `D:\Dolphin-x64\MLB Power Pros 2008 (USA).nkit.iso`.
+El documento aportado por el usuario se usa como referencia de alcance. La imagen del juego la aporta cada usuario desde su propia copia y nunca se modifica.
 
 ## Reproducir el análisis en Windows
 
@@ -57,14 +57,16 @@ Desde PowerShell:
 ```powershell
 Set-Location D:\MLBPowerPros2008Recomp
 .\tools\bootstrap.ps1
-.\tools\phase0.ps1 -Image 'D:\Dolphin-x64\MLB Power Pros 2008 (USA).nkit.iso' -DolphinTool 'D:\Dolphin-x64\DolphinTool.exe'
+.\tools\phase0.ps1 -Image '<ruta a tu copia>.nkit.iso' -DolphinTool '<carpeta de Dolphin>\DolphinTool.exe'
 ```
 
 Se necesita Python 3.10 o superior en PATH, o pasar `-Python` con la ruta de su ejecutable. `-Convert` expande el NKit con NKit 3.1.0, conserva el resultado en `local/images/` y verifica el ISO con dtk. La extracción y el inventario pueden hacerse sin convertir.
 
 Un código de salida cero de NKit o dtk no demuestra una coincidencia con Redump: consultar los registros de verificación. El ISO expandido actual no coincide con Redump; NKit señaló que falta una partición de actualización y rellenó su espacio con ceros. La extracción directa permite avanzar con el análisis, sin dar por verificada la integridad completa del disco.
 
-Los informes están en `docs/`. Los binarios, assets, herramientas descargadas, registros con strings y resultados generados se guardan exclusivamente en `local/`, excluido de Git. No se distribuye contenido del juego.
+Los informes están en `docs/`. Los binarios, assets, herramientas descargadas, registros con strings y resultados generados se guardan exclusivamente en `local/`, excluido de Git.
+
+**Este repositorio no contiene ni distribuye nada del juego:** ni la imagen del disco, ni el ejecutable, ni assets (texturas, modelos, audio, video, fuentes), ni código generado a partir de él, ni partidas guardadas. Para usarlo hace falta una copia propia y legal de MLB Power Pros 2008 (RL8E54). El repositorio solo trae herramientas, configuración, parches y documentación; todo lo derivado del disco se genera en `local/`. `tools/check_no_game_data.py` rechaza commits con tipos de archivo del juego, contenido binario, archivos grandes o volcados de datos; se instala como hook con `python tools/check_no_game_data.py --install-hook`.
 
 ## Estructura
 

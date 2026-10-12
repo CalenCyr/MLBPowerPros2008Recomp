@@ -6,7 +6,7 @@ Fecha: 7 de octubre de 2026. Proyecto: `D:\MLBPowerPros2008Recomp`.
 
 ## Entrada e integridad
 
-- Fuente: `D:\Dolphin-x64\MLB Power Pros 2008 (USA).nkit.iso`.
+- Fuente: copia propia del usuario en formato NKit (`.nkit.iso`).
 - Tamaño: 1.254.588.416 bytes.
 - SHA256: `87eca8f56d2684a7b32c014213400e9c212b3f84009c7c7ca38a1f7ea73adeb2`.
 - Cabecera: Wii, `RL8E54`, USA/NTSC-U, revisión exterior 0, título interno `MLB Power Pros`.
