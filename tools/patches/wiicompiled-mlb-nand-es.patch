@@ -1,0 +1,197 @@
+diff --git a/runtime/include/game_profile.h b/runtime/include/game_profile.h
+index ab764dd..dd9bfec 100644
+--- a/runtime/include/game_profile.h
++++ b/runtime/include/game_profile.h
+@@ -28,6 +28,8 @@ inline constexpr uint32_t kMem1ArenaLo = 0u;
+ // right below it. The game sizes its main heap to the arena, then fills it nearly
+ // to the byte: a lower arena hi makes a 278 KB load allocation return NULL.
+ inline constexpr uint32_t kMem1ArenaHi = 0x817FFD40u;
++// Plain disc title (Dolphin: /title/00010000/524c3845); MKW is 00010004.
++inline constexpr uint32_t kTitleIdHi = 0x00010000u;
+ inline constexpr uint32_t kOSLoadContextAddress = 0x8009CD58u;
+ // Mario Kart Wii native hooks are bound to MKW addresses; none apply here yet.
+ inline constexpr bool kMkwNatives = false;
+@@ -39,6 +41,7 @@ inline constexpr uint32_t kDiscGameCode = 0x524D4350u;  // "RMCP"
+ inline constexpr uint32_t kDiscMakerId = 0x30310100u;   // "01", disc 1
+ inline constexpr uint32_t kMem1ArenaLo = 0x80399180u;
+ inline constexpr uint32_t kMem1ArenaHi = 0x817F0520u;
++inline constexpr uint32_t kTitleIdHi = 0x00010004u;
+ inline constexpr uint32_t kOSLoadContextAddress = 0x801A1F58u;
+ inline constexpr bool kMkwNatives = true;
+ #endif
+diff --git a/runtime/src/hle/storage/nand_internal.h b/runtime/src/hle/storage/nand_internal.h
+index 346be4f..1a8a9a0 100644
+--- a/runtime/src/hle/storage/nand_internal.h
++++ b/runtime/src/hle/storage/nand_internal.h
+@@ -4,6 +4,7 @@
+ 
+ #pragma once
+ 
++#include "game_profile.h"
+ #include "hle_stubs.h"
+ #include "nand_check_contract.h"
+ #include "hle/runtime_parse_helpers.h"
+@@ -43,7 +44,7 @@
+ 
+ // Mario Kart Wii Title ID
+ namespace {
+-constexpr uint32_t kNandTitleIdHi = 0x00010004;
++constexpr uint32_t kNandTitleIdHi = GameProfile::kTitleIdHi;
+ constexpr uint32_t kNandTitleIdLo = 0x524D4350; // "RMCP" fallback
+ } // anonymous namespace
+ 
+diff --git a/runtime/src/hle/storage/nand_isfs.cpp b/runtime/src/hle/storage/nand_isfs.cpp
+index f084226..3d40205 100644
+--- a/runtime/src/hle/storage/nand_isfs.cpp
++++ b/runtime/src/hle/storage/nand_isfs.cpp
+@@ -2,6 +2,8 @@
+ //
+ // Shared state and helpers live in nand_internal.h.
+ 
++#include <cstdio>
++#include <cstdlib>
+ #include "nand_internal.h"
+ 
+ #include "discord_presence.h"
+@@ -358,7 +360,13 @@ static int32_t HandleShaIoctlv(int32_t fd, uint32_t cmd, uint32_t numIn, uint32_
+     return ISFS_OK;
+ }
+ 
+-extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
++// WIICOMPILED_DEBUG_NAND: trace IOS requests reaching the NAND/ES HLE.
++static bool NandTraceEnabled() {
++    static const bool enabled = std::getenv("WIICOMPILED_DEBUG_NAND") != nullptr;
++    return enabled;
++}
++
++static int32_t NandIosOpenImpl(uint32_t pathPtr, uint32_t mode) {
+     const std::string pathStorage = ReadGuestCString(pathPtr);
+     const char* path = pathPtr == 0 ? nullptr : pathStorage.c_str();
+     
+@@ -426,6 +434,13 @@ extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
+     int32_t fd = AllocateFd(hostPath, file, mode);
+     return fd;
+ }
++extern "C" int32_t NAND_IOS_Open_HLE(uint32_t pathPtr, uint32_t mode) {
++    const int32_t result = NandIosOpenImpl(pathPtr, mode);
++    if (NandTraceEnabled()) {
++        std::fprintf(stderr, "[nandtrace] open %s mode=%u -> %d\n", ReadGuestCString(pathPtr).c_str(), mode, result);
++    }
++    return result;
++}
+ PPC_NATIVE_OVERRIDE(801938F8, NAND_IOS_Open_HLE, int32_t, (uint32_t pathPtr, uint32_t mode), (pathPtr, mode));
+ 
+ extern "C" void NAND_IOS_OpenBody_HLE_801938FC(CpuContext* ctx) {
+@@ -551,7 +566,7 @@ enum ISFSCommand {
+     ISFS_IOCTL_SHUTDOWN = 13,
+ };
+ 
+-extern "C" int32_t NAND_IOS_Ioctl_HLE(
++static int32_t NandIosIoctlImpl(
+     uint32_t fd,
+     uint32_t cmd,
+     uint32_t inBufPtr, uint32_t inLen,
+@@ -797,6 +812,15 @@ static bool TryDeferredNetworkIosSync(CpuContext* ctx, StartSync&& startSync) {
+     return false;
+ }
+ 
++extern "C" int32_t NAND_IOS_Ioctl_HLE(uint32_t fd, uint32_t cmd, uint32_t inBufPtr, uint32_t inLen,
++                                      uint32_t outBufPtr, uint32_t outLen) {
++    const int32_t result = NandIosIoctlImpl(fd, cmd, inBufPtr, inLen, outBufPtr, outLen);
++    if (NandTraceEnabled()) {
++        std::fprintf(stderr, "[nandtrace] ioctl fd=%u cmd=%u in=%u out=%u -> %d\n", fd, cmd, inLen, outLen, result);
++    }
++    return result;
++}
++
+ extern "C" void NAND_IOS_Ioctl_Entry_HLE(CpuContext* ctx) {
+     const uint32_t fd = ctx->gpr[3];
+     const uint32_t cmd = ctx->gpr[4];
+@@ -1021,7 +1045,7 @@ static int32_t HandleIsfsReadDir(uint32_t numIn, uint32_t numOut, uint32_t vecto
+     return ISFS_OK;
+ }
+ 
+-extern "C" int32_t NAND_IOS_Ioctlv_HLE(
++static int32_t NandIosIoctlvImpl(
+     uint32_t fd,
+     uint32_t cmd,
+     uint32_t numIn,
+@@ -1117,6 +1141,62 @@ extern "C" int32_t NAND_IOS_Ioctlv_HLE(
+                 return ISFS_OK;
+             }
+ 
++            case 22: {  // ES_GetConsumption: disc titles have no time/launch limits (Dolphin: 0 entries)
++                if (numIn != 1 || numOut != 2) {
++                    return ISFS_EINVAL;
++                }
++                const IosVector count = ReadIosVector(vectorPtr, 2);
++                if (count.size < 4 || count.address == 0 || !Memory::Contains(count.address, 4)) {
++                    return ISFS_EINVAL;
++                }
++                Memory::Write32(count.address, 0);
++                return ISFS_OK;
++            }
++
++            case 29: {  // ES_GetTitleDir: "/title/<hi>/<lo>/data" for the given title id (ESP_GetDataDir)
++                if (numIn != 1 || numOut != 1) {
++                    return ISFS_EINVAL;
++                }
++                const IosVector in = ReadIosVector(vectorPtr, 0);
++                const IosVector out = ReadIosVector(vectorPtr, 1);
++                if (in.size < 8 || !Memory::Contains(in.address, 8) || out.size < 30 ||
++                    !Memory::Contains(out.address, 30)) {
++                    return ISFS_EINVAL;
++                }
++                char path[32];
++                std::snprintf(path, sizeof(path), "/title/%08x/%08x/data", Memory::Read32(in.address),
++                              Memory::Read32(in.address + 4));
++                for (uint32_t i = 0; i < 30; ++i) {
++                    Memory::Write8(out.address + i, static_cast<uint8_t>(path[i]));
++                }
++                return ISFS_OK;
++            }
++
++            case 27: {  // ES_DIGetTicketView: view of the running disc title's ticket
++                if (numIn != 1 || numOut != 1) {
++                    return ISFS_EINVAL;
++                }
++                // Dolphin's TicketView: version, ticket id, device id, title id (+0x10),
++                // access mask (+0x18), ..., content access permissions (+0x54, 0x40 bytes).
++                constexpr uint32_t kTicketViewSize = 0xD8;
++                const IosVector out = ReadIosVector(vectorPtr, 1);
++                if (out.size < kTicketViewSize || out.address == 0 || !Memory::Contains(out.address, kTicketViewSize)) {
++                    return ISFS_EINVAL;
++                }
++                for (uint32_t off = 0; off < kTicketViewSize; off += 4) {
++                    Memory::Write32(out.address + off, 0);
++                }
++                const uint64_t titleId = CurrentMkwTitleId();
++                Memory::Write32(out.address + 0x0Cu, WiiEsCrypto::CurrentIdentity().deviceId);
++                Memory::Write32(out.address + 0x10u, static_cast<uint32_t>(titleId >> 32));
++                Memory::Write32(out.address + 0x14u, static_cast<uint32_t>(titleId));
++                Memory::Write16(out.address + 0x18u, 0xFFFF);
++                for (uint32_t off = 0x54; off < 0x94; off += 4) {
++                    Memory::Write32(out.address + off, 0xFFFFFFFFu);
++                }
++                return ISFS_OK;
++            }
++
+             default:
+                 LogNandWarning("IOS_Ioctlv", "unsupported /dev/es cmd=%u", cmd);
+                 return ISFS_EINVAL;
+@@ -1127,6 +1207,15 @@ extern "C" int32_t NAND_IOS_Ioctlv_HLE(
+     return ISFS_OK;
+ }
+ 
++extern "C" int32_t NAND_IOS_Ioctlv_HLE(uint32_t fd, uint32_t cmd, uint32_t numIn, uint32_t numOut,
++                                       uint32_t vectorPtr) {
++    const int32_t result = NandIosIoctlvImpl(fd, cmd, numIn, numOut, vectorPtr);
++    if (NandTraceEnabled()) {
++        std::fprintf(stderr, "[nandtrace] ioctlv fd=%u cmd=%u in=%u out=%u -> %d\n", fd, cmd, numIn, numOut, result);
++    }
++    return result;
++}
++
+ extern "C" void NAND_IOS_Ioctlv_Entry_HLE(CpuContext* ctx) {
+     const uint32_t fd = ctx->gpr[3];
+     const uint32_t cmd = ctx->gpr[4];

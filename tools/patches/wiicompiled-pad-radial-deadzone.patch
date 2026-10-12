@@ -1,0 +1,108 @@
+diff --git a/aurora-main/lib/dolphin/pad/pad.cpp b/aurora-main/lib/dolphin/pad/pad.cpp
+index 329a02d..1ddfa2b 100644
+--- a/aurora-main/lib/dolphin/pad/pad.cpp
++++ b/aurora-main/lib/dolphin/pad/pad.cpp
+@@ -7,6 +7,7 @@
+ #include <SDL3/SDL_joystick.h>
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <array>
+ #include <atomic>
+ #include <sys/stat.h>
+@@ -527,8 +528,8 @@ static PADDeadZones default_dead_zones(const aurora::input::GameController& cont
+                            (SDL_GetGamepadType(controller.m_controller) == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO &&
+                             controller.m_pid == 0x2073)),
+       .useDeadzones = true,
+-      .stickDeadZone = 8000,
+-      .substickDeadZone = 8000,
++      .stickDeadZone = 3000,
++      .substickDeadZone = 3000,
+       .leftTriggerActivationZone = 31150,
+       .rightTriggerActivationZone = 31150,
+   };
+@@ -914,53 +915,29 @@ u32 PADRead(PADStatus* status) {
+       const auto ylPos = _get_axis_value(controller, PAD_AXIS_LEFT_Y_POS);
+       const auto ylNeg = _get_axis_value(controller, PAD_AXIS_LEFT_Y_NEG);
+ 
+-      auto xl = static_cast<Sint16>(xlPos - xlNeg);
+-      auto yl = static_cast<Sint16>(ylPos - ylNeg);
+-      if (controller->m_deadZones.useDeadzones) {
+-        if (std::abs(xl) > controller->m_deadZones.stickDeadZone) {
+-          xl /= 256;
+-        } else {
+-          xl = 0;
+-        }
+-        if (std::abs(yl) > controller->m_deadZones.stickDeadZone) {
+-          yl /= 256;
+-        } else {
+-          yl = 0;
++      // Radial dead zone rescaled to the full range: the output grows smoothly from the edge of the
++      // zone instead of jumping to it, and diagonals are not snapped onto the axes.
++      const auto applyStick = [](int x, int y, int deadZone, bool useDeadzones, s8& outX, s8& outY) {
++        const double magnitude = std::hypot(static_cast<double>(x), static_cast<double>(y));
++        const double zone = useDeadzones ? std::clamp(deadZone, 0, 32000) : 0;
++        if (magnitude <= zone) {
++          outX = outY = 0;
++          return;
+         }
+-      } else {
+-        xl /= 256;
+-        yl /= 256;
+-      }
+-
+-      status[i].stickX = static_cast<int8_t>(xl);
+-      status[i].stickY = static_cast<int8_t>(yl);
++        const double scale = std::min(1.0, (magnitude - zone) / (32767.0 - zone)) * 127.0 / magnitude;
++        outX = static_cast<s8>(std::clamp(static_cast<int>(std::lround(x * scale)), -127, 127));
++        outY = static_cast<s8>(std::clamp(static_cast<int>(std::lround(y * scale)), -127, 127));
++      };
++      applyStick(xlPos - xlNeg, ylPos - ylNeg, controller->m_deadZones.stickDeadZone,
++                 controller->m_deadZones.useDeadzones, status[i].stickX, status[i].stickY);
+ 
+       const auto xrPos = _get_axis_value(controller, PAD_AXIS_RIGHT_X_POS);
+       const auto xrNeg = _get_axis_value(controller, PAD_AXIS_RIGHT_X_NEG);
+       const auto yrPos = _get_axis_value(controller, PAD_AXIS_RIGHT_Y_POS);
+       const auto yrNeg = _get_axis_value(controller, PAD_AXIS_RIGHT_Y_NEG);
+ 
+-      auto xr = static_cast<Sint16>(xrPos - xrNeg);
+-      auto yr = static_cast<Sint16>(yrPos - yrNeg);
+-      if (controller->m_deadZones.useDeadzones) {
+-        if (std::abs(xr) > controller->m_deadZones.substickDeadZone) {
+-          xr /= 256;
+-        } else {
+-          xr = 0;
+-        }
+-
+-        if (std::abs(yr) > controller->m_deadZones.substickDeadZone) {
+-          yr /= 256;
+-        } else {
+-          yr = 0;
+-        }
+-      } else {
+-        xr /= 256;
+-        yr /= 256;
+-      }
+-
+-      status[i].substickX = static_cast<int8_t>(xr);
+-      status[i].substickY = static_cast<int8_t>(yr);
++      applyStick(xrPos - xrNeg, yrPos - yrNeg, controller->m_deadZones.substickDeadZone,
++                 controller->m_deadZones.useDeadzones, status[i].substickX, status[i].substickY);
+ 
+       Sint16 tl = std::max(static_cast<Sint16>(0), _get_axis_value(controller, PAD_AXIS_TRIGGER_L));
+       Sint16 tr = std::max(static_cast<Sint16>(0), _get_axis_value(controller, PAD_AXIS_TRIGGER_R));
+diff --git a/aurora-main/lib/input.hpp b/aurora-main/lib/input.hpp
+index ae083b1..a246fde 100644
+--- a/aurora-main/lib/input.hpp
++++ b/aurora-main/lib/input.hpp
+@@ -24,8 +24,8 @@ struct GameController {
+   PADDeadZones m_deadZones{
+       .emulateTriggers = true,
+       .useDeadzones = true,
+-      .stickDeadZone = 8000,
+-      .substickDeadZone = 8000,
++      .stickDeadZone = 3000,
++      .substickDeadZone = 3000,
+       .leftTriggerActivationZone = 31150,
+       .rightTriggerActivationZone = 31150,
+   };

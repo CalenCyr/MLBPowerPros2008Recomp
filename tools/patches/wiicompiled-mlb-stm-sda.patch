@@ -1,0 +1,48 @@
+diff --git a/runtime/include/game_profile.h b/runtime/include/game_profile.h
+index dd9bfec..315d857 100644
+--- a/runtime/include/game_profile.h
++++ b/runtime/include/game_profile.h
+@@ -30,6 +30,9 @@ inline constexpr uint32_t kMem1ArenaLo = 0u;
+ inline constexpr uint32_t kMem1ArenaHi = 0x817FFD40u;
+ // Plain disc title (Dolphin: /title/00010000/524c3845); MKW is 00010004.
+ inline constexpr uint32_t kTitleIdHi = 0x00010000u;
++// __OSInitSTM keeps its initialized flag at r13-0x6DDC, then the immediate and eventhook
++// handles (MKW: r13-0x62CC). MLB's r13-0x62CC is the .sdata2 int-to-float bias constant.
++inline constexpr uint32_t kStmSdaOffset = 0x6DDCu;
+ inline constexpr uint32_t kOSLoadContextAddress = 0x8009CD58u;
+ // Mario Kart Wii native hooks are bound to MKW addresses; none apply here yet.
+ inline constexpr bool kMkwNatives = false;
+@@ -42,6 +45,7 @@ inline constexpr uint32_t kDiscMakerId = 0x30310100u;   // "01", disc 1
+ inline constexpr uint32_t kMem1ArenaLo = 0x80399180u;
+ inline constexpr uint32_t kMem1ArenaHi = 0x817F0520u;
+ inline constexpr uint32_t kTitleIdHi = 0x00010004u;
++inline constexpr uint32_t kStmSdaOffset = 0x62CCu;
+ inline constexpr uint32_t kOSLoadContextAddress = 0x801A1F58u;
+ inline constexpr bool kMkwNatives = true;
+ #endif
+diff --git a/runtime/src/hle/os/os_init.cpp b/runtime/src/hle/os/os_init.cpp
+index 08472a8..0095579 100644
+--- a/runtime/src/hle/os/os_init.cpp
++++ b/runtime/src/hle/os/os_init.cpp
+@@ -200,15 +200,16 @@ extern "C" uint32_t __OSInitSTM_HLE_801ab848(CpuContext* ctx)
+          return 0;
+     }
+ 
+-    // Offsets from disassembly: r13-0x62cc=STM_Initialized, r13-0x62c8=/dev/stm/immediate,
+-    // r13-0x62c4=/dev/stm/eventhook.
++    // Offsets from disassembly (MKW): r13-0x62cc=STM_Initialized, r13-0x62c8=/dev/stm/immediate,
++    // r13-0x62c4=/dev/stm/eventhook. Same layout in other games at GameProfile::kStmSdaOffset.
++    const uint32_t stm = r13 - GameProfile::kStmSdaOffset;
+     try {
+         // Mark STM as initialized
+-        ::Memory::Write32(r13 - 0x62ccu, 1);
++        ::Memory::Write32(stm, 1);
+ 
+         // Fake non-zero handles so callers' zero-checks pass.
+-        ::Memory::Write32(r13 - 0x62c8u, 0x00535401); // "ST\x01"
+-        ::Memory::Write32(r13 - 0x62c4u, 0x00535402); // "ST\x02"
++        ::Memory::Write32(stm + 4, 0x00535401); // "ST\x01"
++        ::Memory::Write32(stm + 8, 0x00535402); // "ST\x02"
+ 
+         // Default Power/Reset callback pointers are left unset; safe since we never fire
+         // the STM hardware interrupt that would invoke them.

@@ -1,0 +1,11 @@
+--- a/Source/Core/Core/Core.cpp
++++ b/Source/Core/Core/Core.cpp
+@@ -296,6 +296,8 @@
+     Common::SetCurrentThreadName("CPU thread");
+   else
+     Common::SetCurrentThreadName("CPU-GPU thread");
++  std::fprintf(stderr, "[powerpros-diagnostic] CPU thread dual_core=%d\n",
++               system.IsDualCoreMode() ? 1 : 0);
+ 
+   // This needs to be delayed until after the video backend is ready.
+   DolphinAnalytics::Instance().ReportGameStart();

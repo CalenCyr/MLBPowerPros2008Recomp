@@ -1,0 +1,113 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
+@@ -24,33 +24,55 @@
+ bool LsIsLoopHeader(const u8* ram, u32 ram_size, u32 end_pc)
+ {
+   constexpr u32 kBase = 0x80000000u;
+-  if (end_pc < kBase)
++  if (!ram || end_pc < kBase || (end_pc & 3u) != 0)
+     return false;
+   const u32 start_off = end_pc - kBase;
++  if (start_off > ram_size || ram_size - start_off < 4u)
++    return false;
+   constexpr u32 kWindowInsns = 2048;
++  // A chunk may also leave an inlined loop at a call's return site in its tail,
++  // rather than at the branch target. Recognize that straight-line tail up to
++  // its first non-call branch; do not borrow a tail across control-flow splits.
++  bool straight_line_tail = true;
+   for (u32 i = 0; i < kWindowInsns; ++i)
+   {
++    if (i > (ram_size - start_off - 4u) / 4u)
++      break;
+     const u32 off = start_off + i * 4u;
+-    if (off + 4u > ram_size)
+-      break;
+     const u32 insn = Common::swap32(&ram[off]);
+     const u32 opcd = insn >> 26;
+     const u32 addr = end_pc + i * 4u;
+-    if (addr <= end_pc)
++    // Linked branches are calls and can return to the following instruction.
++    if ((opcd == 16u || opcd == 18u || opcd == 19u) && (insn & 1u) != 0)
+       continue;
+-    if (opcd == 16u && (insn & 0x2u) == 0u)  // bc: B-form, 14-bit signed BD, AA=0
++    if (opcd == 16u)  // bc: B-form, 14-bit signed BD
+     {
+       const s32 bd = static_cast<s32>(static_cast<s16>(insn & 0xFFFCu));
+-      if (addr + static_cast<u32>(bd) == end_pc)
++      const u32 target = (insn & 2u) ? static_cast<u32>(bd) : addr + static_cast<u32>(bd);
++      if (addr > end_pc && target >= kBase &&
++          (target == end_pc || (straight_line_tail && target < end_pc)))
+         return true;
+-    }
+-    else if (opcd == 18u && (insn & 0x2u) == 0u)  // b: I-form, 24-bit signed LI, AA=0
++      straight_line_tail = false;
++    }
++    else if (opcd == 18u)  // b: I-form, 24-bit signed LI
+     {
+       s32 li = static_cast<s32>(insn & 0x03FFFFFCu);
+       if (li & 0x02000000)
+         li |= static_cast<s32>(0xFC000000u);
+-      if (addr + static_cast<u32>(li) == end_pc)
++      const u32 target = (insn & 2u) ? static_cast<u32>(li) : addr + static_cast<u32>(li);
++      if (addr > end_pc && target >= kBase &&
++          (target == end_pc || (straight_line_tail && target < end_pc)))
+         return true;
++      // Preserve exact-header lookahead: inline callees can sit between the
++      // header and its back-edge in the linear image. Only the new enclosing
++      // tail inference must stop crossing this control-flow split.
++      straight_line_tail = false;
++    }
++    else if (opcd == 19u)
++    {
++      const u32 xo = (insn >> 1) & 0x3FFu;
++      if (xo == 16u || xo == 528u)  // bclr / bcctr: no straight-line tail proof
++        straight_line_tail = false;
+     }
+   }
+   return false;
+@@ -185,12 +207,9 @@
+     }
+     if (ppc.pc == end_pc)
+     {
+-      // A native dispatch can fall through into a loop body and return at its
+-      // back-edge with PC set to the loop header. In that one case the shadow
+-      // must execute the inlined iteration before stopping. An arrival by any
+-      // branch (including a call to an address which also happens to be a loop
+-      // header) is already the native dispatch boundary.
+-      // ...and on a loop header, not until the shadow has done as much work as
++      // A native chunk may iterate through the same PC repeatedly before
++      // leaving at a header or a call return in the loop tail. At either kind
++      // of boundary, do not stop until the shadow has done as much work as
+       // the native block did. A generated chunk leaves an inlined loop at its
+       // header once the block's charge crosses DOLRECOMP_C_LOOP_CYCLE_BUDGET
+       // (emitter.c:324), so the iteration it stops on is timing-determined and
+@@ -320,6 +339,16 @@
+       diff += " mmio-read-seq-divergence";
+   }
+ 
++  // 0xFFFFFFFF is not an aligned PPC instruction address: use it for boundary
++  // records of every checked entry, without printing every interpreted step.
++  if (m_ls_trace_pc == 0xFFFFFFFFu || m_ls_trace_pc == entry_pc)
++  {
++    std::fprintf(stderr, "[ls-boundary] entry=0x%08X end=0x%08X steps=%d "
++                 "N_cyc=%lld I_cyc=%lld cycle_align=%d reached=%d cap_hit=%d matched=%d\n",
++                 entry_pc, end_pc, steps, (long long)native_charge, (long long)interp_cycles,
++                 end_is_loop_header, reached, cap_hit, diff.empty());
++  }
++
+   if (!cap_hit && !diff.empty() && m_ls_whitelist.find(entry_pc) == m_ls_whitelist.end())
+   {
+     if (!m_ls_filter.empty() && diff.find(m_ls_filter) == std::string::npos)
+@@ -331,8 +360,10 @@
+       ++m_ls_reports;
+       if (m_ls_max_report == 0 || m_ls_reports <= m_ls_max_report)
+       {
+-        std::fprintf(stderr, "[lockstep] DIVERGE #%llu entry=0x%08X end=0x%08X:%s\n",
+-                     (unsigned long long)m_ls_reports, entry_pc, end_pc, diff.c_str());
++        std::fprintf(stderr, "[lockstep] DIVERGE #%llu entry=0x%08X end=0x%08X:%s "
++                     "[alignment steps=%d N_cyc=%lld I_cyc=%lld loop_header=%d]\n",
++                     (unsigned long long)m_ls_reports, entry_pc, end_pc, diff.c_str(), steps,
++                     (long long)native_charge, (long long)interp_cycles, end_is_loop_header);
+       }
+     }
+   }

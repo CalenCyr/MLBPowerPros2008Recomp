@@ -1,0 +1,30 @@
+diff --git a/src/runtime/dolphin_runtime.cpp b/src/runtime/dolphin_runtime.cpp
+index f9b5405..52b4cfe 100644
+--- a/src/runtime/dolphin_runtime.cpp
++++ b/src/runtime/dolphin_runtime.cpp
+@@ -115,6 +115,7 @@ void Host_PPCSymbolsChanged() {}
+ void Host_PPCBreakpointsChanged() {}
+ bool Host_UIBlocksControllerState() { return false; }
+ void Host_Message(HostMessageID id) {
++  std::fprintf(stderr, "[powerpros-diagnostic] host message=%d\n", static_cast<int>(id));
+   if (id == HostMessageID::WMUserStop && s_platform)
+     s_platform->Stop();
+ }
+@@ -779,6 +780,7 @@ RuntimeRunResult Runtime::Run() {
+   }
+   m_impl->state_hook =
+       Core::AddOnStateChangedCallback([this](Core::State state) {
++        std::fprintf(stderr, "[powerpros-diagnostic] core state callback=%d\n", static_cast<int>(state));
+         if (state == Core::State::Uninitialized && m_impl->platform)
+           m_impl->platform->Stop();
+       });
+@@ -813,7 +815,9 @@ RuntimeRunResult Runtime::Run() {
+       }
+     });
+   }
++  std::fprintf(stderr, "[powerpros-diagnostic] platform loop running=%d\n", m_impl->platform->IsRunning());
+   m_impl->platform->MainLoop();
++  std::fprintf(stderr, "[powerpros-diagnostic] platform loop returned\n");
+   title_thread.request_stop();
+   if (title_thread.joinable())
+     title_thread.join();

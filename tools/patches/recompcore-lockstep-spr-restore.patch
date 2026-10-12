@@ -1,0 +1,67 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
+@@ -15,6 +15,7 @@
+ 
+ #pragma once
+ 
++#include <array>
+ #include <string>
+ #include <cstring>
+ #include <unordered_map>
+@@ -228,6 +229,7 @@
+ 
+   u32 m_ls_entry = 0;
+   CPUState m_ls_snapshot{};
++  std::array<u32, 1024> m_ls_spr_pre{};  // ppc.spr before the native block
+   PowerProsExramSnapshot m_ls_exram;
+ 
+   struct LockstepJournalState
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
+@@ -144,6 +144,7 @@
+ {
+   m_ls_entry = guest.pc;
+   m_ls_snapshot = guest;
++  std::memcpy(m_ls_spr_pre.data(), m_core.m_system.GetPPCState().spr, sizeof(u32) * 1024);
+   m_ls_exram.Capture(guest.exram, guest.exram_size);
+   m_journal.Clear();
+   m_ls_fallback_seen = false;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
+@@ -154,6 +154,12 @@
+   const u64 saved_msr = ppc.msr.Hex;
+   const int saved_downcount = ppc.downcount;
+   const u32 saved_exceptions = ppc.Exceptions;
++  // SPRs written through HookSPRWrite (L2CR, HID0, ...) live only in ppc.spr. Start the
++  // shadow from the pre-block values, not from what the native block left there.
++  static_assert(sizeof(ppc.spr) == sizeof(u32) * 1024);
++  std::array<u32, 1024> spr_post;
++  std::memcpy(spr_post.data(), ppc.spr, sizeof(ppc.spr));
++  std::memcpy(ppc.spr, m_ls_spr_pre.data(), sizeof(ppc.spr));
+   LoadEntryRegsToPPC(entry_state);
+ 
+   m_ls_read_index = 0;
+@@ -279,6 +285,15 @@
+     addu("msr", m_core.m_guest.msr, ppc.msr.Hex);
+     addu("srr0", m_core.m_guest.srr0, ppc.spr[SPR_SRR0]);
+     addu("srr1", m_core.m_guest.srr1, ppc.spr[SPR_SRR1]);
++    for (u32 s = 0; s < 1024; ++s)
++    {
++      // Compared above, timer-driven, or held in CPUState rather than ppc.spr.
++      if (s == SPR_XER || s == SPR_LR || s == SPR_CTR || s == SPR_DEC || s == SPR_SRR0 ||
++          s == SPR_SRR1 || s == SPR_TL || s == SPR_TU || s == SPR_TL_W || s == SPR_TU_W ||
++          (s >= SPR_GQR0 && s <= SPR_HID2))
++        continue;
++      addu(fmt::format("spr{}", s), spr_post[s], ppc.spr[s]);
++    }
+     addu("pc", m_core.m_guest.pc, ppc.pc);
+ 
+     for (const auto& [off, post] : m_journal.ram_post)
+@@ -424,6 +439,7 @@
+         vmem[off] = post;
+   }
+ 
++  std::memcpy(ppc.spr, spr_post.data(), sizeof(ppc.spr));
+   ppc.msr.Hex = saved_msr;
+   power_pc.MSRUpdated();
+   ppc.downcount = saved_downcount;

@@ -1,0 +1,19 @@
+diff --git a/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp b/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp
+index abd9f6c..e255303 100644
+--- a/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp
++++ b/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp
+@@ -175,8 +175,12 @@ struct CopyTexturePoolEntry {
+   aurora::gfx::TextureHandle handle;
+ };
+ std::vector<CopyTexturePoolEntry> g_copyTexturePool;
+-  // Keep only a few reusable copy targets per destination.
+-constexpr size_t kCopyTexturePoolPerKey = 3;
++  // Reusable copy targets per destination. A destination that is copied again after being sampled in
++  // the same frame needs a fresh target per copy (GXCopyTex below), and those stay referenced until
++  // their frame retires: MLB's fielding view makes ~17 such copies per frame, so a cap of 3 created
++  // and destroyed ~30 textures every frame (costly kernel allocations on D3D12). Cover a frame's
++  // copies times the frames in flight.
++constexpr size_t kCopyTexturePoolPerKey = 64;
+ 
+ aurora::gfx::TextureHandle acquire_copy_texture(const aurora::gx::GXState::CopyTextureKey& key, u32 width, u32 height,
+                                                 GXTexFmt texCopyFmt) {

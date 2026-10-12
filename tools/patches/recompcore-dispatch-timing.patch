@@ -1,0 +1,200 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
+@@ -215,6 +215,7 @@
+ 
+   bool m_scheduler_idle_enabled = false;
+   u64 m_scheduler_idle_skips = 0;
++  bool m_dispatch_timing_enabled = false;
+   bool m_collect_dispatch_samples = false;
+   bool m_has_rel_modules = false;
+   u32 m_idle_pc = 0;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
+@@ -29,6 +29,8 @@
+ 
+ void PowerProsResetFallbackProfile();
+ void PowerProsWriteFallbackProfile();
++void PowerProsResetDispatchTiming();
++void PowerProsWriteDispatchTiming();
+ 
+ StaticRecompCore* g_static_recomp_core = nullptr;
+ 
+@@ -172,6 +174,9 @@
+ {
+   g_static_recomp_core = this;
+   PowerProsResetFallbackProfile();
++  PowerProsResetDispatchTiming();
++  const char* dispatch_timing = std::getenv("STATICRECOMP_DISPATCH_TIMING");
++  m_dispatch_timing_enabled = dispatch_timing && dispatch_timing[0] != '\0';
+   const char* scheduler_idle = std::getenv("STATICRECOMP_POWERPROS_SCHEDULER_IDLE");
+   m_scheduler_idle_enabled = scheduler_idle && std::string(scheduler_idle) == "1";
+   m_scheduler_idle_skips = 0;
+@@ -234,6 +239,7 @@
+ void StaticRecompCore::Shutdown()
+ {
+   PowerProsWriteFallbackProfile();
++  PowerProsWriteDispatchTiming();
+   std::fprintf(stderr, "[powerpros-diagnostic] scheduler_idle_enabled=%u scheduler_idle_skips=%llu\n",
+                m_scheduler_idle_enabled ? 1u : 0u,
+                static_cast<unsigned long long>(m_scheduler_idle_skips));
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
+@@ -74,6 +74,108 @@
+ }
+ // POWERPROS_SCHEDULER_IDLE_END
+ 
++
++// POWERPROS_DISPATCH_TIMING_BEGIN
++namespace
++{
++struct PowerProsDispatchTiming
++{
++  using Clock = std::chrono::steady_clock;
++  static constexpr u64 stride = 4096;
++  struct Aggregate
++  {
++    u64 samples = 0;
++    u64 total_ns = 0;
++    u64 max_ns = 0;
++    void Add(u64 ns)
++    {
++      ++samples;
++      total_ns += ns;
++      if (ns > max_ns)
++        max_ns = ns;
++    }
++  };
++  std::string path;
++  u64 observed[2]{};
++  Aggregate phases[2][3]{};
++  Aggregate clock_pair{};
++
++  static u64 Elapsed(Clock::time_point start)
++  {
++    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                               Clock::now() - start).count());
++  }
++  void Reset(const char* output)
++  {
++    path = output ? output : "";
++    observed[0] = observed[1] = 0;
++    for (auto& context : phases)
++      for (auto& phase : context)
++        phase = {};
++    clock_pair = {};
++    if (!path.empty())
++      for (u32 i = 0; i < 10000; ++i)
++        clock_pair.Add(Elapsed(Clock::now()));
++  }
++  bool Sample(u32 pc, u32 rel_begin, u64 rel_end, u32* context)
++  {
++    if (path.empty())
++      return false;
++    const u32 kind = pc >= rel_begin && static_cast<u64>(pc) < rel_end ? 1 : 0;
++    if ((++observed[kind] % stride) != 0)
++      return false;
++    *context = kind;
++    return true;
++  }
++  void Add(u32 context, u32 phase, u64 ns)
++  {
++    if (!path.empty() && context < 2 && phase < 3)
++      phases[context][phase].Add(ns);
++  }
++  bool Write() const
++  {
++    if (path.empty())
++      return true;
++    std::FILE* file = std::fopen(path.c_str(), "wb");
++    if (!file)
++      return false;
++    std::fprintf(file, "context,phase,observed_dispatches,stride,samples,total_ns,max_ns\n");
++    const char* names[] = {"address_resolution", "module_dispatch", "return_translation"};
++    for (u32 context = 0; context < 2; ++context)
++      for (u32 phase = 0; phase < 3; ++phase)
++      {
++        const Aggregate& value = phases[context][phase];
++        std::fprintf(file, "%s,%s,%llu,%llu,%llu,%llu,%llu\n",
++                     context ? "inside_rel_envelope" : "outside_rel_envelope", names[phase],
++                     static_cast<unsigned long long>(observed[context]),
++                     static_cast<unsigned long long>(stride),
++                     static_cast<unsigned long long>(value.samples),
++                     static_cast<unsigned long long>(value.total_ns),
++                     static_cast<unsigned long long>(value.max_ns));
++      }
++    std::fprintf(file, "calibration,clock_pair,0,0,%llu,%llu,%llu\n",
++                 static_cast<unsigned long long>(clock_pair.samples),
++                 static_cast<unsigned long long>(clock_pair.total_ns),
++                 static_cast<unsigned long long>(clock_pair.max_ns));
++    const bool written = std::ferror(file) == 0;
++    const int closed = std::fclose(file);
++    return written && closed == 0;
++  }
++};
++PowerProsDispatchTiming g_powerpros_dispatch_timing;
++}
++// POWERPROS_DISPATCH_TIMING_END
++
++void PowerProsResetDispatchTiming()
++{
++  g_powerpros_dispatch_timing.Reset(std::getenv("STATICRECOMP_DISPATCH_TIMING"));
++}
++void PowerProsWriteDispatchTiming()
++{
++  if (!g_powerpros_dispatch_timing.Write())
++    std::fprintf(stderr, "[powerpros-diagnostic] dispatch timing output failed\n");
++}
++
+ void StaticRecompCore::Run()
+ {
+   auto& core_timing = m_system.GetCoreTiming();
+@@ -191,14 +293,42 @@
+ 
+           if (m_collect_dispatch_samples && (m_native_dispatches & 4095u) == 0)
+             ++m_dispatch_samples[m_guest.pc];
++          // POWERPROS_DISPATCH_TIMING_CALL_BEGIN
+           const u32 runtime_dispatch_address = m_guest.pc;
+-          u32 linked_dispatch_address = runtime_dispatch_address;
+-          if (m_has_rel_modules)
+-            ResolveNativeAddress(runtime_dispatch_address, &linked_dispatch_address, nullptr);
+-          m_guest.pc = linked_dispatch_address;
+-          m_module->dispatch(&m_guest, linked_dispatch_address);
+-          if (m_has_rel_modules)
+-            m_guest.pc = TranslateRelAddress(m_guest.pc);
++          u32 timing_context = 0;
++          const bool time_dispatch = m_dispatch_timing_enabled &&
++              g_powerpros_dispatch_timing.Sample(runtime_dispatch_address,
++                  m_rel_runtime_begin, m_rel_runtime_end, &timing_context);
++          if (time_dispatch)
++          {
++            auto started = PowerProsDispatchTiming::Clock::now();
++            u32 linked_dispatch_address = runtime_dispatch_address;
++            if (m_has_rel_modules)
++              ResolveNativeAddress(runtime_dispatch_address, &linked_dispatch_address, nullptr);
++            m_guest.pc = linked_dispatch_address;
++            g_powerpros_dispatch_timing.Add(timing_context, 0,
++                                            PowerProsDispatchTiming::Elapsed(started));
++            started = PowerProsDispatchTiming::Clock::now();
++            m_module->dispatch(&m_guest, linked_dispatch_address);
++            g_powerpros_dispatch_timing.Add(timing_context, 1,
++                                            PowerProsDispatchTiming::Elapsed(started));
++            started = PowerProsDispatchTiming::Clock::now();
++            if (m_has_rel_modules)
++              m_guest.pc = TranslateRelAddress(m_guest.pc);
++            g_powerpros_dispatch_timing.Add(timing_context, 2,
++                                            PowerProsDispatchTiming::Elapsed(started));
++          }
++          else
++          {
++            u32 linked_dispatch_address = runtime_dispatch_address;
++            if (m_has_rel_modules)
++              ResolveNativeAddress(runtime_dispatch_address, &linked_dispatch_address, nullptr);
++            m_guest.pc = linked_dispatch_address;
++            m_module->dispatch(&m_guest, linked_dispatch_address);
++            if (m_has_rel_modules)
++              m_guest.pc = TranslateRelAddress(m_guest.pc);
++          }
++          // POWERPROS_DISPATCH_TIMING_CALL_END
+           ++m_native_dispatches;
+           if (m_native_dispatches <= 8)
+             std::fprintf(stderr, "[powerpros-diagnostic] native dispatch returned count=%llu from=%08X to=%08X\n",

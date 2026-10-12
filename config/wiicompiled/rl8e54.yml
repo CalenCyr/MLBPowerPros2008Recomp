@@ -1,0 +1,50 @@
+schema_version: 1
+# Wiicompiled feasibility probe for MLB Power Pros 2008 (docs/wiicompiled-feasibility.md).
+# Paths are relative to the repository root; inputs and outputs stay under local/.
+workspace_root: ../..
+
+project:
+  id: mlbpp08-rl8e54
+  display_name: MLB Power Pros 2008 (NTSC-U)
+  game_id: RL8E54
+  region: E
+
+memory:
+  base: 0x80000000
+  size: 0x01800000
+  # __init_registers (0x80004224-0x80004230)
+  sda_base: 0x80322060
+  sda2_base: 0x80323940
+
+inputs:
+  dol:
+    path: local/disc/DATA/sys/main.dol
+    sha256: 789c208f1611c4b150d272eb32cbd461d24aebbc5d7c11a420102d868ff1c5f7
+  rel:
+    path: local/disc/DATA/files/ovl_main.rel
+    sha256: dcc37a1a4824702feff5bcaa6aae7cefdedfc3b5d832fbf3de92b982a59b4edc
+    # Locked runtime placement (local/generated/dolrecomp/rel-linked/layout.json).
+    load_address: 0x80575580
+    bss_address: 0x8102B0C0
+
+translation:
+  entry_points:
+    - 0x8000403C
+    - 0x80AA0718
+  function_map:
+    path: local/wiicompiled-mlb/MAP.txt
+  # Measure instead of aborting on the first unsupported instruction.
+  allow_unsupported_instructions: true
+
+runtime:
+  # Rebound by tools/wiicompiled_rebind.py; unbound hooks are invisible here.
+  native_registration_root: local/wiicompiled-mlb/src/runtime/src
+  native_abi_directories:
+    - local/wiicompiled-mlb/src/runtime/src/hle/gx
+
+output:
+  root: local/wiicompiled-mlb/generated
+  functions: functions
+  runtime_config: RuntimeConfig.h
+  data_initializer: data_sections_init.cpp
+  base_manifest: local/wiicompiled-mlb/generated/base_manifest.json

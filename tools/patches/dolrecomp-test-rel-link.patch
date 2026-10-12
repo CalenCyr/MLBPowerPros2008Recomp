@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -184,7 +184,7 @@ target_link_libraries(test_dol PRIVATE dr_frontend)
+ add_test(NAME dol COMMAND test_dol)
+ 
+ add_executable(test_rel tests/test_rel.c)
+-target_link_libraries(test_rel PRIVATE dr_frontend)
++target_link_libraries(test_rel PRIVATE dr_backend)
+ add_test(NAME rel COMMAND test_rel)
+ 
+ add_executable(test_rpx tests/test_rpx.c)

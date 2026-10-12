@@ -1,0 +1,32 @@
+diff --git a/runtime/src/hle/input/pad.cpp b/runtime/src/hle/input/pad.cpp
+index 5dadebf..f9ddd8d 100644
+--- a/runtime/src/hle/input/pad.cpp
++++ b/runtime/src/hle/input/pad.cpp
+@@ -115,6 +115,19 @@ void ApplyPadScript(PADStatus* statuses) {
+     }
+ }
+ 
++// A real GameCube stick tops out well short of +-127 (Dolphin's default gates: 87 main, 74 C),
++// and games scale for that: MLB divides the main stick by 88 and the C-stick by 64, so a full
++// SDL range saturated at 69% travel. Map full deflection onto the hardware gate instead.
++void ScaleSticksToGameCubeRange(PADStatus* statuses) {
++    const auto scale = [](s8 v, int gate) { return static_cast<s8>(static_cast<int>(v) * gate / 127); };
++    for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {
++        statuses[i].stickX = scale(statuses[i].stickX, 87);
++        statuses[i].stickY = scale(statuses[i].stickY, 87);
++        statuses[i].substickX = scale(statuses[i].substickX, 74);
++        statuses[i].substickY = scale(statuses[i].substickY, 74);
++    }
++}
++
+ } // namespace
+ 
+ extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled)
+@@ -147,6 +160,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
+     FillTriggersHeldByButtons(statuses);
+     InputBindings::Apply(statuses);
+     ApplyPadScript(statuses);
++    ScaleSticksToGameCubeRange(statuses);
+ 
+     try {
+         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

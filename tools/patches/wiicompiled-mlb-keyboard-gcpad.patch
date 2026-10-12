@@ -1,0 +1,152 @@
+diff --git a/aurora-main/lib/dolphin/pad/pad.cpp b/aurora-main/lib/dolphin/pad/pad.cpp
+index 7ae292f..329a02d 100644
+--- a/aurora-main/lib/dolphin/pad/pad.cpp
++++ b/aurora-main/lib/dolphin/pad/pad.cpp
+@@ -220,32 +220,34 @@ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsWiiUPro{{
+     {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, PAD_BUTTON_RIGHT},
+ }};
+ 
++// MLB default keyboard layout (rebindable in the F10 overlay): face buttons on J K L I,
++// main stick on WASD, C-stick on TFGH, D-pad on the arrow keys.
+ std::array<PADKeyButtonBinding, PAD_BUTTON_COUNT> g_defaultKeys{{
+-    {PAD_KEY_INVALID, PAD_BUTTON_A},
+-    {PAD_KEY_INVALID, PAD_BUTTON_B},
+-    {PAD_KEY_INVALID, PAD_BUTTON_X},
+-    {PAD_KEY_INVALID, PAD_BUTTON_Y},
+-    {PAD_KEY_INVALID, PAD_BUTTON_START},
+-    {PAD_KEY_INVALID, PAD_TRIGGER_Z},
+-    {PAD_KEY_INVALID, PAD_TRIGGER_L},
+-    {PAD_KEY_INVALID, PAD_TRIGGER_R},
+-    {PAD_KEY_INVALID, PAD_BUTTON_UP},
+-    {PAD_KEY_INVALID, PAD_BUTTON_DOWN},
+-    {PAD_KEY_INVALID, PAD_BUTTON_LEFT},
+-    {PAD_KEY_INVALID, PAD_BUTTON_RIGHT},
++    {SDL_SCANCODE_J, PAD_BUTTON_A},
++    {SDL_SCANCODE_K, PAD_BUTTON_B},
++    {SDL_SCANCODE_L, PAD_BUTTON_X},
++    {SDL_SCANCODE_I, PAD_BUTTON_Y},
++    {SDL_SCANCODE_RETURN, PAD_BUTTON_START},
++    {SDL_SCANCODE_U, PAD_TRIGGER_Z},
++    {SDL_SCANCODE_Q, PAD_TRIGGER_L},
++    {SDL_SCANCODE_E, PAD_TRIGGER_R},
++    {SDL_SCANCODE_UP, PAD_BUTTON_UP},
++    {SDL_SCANCODE_DOWN, PAD_BUTTON_DOWN},
++    {SDL_SCANCODE_LEFT, PAD_BUTTON_LEFT},
++    {SDL_SCANCODE_RIGHT, PAD_BUTTON_RIGHT},
+ }};
+ 
+ std::array<PADKeyAxisBinding, PAD_AXIS_COUNT> g_defaultKeyAxis{{
+-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_X_POS, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_X_NEG, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_Y_POS, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_Y_NEG, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_RIGHT_X_POS, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_RIGHT_X_NEG, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_RIGHT_Y_POS, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_RIGHT_Y_NEG, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_TRIGGER_L, 0},
+-    {PAD_KEY_INVALID, PAD_AXIS_TRIGGER_R, 0},
++    {SDL_SCANCODE_D, PAD_AXIS_LEFT_X_POS, 0},
++    {SDL_SCANCODE_A, PAD_AXIS_LEFT_X_NEG, 0},
++    {SDL_SCANCODE_W, PAD_AXIS_LEFT_Y_POS, 0},
++    {SDL_SCANCODE_S, PAD_AXIS_LEFT_Y_NEG, 0},
++    {SDL_SCANCODE_H, PAD_AXIS_RIGHT_X_POS, 0},
++    {SDL_SCANCODE_F, PAD_AXIS_RIGHT_X_NEG, 0},
++    {SDL_SCANCODE_T, PAD_AXIS_RIGHT_Y_POS, 0},
++    {SDL_SCANCODE_G, PAD_AXIS_RIGHT_Y_NEG, 0},
++    {SDL_SCANCODE_Q, PAD_AXIS_TRIGGER_L, 0},
++    {SDL_SCANCODE_E, PAD_AXIS_TRIGGER_R, 0},
+ }};
+ 
+ std::array<PADAxisMapping, PAD_AXIS_COUNT> g_defaultAxes{{
+@@ -358,6 +360,8 @@ BOOL PADInit() {
+     state.m_buttonMapping = g_defaultKeys;
+     state.m_axisMapping = g_defaultKeyAxis;
+   });
++  // Keyboard on by default for player 1; it shares the port with a gamepad (see PADRead).
++  g_keyboardBindings[0].m_mappingsSet = true;
+ 
+   return true;
+ }
+@@ -801,7 +805,9 @@ u32 PADRead(PADStatus* status) {
+       status[i].triggerRight = static_cast<u8>(std::min(static_cast<int>(status[i].triggerRight) + tr, 255));
+     }
+ 
+-    if (controller && !g_keyboardBindings[i].m_mappingsSet) {
++    // Keyboard and gamepad share the port: buttons OR together (below), axes are re-added after the pad overwrites them.
++    const PADStatus keyboardStatus = status[i];
++    if (controller) {
+       EnsureMappingLoaded(controller);
+ 
+       // Wii U Pro Controller raw D-pad fallback. SDL's HIDAPI Wii driver posts
+@@ -984,6 +990,14 @@ u32 PADRead(PADStatus* status) {
+       status[i].triggerLeft = static_cast<int8_t>(tl);
+       status[i].triggerRight = static_cast<int8_t>(tr);
+ 
++      const auto addAxis = [](s8 pad, s8 key) { return static_cast<s8>(std::clamp(pad + key, -127, 127)); };
++      status[i].stickX = addAxis(status[i].stickX, keyboardStatus.stickX);
++      status[i].stickY = addAxis(status[i].stickY, keyboardStatus.stickY);
++      status[i].substickX = addAxis(status[i].substickX, keyboardStatus.substickX);
++      status[i].substickY = addAxis(status[i].substickY, keyboardStatus.substickY);
++      status[i].triggerLeft = std::max(status[i].triggerLeft, keyboardStatus.triggerLeft);
++      status[i].triggerRight = std::max(status[i].triggerRight, keyboardStatus.triggerRight);
++
+       if (controller->m_hasRumble) {
+         rumbleSupport |= PAD_CHAN0_BIT >> i;
+       }
+diff --git a/runtime/src/hle/input/pad.cpp b/runtime/src/hle/input/pad.cpp
+index 23ff800..5dadebf 100644
+--- a/runtime/src/hle/input/pad.cpp
++++ b/runtime/src/hle/input/pad.cpp
+@@ -10,8 +10,10 @@
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
++#include <vector>
+ 
+ #include <SDL3/SDL_gamepad.h>
++#include <SDL3/SDL_timer.h>
+ #include <dolphin/pad.h>
+ 
+ namespace {
+@@ -87,6 +89,32 @@ void WritePadStatus(uint32_t base, const PADStatus& status) {
+     std::memcpy(dst, guestStatus.data(), guestStatus.size());
+ }
+ 
++// Scripted GameCube pad on port 0 for automated probes:
++// WIICOMPILED_PAD_SCRIPT="startMs-endMs:hexButtons,..." holds PAD_BUTTON_* bits (A 0x100,
++// START 0x1000, UP 0x8) during each SDL_GetTicks window; the port reports connected.
++void ApplyPadScript(PADStatus* statuses) {
++    struct Step { unsigned long long start, end; unsigned int hold; };
++    static const std::vector<Step> script = [] {
++        std::vector<Step> steps;
++        const char* p = std::getenv("WIICOMPILED_PAD_SCRIPT");
++        Step s{};
++        int used = 0;
++        while (p != nullptr && std::sscanf(p, "%llu-%llu:%x%n", &s.start, &s.end, &s.hold, &used) == 3) {
++            steps.push_back(s);
++            p += used;
++            p = *p == ',' ? p + 1 : nullptr;
++        }
++        return steps;
++    }();
++    if (script.empty()) return;
++    const uint64_t now = SDL_GetTicks();
++    PADStatus& status = statuses[0];
++    status.err = PAD_ERR_NONE;
++    for (const Step& step : script) {
++        if (now >= step.start && now < step.end) status.button |= static_cast<u16>(step.hold);
++    }
++}
++
+ } // namespace
+ 
+ extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled)
+@@ -118,6 +146,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
+ 
+     FillTriggersHeldByButtons(statuses);
+     InputBindings::Apply(statuses);
++    ApplyPadScript(statuses);
+ 
+     try {
+         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

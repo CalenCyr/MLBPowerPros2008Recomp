@@ -1,0 +1,26 @@
+diff --git a/tools/moderngekko_run.cpp b/tools/moderngekko_run.cpp
+index 722bd6d..61ae9f4 100644
+--- a/tools/moderngekko_run.cpp
++++ b/tools/moderngekko_run.cpp
+@@ -6,6 +6,7 @@
+ #include "netplay_session.hpp"
+ 
+ #include "Common/StringUtil.h"
++#include "Common/MsgHandler.h"
+ 
+ #include <charconv>
+ #include <chrono>
+@@ -392,6 +393,13 @@ int RunMain(int argc, char **argv) {
+         std::move(config), std::move(frontend_config), std::move(options));
+   }
+ 
++  if (config.headless) {
++    Common::RegisterMsgAlertHandler([](const char* caption, const char* text, bool,
++                                      Common::MsgType) {
++      std::fprintf(stderr, "[powerpros-diagnostic] alert: %s: %s\n", caption, text);
++      return false;
++    });
++  }
+   auto created = moderngekko::Runtime::Create(std::move(config));
+   if (!created) {
+     std::cerr << "initialization failed: " << created.error->message << '\n';

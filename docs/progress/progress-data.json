@@ -1,0 +1,3807 @@
+{
+  "source": "Local inventory, translation audit, runtime module and tests",
+  "verified_date_local": "2026-10-09",
+  "rel_detector_snapshot_validated": true,
+  "rel_relocation_fields_compared": 200212,
+  "rel_relocation_fields_matching": 200212,
+  "rel_reconstructed_code_matching_bytes": 7820936,
+  "total_text_bytes": 9021384,
+  "dol_text_bytes": 1200448,
+  "rel_text_bytes": 7820936,
+  "generated_units": 552,
+  "compiled_units": 552,
+  "unknown_opcodes": 0,
+  "tested_routines": 2,
+  "test_cases": 2352,
+  "passed_cases": 2352,
+  "runtime_native_rel_integrated": true,
+  "runtime_native_rel_requires_fixed_layout": true,
+  "experimental_linked_text_bytes": 9021384,
+  "baseline_linked_text_bytes": 1200448,
+  "rel_reference_functions": 6,
+  "rel_reference_cases_passed": 72,
+  "rel_native_dispatch_observed": true,
+  "long_probe_shutdown_validated": true,
+  "wc24_inflight_shutdown_validated": true,
+  "native_gameplay_validated": false,
+  "team_selection_screen_observed": true,
+  "team_selection_changed_after_dpad": true,
+  "wii_confirm_button_validated": false,
+  "main_menu_observed": true,
+  "menu_basic_input_response_observed": true,
+  "probe_physical_inputs_isolated": true,
+  "longest_probe_seconds": 900,
+  "observed_screen": "The optimized Exhibition match reached the second out, then Colorado 5-Boston 0 in the top of the first inning. Subsequent restored sessions opened pause and A Type offense/defense controller help. Full inning, player batting and manual fielding remain unvalidated.",
+  "groups": [
+    {
+      "module": "DOL",
+      "name": "__init_cpp_exceptions",
+      "bytes": 112,
+      "functions": 2,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_00_80004000_init",
+      "bytes": 9708,
+      "functions": 12,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80007360_text",
+      "bytes": 26904,
+      "functions": 130,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8000DCA0_text",
+      "bytes": 1260,
+      "functions": 8,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8000E198_text",
+      "bytes": 2276,
+      "functions": 7,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8000EA88_text",
+      "bytes": 8376,
+      "functions": 29,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80010C5C_text",
+      "bytes": 272,
+      "functions": 21,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80010DEC_text",
+      "bytes": 3824,
+      "functions": 31,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80011CE8_text",
+      "bytes": 5680,
+      "functions": 47,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80013324_text",
+      "bytes": 8888,
+      "functions": 66,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_800155E8_text",
+      "bytes": 2004,
+      "functions": 15,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80015DC8_text",
+      "bytes": 6548,
+      "functions": 27,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80017768_text",
+      "bytes": 1248,
+      "functions": 10,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80017C54_text",
+      "bytes": 10972,
+      "functions": 89,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001A740_text",
+      "bytes": 6772,
+      "functions": 61,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001C1E0_text",
+      "bytes": 1848,
+      "functions": 9,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001C924_text",
+      "bytes": 1308,
+      "functions": 7,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001CE4C_text",
+      "bytes": 2856,
+      "functions": 11,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001D980_text",
+      "bytes": 7408,
+      "functions": 33,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001F67C_text",
+      "bytes": 2380,
+      "functions": 6,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8001FFD4_text",
+      "bytes": 9516,
+      "functions": 76,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8002250C_text",
+      "bytes": 38188,
+      "functions": 183,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8002BB5C_text",
+      "bytes": 89052,
+      "functions": 365,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80041780_text",
+      "bytes": 75044,
+      "functions": 338,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80053CB0_text",
+      "bytes": 1684,
+      "functions": 9,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80054350_text",
+      "bytes": 4804,
+      "functions": 32,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80055620_text",
+      "bytes": 23536,
+      "functions": 115,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8005B294_text",
+      "bytes": 10860,
+      "functions": 24,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8005DE5C_text",
+      "bytes": 5396,
+      "functions": 37,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8005F37C_text",
+      "bytes": 472,
+      "functions": 13,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8005F560_text",
+      "bytes": 5344,
+      "functions": 47,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80060ABC_text",
+      "bytes": 408,
+      "functions": 5,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80060C60_text",
+      "bytes": 536,
+      "functions": 6,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80060EF8_text",
+      "bytes": 6420,
+      "functions": 51,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_800628BC_text",
+      "bytes": 4640,
+      "functions": 38,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80063B54_text",
+      "bytes": 54880,
+      "functions": 191,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_800711C8_text",
+      "bytes": 25152,
+      "functions": 90,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80077418_text",
+      "bytes": 1316,
+      "functions": 10,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80077950_text",
+      "bytes": 5848,
+      "functions": 22,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8007903C_text",
+      "bytes": 9372,
+      "functions": 20,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8007B4EC_text",
+      "bytes": 19592,
+      "functions": 97,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80080218_text",
+      "bytes": 28904,
+      "functions": 74,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80087AF4_text",
+      "bytes": 208,
+      "functions": 10,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80087C4C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80087D10_text",
+      "bytes": 236,
+      "functions": 8,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_800881A8_text",
+      "bytes": 4,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80088EE8_text",
+      "bytes": 4,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8008C7C4_text",
+      "bytes": 72,
+      "functions": 3,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8008CAF0_text",
+      "bytes": 24,
+      "functions": 2,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_800909DC_text",
+      "bytes": 168,
+      "functions": 2,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8009145C_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8009191C_text",
+      "bytes": 40,
+      "functions": 2,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80091D88_text",
+      "bytes": 16,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80092C28_text",
+      "bytes": 760,
+      "functions": 5,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80093208_text",
+      "bytes": 236,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_800938AC_text",
+      "bytes": 88,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80093E8C_text",
+      "bytes": 8,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_8009405C_text",
+      "bytes": 180,
+      "functions": 2,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80094DF8_text",
+      "bytes": 8,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80094E9C_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80095C90_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80096138_text",
+      "bytes": 272,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_80096AAC_text",
+      "bytes": 599772,
+      "functions": 2342,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_03_801295A8_text",
+      "bytes": 2116,
+      "functions": 18,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_dtor_8012928C_text",
+      "bytes": 188,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8000DC78_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8000E18C_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8000EA7C_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80010B40_text",
+      "bytes": 284,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80010D6C_text",
+      "bytes": 128,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80011CDC_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80013318_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800155DC_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80015DBC_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001775C_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80017C48_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001A730_text",
+      "bytes": 16,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001C1B4_text",
+      "bytes": 44,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001C918_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001CE40_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001D974_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001F670_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8001FFC8_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80022500_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8002BA38_text",
+      "bytes": 292,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80041738_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80053CA4_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80054344_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80055614_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8005B210_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8005DD00_text",
+      "bytes": 348,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8005F370_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8005F554_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80060A40_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80060C54_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80060E78_text",
+      "bytes": 128,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8006280C_text",
+      "bytes": 176,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80063ADC_text",
+      "bytes": 120,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800711B4_text",
+      "bytes": 20,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80077408_text",
+      "bytes": 16,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8007793C_text",
+      "bytes": 20,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80079028_text",
+      "bytes": 20,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8007B4D8_text",
+      "bytes": 20,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80080174_text",
+      "bytes": 164,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80087300_text",
+      "bytes": 928,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800876A0_text",
+      "bytes": 160,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80087740_text",
+      "bytes": 392,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800878C8_text",
+      "bytes": 556,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80087BC4_text",
+      "bytes": 136,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80087C74_text",
+      "bytes": 156,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80087DFC_text",
+      "bytes": 276,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80087F10_text",
+      "bytes": 376,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088088_text",
+      "bytes": 288,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800881AC_text",
+      "bytes": 236,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088298_text",
+      "bytes": 164,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008833C_text",
+      "bytes": 112,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800883AC_text",
+      "bytes": 148,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088440_text",
+      "bytes": 388,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800885C4_text",
+      "bytes": 364,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088730_text",
+      "bytes": 292,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088854_text",
+      "bytes": 364,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800889C0_text",
+      "bytes": 292,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088AE4_text",
+      "bytes": 364,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088C50_text",
+      "bytes": 292,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088D74_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088DE0_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088E28_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088EA4_text",
+      "bytes": 68,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088EEC_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088F3C_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80088FC0_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008903C_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008908C_text",
+      "bytes": 740,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80089370_text",
+      "bytes": 728,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80089648_text",
+      "bytes": 712,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80089910_text",
+      "bytes": 988,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80089CEC_text",
+      "bytes": 616,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80089F54_text",
+      "bytes": 756,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008A248_text",
+      "bytes": 456,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008A410_text",
+      "bytes": 664,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008A6A8_text",
+      "bytes": 720,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008A978_text",
+      "bytes": 608,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008ABD8_text",
+      "bytes": 1028,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008AFDC_text",
+      "bytes": 576,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008B21C_text",
+      "bytes": 408,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008B3B4_text",
+      "bytes": 460,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008B580_text",
+      "bytes": 400,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008B710_text",
+      "bytes": 428,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008B8BC_text",
+      "bytes": 424,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008BA64_text",
+      "bytes": 500,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008BC58_text",
+      "bytes": 444,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008BE14_text",
+      "bytes": 720,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008C0E4_text",
+      "bytes": 472,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008C2BC_text",
+      "bytes": 220,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008C398_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008C404_text",
+      "bytes": 884,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008C778_text",
+      "bytes": 76,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008C80C_text",
+      "bytes": 740,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008CB08_text",
+      "bytes": 192,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008CBC8_text",
+      "bytes": 1292,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008D0D4_text",
+      "bytes": 644,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008D358_text",
+      "bytes": 1848,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008DA90_text",
+      "bytes": 1512,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008E078_text",
+      "bytes": 284,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008E194_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008E1C4_text",
+      "bytes": 304,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008E2F4_text",
+      "bytes": 4232,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008F37C_text",
+      "bytes": 472,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008F554_text",
+      "bytes": 584,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008F79C_text",
+      "bytes": 688,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008FA4C_text",
+      "bytes": 1288,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8008FF54_text",
+      "bytes": 2192,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800907E4_text",
+      "bytes": 504,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80090A84_text",
+      "bytes": 116,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80090AF8_text",
+      "bytes": 1344,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091038_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091068_text",
+      "bytes": 52,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009109C_text",
+      "bytes": 56,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800910D4_text",
+      "bytes": 212,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800911A8_text",
+      "bytes": 188,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091264_text",
+      "bytes": 184,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009131C_text",
+      "bytes": 320,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091468_text",
+      "bytes": 228,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009154C_text",
+      "bytes": 248,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091644_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009166C_text",
+      "bytes": 256,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009176C_text",
+      "bytes": 320,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800918AC_text",
+      "bytes": 112,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091944_text",
+      "bytes": 440,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091AFC_text",
+      "bytes": 172,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091BA8_text",
+      "bytes": 128,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091C28_text",
+      "bytes": 128,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091CA8_text",
+      "bytes": 224,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091D98_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091DE0_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091E44_text",
+      "bytes": 112,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80091EB4_text",
+      "bytes": 344,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009200C_text",
+      "bytes": 304,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009213C_text",
+      "bytes": 224,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009221C_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009224C_text",
+      "bytes": 112,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800922BC_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092338_text",
+      "bytes": 168,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800923E0_text",
+      "bytes": 352,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092540_text",
+      "bytes": 364,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800926AC_text",
+      "bytes": 440,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092864_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800928B4_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092904_text",
+      "bytes": 428,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092AB0_text",
+      "bytes": 56,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092AE8_text",
+      "bytes": 96,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092B48_text",
+      "bytes": 164,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092BEC_text",
+      "bytes": 60,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80092F20_text",
+      "bytes": 244,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093014_text",
+      "bytes": 112,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093084_text",
+      "bytes": 140,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093110_text",
+      "bytes": 136,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093198_text",
+      "bytes": 112,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800932F4_text",
+      "bytes": 428,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800934A0_text",
+      "bytes": 196,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093564_text",
+      "bytes": 416,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093704_text",
+      "bytes": 424,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093904_text",
+      "bytes": 292,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093A28_text",
+      "bytes": 700,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093CE4_text",
+      "bytes": 192,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093DA4_text",
+      "bytes": 232,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093E94_text",
+      "bytes": 244,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80093F88_text",
+      "bytes": 212,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094110_text",
+      "bytes": 488,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800942F8_text",
+      "bytes": 372,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009446C_text",
+      "bytes": 340,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800945C0_text",
+      "bytes": 316,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800946FC_text",
+      "bytes": 404,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094890_text",
+      "bytes": 732,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094B6C_text",
+      "bytes": 248,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094C64_text",
+      "bytes": 92,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094CC0_text",
+      "bytes": 312,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094E00_text",
+      "bytes": 156,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80094EB8_text",
+      "bytes": 332,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80095004_text",
+      "bytes": 2564,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80095A08_text",
+      "bytes": 304,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80095B38_text",
+      "bytes": 344,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80095CA8_text",
+      "bytes": 1124,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009610C_text",
+      "bytes": 44,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096248_text",
+      "bytes": 320,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096388_text",
+      "bytes": 400,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096518_text",
+      "bytes": 84,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_8009656C_text",
+      "bytes": 76,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800965B8_text",
+      "bytes": 188,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096674_text",
+      "bytes": 52,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800966A8_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800966D8_text",
+      "bytes": 344,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096830_text",
+      "bytes": 64,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096870_text",
+      "bytes": 148,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096904_text",
+      "bytes": 60,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80096940_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_800969A4_text",
+      "bytes": 264,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80129188_text",
+      "bytes": 260,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80129348_text",
+      "bytes": 248,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_80129440_text",
+      "bytes": 120,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "DOL",
+      "name": "auto_fn_801294B8_text",
+      "bytes": 128,
+      "functions": 1,
+      "integrated": true
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00000000_text",
+      "bytes": 62660,
+      "functions": 398,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0000F7B8_text",
+      "bytes": 65648,
+      "functions": 411,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0001F874_text",
+      "bytes": 54804,
+      "functions": 195,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0002CF18_text",
+      "bytes": 4440,
+      "functions": 6,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0002E088_text",
+      "bytes": 18488,
+      "functions": 199,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00032908_text",
+      "bytes": 14768,
+      "functions": 88,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000362DC_text",
+      "bytes": 18668,
+      "functions": 22,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0003ABF8_text",
+      "bytes": 26172,
+      "functions": 79,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00041298_text",
+      "bytes": 31480,
+      "functions": 146,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00048DB4_text",
+      "bytes": 33156,
+      "functions": 168,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00050FD8_text",
+      "bytes": 26848,
+      "functions": 148,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0005791C_text",
+      "bytes": 50420,
+      "functions": 418,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00063E38_text",
+      "bytes": 5204,
+      "functions": 80,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000652B4_text",
+      "bytes": 232,
+      "functions": 8,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000653C4_text",
+      "bytes": 232,
+      "functions": 8,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000654D4_text",
+      "bytes": 61512,
+      "functions": 627,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0007462C_text",
+      "bytes": 73220,
+      "functions": 546,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00086460_text",
+      "bytes": 214612,
+      "functions": 762,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000BABA0_text",
+      "bytes": 92436,
+      "functions": 294,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000D1544_text",
+      "bytes": 33080,
+      "functions": 204,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000D96A4_text",
+      "bytes": 74608,
+      "functions": 434,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000EBA78_text",
+      "bytes": 15284,
+      "functions": 89,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000EF6B0_text",
+      "bytes": 14612,
+      "functions": 57,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000F3028_text",
+      "bytes": 14084,
+      "functions": 66,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000F6750_text",
+      "bytes": 12404,
+      "functions": 88,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000F9848_text",
+      "bytes": 12540,
+      "functions": 51,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_000FC9A8_text",
+      "bytes": 368360,
+      "functions": 1037,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001568C0_text",
+      "bytes": 7296,
+      "functions": 24,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00158E04_text",
+      "bytes": 54676,
+      "functions": 138,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00166758_text",
+      "bytes": 61320,
+      "functions": 345,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0017585C_text",
+      "bytes": 15376,
+      "functions": 69,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001795E8_text",
+      "bytes": 34552,
+      "functions": 189,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00181F4C_text",
+      "bytes": 130064,
+      "functions": 827,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001A1B84_text",
+      "bytes": 8736,
+      "functions": 81,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001A3E6C_text",
+      "bytes": 10464,
+      "functions": 97,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001A679C_text",
+      "bytes": 23720,
+      "functions": 160,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001AC50C_text",
+      "bytes": 4532,
+      "functions": 43,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001AD6EC_text",
+      "bytes": 11068,
+      "functions": 89,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001B024C_text",
+      "bytes": 162120,
+      "functions": 764,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001D7BAC_text",
+      "bytes": 116728,
+      "functions": 625,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_001F43D4_text",
+      "bytes": 198612,
+      "functions": 756,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00224BD0_text",
+      "bytes": 26732,
+      "functions": 101,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0022B4A8_text",
+      "bytes": 46860,
+      "functions": 314,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00236D68_text",
+      "bytes": 102832,
+      "functions": 518,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0024FF9C_text",
+      "bytes": 8000,
+      "functions": 84,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00251F60_text",
+      "bytes": 23152,
+      "functions": 106,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00257A64_text",
+      "bytes": 13516,
+      "functions": 50,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0025AF94_text",
+      "bytes": 12796,
+      "functions": 49,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0025E1B4_text",
+      "bytes": 135556,
+      "functions": 834,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0027F380_text",
+      "bytes": 283596,
+      "functions": 1521,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_002C4774_text",
+      "bytes": 89972,
+      "functions": 251,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_002DA73C_text",
+      "bytes": 17072,
+      "functions": 28,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_002DEA34_text",
+      "bytes": 337232,
+      "functions": 1923,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00330FAC_text",
+      "bytes": 356656,
+      "functions": 1249,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_003880E8_text",
+      "bytes": 497256,
+      "functions": 3225,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00401774_text",
+      "bytes": 29748,
+      "functions": 147,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00408BE8_text",
+      "bytes": 19592,
+      "functions": 139,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0040D888_text",
+      "bytes": 41176,
+      "functions": 164,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00417998_text",
+      "bytes": 3924,
+      "functions": 26,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0041893C_text",
+      "bytes": 4552,
+      "functions": 27,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00419B5C_text",
+      "bytes": 30136,
+      "functions": 160,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00421164_text",
+      "bytes": 8276,
+      "functions": 29,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004231D8_text",
+      "bytes": 10644,
+      "functions": 54,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00425B94_text",
+      "bytes": 54336,
+      "functions": 371,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00433024_text",
+      "bytes": 16876,
+      "functions": 87,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0043722C_text",
+      "bytes": 58668,
+      "functions": 311,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004457B0_text",
+      "bytes": 36764,
+      "functions": 176,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0044E770_text",
+      "bytes": 23380,
+      "functions": 56,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004542EC_text",
+      "bytes": 21916,
+      "functions": 186,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00459894_text",
+      "bytes": 25712,
+      "functions": 77,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0045FD20_text",
+      "bytes": 98824,
+      "functions": 377,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00477F8C_text",
+      "bytes": 25532,
+      "functions": 97,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0047E368_text",
+      "bytes": 1548,
+      "functions": 5,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0047E98C_text",
+      "bytes": 2596,
+      "functions": 11,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0047F3C8_text",
+      "bytes": 102780,
+      "functions": 560,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0049856C_text",
+      "bytes": 136068,
+      "functions": 1000,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004B98FC_text",
+      "bytes": 11992,
+      "functions": 97,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004BC808_text",
+      "bytes": 2780,
+      "functions": 14,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004BD37C_text",
+      "bytes": 9204,
+      "functions": 77,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004BF7EC_text",
+      "bytes": 117668,
+      "functions": 665,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_004DC3B8_text",
+      "bytes": 232868,
+      "functions": 1027,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00515178_text",
+      "bytes": 2264,
+      "functions": 5,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00515A6C_text",
+      "bytes": 11952,
+      "functions": 88,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00518964_text",
+      "bytes": 50220,
+      "functions": 117,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00524DA8_text",
+      "bytes": 112380,
+      "functions": 486,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00540674_text",
+      "bytes": 65512,
+      "functions": 364,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00550678_text",
+      "bytes": 49656,
+      "functions": 216,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0055C88C_text",
+      "bytes": 95524,
+      "functions": 419,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00573DD0_text",
+      "bytes": 4940,
+      "functions": 26,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00575228_text",
+      "bytes": 29060,
+      "functions": 242,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0057C428_text",
+      "bytes": 47908,
+      "functions": 421,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0058801C_text",
+      "bytes": 49144,
+      "functions": 489,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00594060_text",
+      "bytes": 7336,
+      "functions": 78,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00595D28_text",
+      "bytes": 39992,
+      "functions": 270,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0059F97C_text",
+      "bytes": 3400,
+      "functions": 26,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005A06E0_text",
+      "bytes": 23144,
+      "functions": 179,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005A6190_text",
+      "bytes": 10732,
+      "functions": 70,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005A8C00_text",
+      "bytes": 35856,
+      "functions": 410,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005B1840_text",
+      "bytes": 28148,
+      "functions": 225,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005B8698_text",
+      "bytes": 4216,
+      "functions": 27,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005B979C_text",
+      "bytes": 1268,
+      "functions": 10,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005B9CFC_text",
+      "bytes": 51000,
+      "functions": 464,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005C645C_text",
+      "bytes": 1956,
+      "functions": 24,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005C6D04_text",
+      "bytes": 127196,
+      "functions": 1034,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005E5E4C_text",
+      "bytes": 30592,
+      "functions": 256,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_005ED614_text",
+      "bytes": 127860,
+      "functions": 971,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0060CA80_text",
+      "bytes": 236172,
+      "functions": 1881,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00646588_text",
+      "bytes": 257656,
+      "functions": 1922,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0068546C_text",
+      "bytes": 16752,
+      "functions": 105,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00689648_text",
+      "bytes": 31876,
+      "functions": 280,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006912E8_text",
+      "bytes": 33808,
+      "functions": 275,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00699740_text",
+      "bytes": 1816,
+      "functions": 7,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00699E74_text",
+      "bytes": 24388,
+      "functions": 186,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_0069FE0C_text",
+      "bytes": 73512,
+      "functions": 647,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006B29A0_text",
+      "bytes": 10324,
+      "functions": 39,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006B5340_text",
+      "bytes": 55352,
+      "functions": 461,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006C2B94_text",
+      "bytes": 77032,
+      "functions": 657,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006D589C_text",
+      "bytes": 46900,
+      "functions": 326,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006E0FF8_text",
+      "bytes": 82368,
+      "functions": 273,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_006F5510_text",
+      "bytes": 128220,
+      "functions": 497,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_00_00714A14_text",
+      "bytes": 396320,
+      "functions": 1485,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_destroy_global_chain_text",
+      "bytes": 84,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_156890_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_158540_text",
+      "bytes": 2244,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_166398_text",
+      "bytes": 960,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1756E0_text",
+      "bytes": 380,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_17946C_text",
+      "bytes": 380,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_181CE0_text",
+      "bytes": 620,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1A1B5C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1A3DA4_text",
+      "bytes": 200,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1A674C_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1AC444_text",
+      "bytes": 200,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1AD6C0_text",
+      "bytes": 44,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1B0228_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1D7B94_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1F43A4_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_1F828_text",
+      "bytes": 76,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_224BA8_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_22B43C_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_236BB4_text",
+      "bytes": 436,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_24FF18_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_251EDC_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_2579D0_text",
+      "bytes": 148,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_25AF30_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_25E190_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_27F338_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_2C474C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_2CE88_text",
+      "bytes": 144,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_2DA6E8_text",
+      "bytes": 84,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_2DE9EC_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_2E070_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_328C0_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_330F84_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_362B8_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_3880DC_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_3ABC8_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_401750_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_408BA8_text",
+      "bytes": 64,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_40D870_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_41234_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_417960_text",
+      "bytes": 56,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4188EC_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_419B04_text",
+      "bytes": 88,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_421114_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4231B8_text",
+      "bytes": 32,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_425B6C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_432FD4_text",
+      "bytes": 80,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_437210_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_445758_text",
+      "bytes": 88,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_44E74C_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4542C4_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_459888_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_45FD04_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_477F28_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_47E348_text",
+      "bytes": 32,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_47E974_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_47F3B0_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_48D90_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_498544_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4B98F0_text",
+      "bytes": 12,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4BC7D4_text",
+      "bytes": 52,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4BD2E4_text",
+      "bytes": 152,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4BF770_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_4DC390_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_50F38_text",
+      "bytes": 160,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_51515C_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_515A50_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_51891C_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_524D90_text",
+      "bytes": 24,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5404A4_text",
+      "bytes": 464,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_55065C_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_55C870_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_573DB0_text",
+      "bytes": 32,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_57511C_text",
+      "bytes": 268,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_578B8_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_57C3AC_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_587F4C_text",
+      "bytes": 208,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_594014_text",
+      "bytes": 76,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_595D08_text",
+      "bytes": 32,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_59F960_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5A06C4_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5A6148_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5A8B7C_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5B1810_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5B8634_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5B9710_text",
+      "bytes": 140,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5B9C90_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5C6434_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5C6C00_text",
+      "bytes": 260,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5E5DE0_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_5ED5CC_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_60C988_text",
+      "bytes": 248,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_63E10_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_64650C_text",
+      "bytes": 124,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6528C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6539C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_654AC_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_685400_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6895DC_text",
+      "bytes": 108,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6912CC_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6996F8_text",
+      "bytes": 72,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_699E58_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_69FDB8_text",
+      "bytes": 84,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6B1D34_text",
+      "bytes": 3180,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6B51F4_text",
+      "bytes": 332,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6C2B78_text",
+      "bytes": 28,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6D587C_text",
+      "bytes": 32,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6E0FD0_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_6F51B8_text",
+      "bytes": 856,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_7149EC_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_7451C_text",
+      "bytes": 272,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_86430_text",
+      "bytes": 48,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_BAAB4_text",
+      "bytes": 236,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_D14B4_text",
+      "bytes": 144,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_D967C_text",
+      "bytes": 40,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_EBA14_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_EF62C_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_F2FC4_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_F4C4_text",
+      "bytes": 756,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_F672C_text",
+      "bytes": 36,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_F97C4_text",
+      "bytes": 132,
+      "functions": 1,
+      "integrated": false
+    },
+    {
+      "module": "REL",
+      "name": "auto_fn_1_FC944_text",
+      "bytes": 100,
+      "functions": 1,
+      "integrated": false
+    }
+  ],
+  "exhibition_setup_observed": true,
+  "team_selection_changed_after_isolated_stick": true,
+  "team_confirm_observed": true,
+  "home_road_choice_observed": true,
+  "uniform_selection_observed": true,
+  "private_state_restore_observed": true,
+  "latest_long_probe_shutdown_validated": true,
+  "latest_long_probe_forced_stop": false,
+  "automation_open_retry_validated": true,
+  "restored_uniform_shutdown_validated": true,
+  "early_finish_validated": true,
+  "latest_probe_exit_code": 0,
+  "latest_probe_forced_stop": false,
+  "stadium_selection_observed": true,
+  "game_settings_observed": true,
+  "play_ball_observed": true,
+  "match_warmup_observed": true,
+  "warmup_pitch_input_observed": true,
+  "first_inning_observed": true,
+  "live_pitch_strike_observed": true,
+  "pad_frames_stop_unit_check_validated": true,
+  "pending_pad_shutdown_validated": true,
+  "latest_probe": "boot-probe-20261009-210315-715",
+  "latest_long_probe": "boot-probe-20261008-223136-421",
+  "latest_probe_seconds": 120.36,
+  "latest_probe_failed_command_count": 0,
+  "latest_probe_expected_cancelled_commands": 0,
+  "cpu_hit_observed": true,
+  "fielding_scene_observed": true,
+  "runner_on_first_observed": true,
+  "first_out_observed": true,
+  "manual_fielding_validated": false,
+  "full_inning_validated": false,
+  "cpu_runs_scored_observed": true,
+  "optimized_module_reference_cases_validated": true,
+  "optimized_pitch_input_observed": true,
+  "idle_speed_comparison": {
+    "baseline_probe": "boot-probe-20261008-214050-507",
+    "optimized_probe": "boot-probe-20261008-214553-879",
+    "baseline_guest_frames_per_wall_second": 8.84781321197219,
+    "optimized_guest_frames_per_wall_second": 15.126668088025765,
+    "guest_frame_speed_ratio": 1.7096504781042965,
+    "optimized_median_reported_speed": 0.251884,
+    "scope": "Consecutive idle probes from the same restored screen; not render FPS or full-match performance.",
+    "evidence": "local/analysis/module-speed-comparison-20261008-214941-778728.json"
+  },
+  "latest_private_state": "local/analysis/boot-probe-20261008-220609-864/control/artifacts/last-pitch-state.sav",
+  "latest_private_state_sha256": "50244fc60c4c2c8a6e008e476c6c0bdbc55779f8d634e15693e258eda9fffe3d",
+  "latest_probe_pending_command_count": 0,
+  "latest_gameplay_probe": "boot-probe-20261008-220609-864",
+  "latest_gameplay_probe_seconds": 600.46,
+  "second_out_observed": true,
+  "pause_menu_observed": true,
+  "controller_offense_help_observed": true,
+  "controller_defense_help_observed": true,
+  "completed_probe_command_rejection_validated": true,
+  "runtime_patch_count": 27,
+  "lockstep_alignment": {
+    "clang_completed": 3453,
+    "msvc_completed": 3336,
+    "reports_each": 0,
+    "skipped_each": 37,
+    "window_native_dispatches": [
+      5000000,
+      6000000
+    ],
+    "full_equivalence_validated": false,
+    "evidence": "docs/lockstep-alignment-report.md"
+  },
+  "compiler_main_menu_speed": {
+    "baseline": {
+      "probe": "boot-probe-20261009-182057-742",
+      "sample_seconds": 109.94938635826111,
+      "guest_frames": 2145,
+      "guest_frames_per_wall_second": 19.508976548633864,
+      "median_reported_speed": 0.34959450000000003,
+      "module_sha256": "60a0611c6e528583f67b985cc31d290973cf96666685523eec8c1ab316702865"
+    },
+    "candidate": {
+      "probe": "boot-probe-20261009-182321-585",
+      "sample_seconds": 109.85576677322388,
+      "guest_frames": 3567,
+      "guest_frames_per_wall_second": 32.46984755350519,
+      "median_reported_speed": 0.564381,
+      "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357"
+    },
+    "guest_frame_speed_ratio": 1.6643542254798047,
+    "runner_sha256": "9589bde07ca254148ad1137fab3e6f6961ecd856ccfa65715a6d1e1456dfe6cf",
+    "restored_state_sha256": "049c95362219a74f0c099791a683cce4f1c494ecaa1515613d4b2095f9ff8beb",
+    "source_set_sha256": "29616140c2a31a4fd38b42773aaeca7083f0f8f617832a70e0d4ce3e0a576b71",
+    "baseline_compiler": {
+      "path": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.43.34808/bin/Hostx64/x64/cl.exe",
+      "id": "MSVC",
+      "version": "19.43.34810.0",
+      "sha256": "9beec04038c74406e4c055593edc07ddda7b166272d77cbf85507d5a6be29ff0"
+    },
+    "candidate_compiler": {
+      "path": "D:/MLBPowerPros2008Recomp/local/tools/llvm-22.1.8/bin/clang-cl.exe",
+      "id": "Clang",
+      "version": "22.1.8",
+      "sha256": "986af49c2d1eefeac324f724ff54597753d1053927fa5d58a37a457f578e1cf8"
+    },
+    "preserved_rel_objects": 478,
+    "scope": "Short consecutive restored-state probes on this PC. Clang DOL/helpers with unchanged MSVC REL objects. Guest frame progress, not render FPS, native-only execution or full-game equivalence."
+  },
+  "compiler_first_out_speed_ratios": [
+    1.5494173294481572,
+    1.6209705651111732
+  ],
+  "compiler_first_out_median_normal_speed": [
+    0.452583,
+    0.453049
+  ],
+  "empty_mod_hooks_speed": {
+    "comparisons": [
+      {
+        "baseline": {
+          "probe": "boot-probe-20261009-200501-603",
+          "sample_seconds": 109.75932192802429,
+          "guest_frames": 3013,
+          "guest_frames_per_wall_second": 27.45097133504344,
+          "median_reported_speed": 0.466412,
+          "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357"
+        },
+        "candidate": {
+          "probe": "boot-probe-20261009-200721-907",
+          "sample_seconds": 110.29715776443481,
+          "guest_frames": 3262,
+          "guest_frames_per_wall_second": 29.57465147893256,
+          "median_reported_speed": 0.513282,
+          "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357"
+        },
+        "guest_frame_speed_ratio": 1.0773626593379617,
+        "runner_sha256": "40353ecb8ccc32f3c5ea86daf89010826be4b9a837bfd9defb0f731fe812715a",
+        "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357",
+        "restored_state_sha256": "5158bc08a5e58986bf5313277e0676b4cad0b77cecacbdf442313f67020eed14",
+        "scope": "Short consecutive restored-state OFF/ON probes on this PC with no loaded mods. Guest frame progress, not render FPS, full-game performance or native-only equivalence."
+      },
+      {
+        "baseline": {
+          "probe": "boot-probe-20261009-201251-574",
+          "sample_seconds": 109.89805316925049,
+          "guest_frames": 3000,
+          "guest_frames_per_wall_second": 27.298026793794023,
+          "median_reported_speed": 0.4725745,
+          "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357"
+        },
+        "candidate": {
+          "probe": "boot-probe-20261009-201032-901",
+          "sample_seconds": 110.07419443130493,
+          "guest_frames": 3338,
+          "guest_frames_per_wall_second": 30.325000489403337,
+          "median_reported_speed": 0.5255190000000001,
+          "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357"
+        },
+        "guest_frame_speed_ratio": 1.1108861720473318,
+        "runner_sha256": "40353ecb8ccc32f3c5ea86daf89010826be4b9a837bfd9defb0f731fe812715a",
+        "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357",
+        "restored_state_sha256": "5158bc08a5e58986bf5313277e0676b4cad0b77cecacbdf442313f67020eed14",
+        "scope": "Short consecutive restored-state OFF/ON probes on this PC with no loaded mods. Guest frame progress, not render FPS, full-game performance or native-only equivalence."
+      }
+    ],
+    "guest_frame_speed_ratios": [
+      1.0773626593379617,
+      1.1108861720473318
+    ],
+    "median_normal_speed": [
+      0.513282,
+      0.5255190000000001
+    ],
+    "default_enabled": false,
+    "evidence": "local/analysis/empty-mod-hooks-validation.json",
+    "scope": "First-out scene on this PC; not full-game performance or native-only execution"
+  },
+  "empty_mod_hooks_audit": {
+    "probe": "boot-probe-20261009-201511-691",
+    "checks": 3544,
+    "completed_boundary_comparisons": 3505,
+    "skipped_fallback": 13,
+    "skipped_zero": 26,
+    "empty_mod_hooks_skipping": true,
+    "required_entries": [
+      {
+        "entry": 2148015284,
+        "end": 2148015328,
+        "steps": 236,
+        "native_cycles": 266,
+        "shadow_cycles": 266,
+        "cycle_align": 1,
+        "reached": 1,
+        "cap_hit": 0,
+        "matched": 1
+      },
+      {
+        "entry": 2148268856,
+        "end": 2148274568,
+        "steps": 275,
+        "native_cycles": 281,
+        "shadow_cycles": 281,
+        "cycle_align": 1,
+        "reached": 1,
+        "cap_hit": 0,
+        "matched": 1
+      },
+      {
+        "entry": 2148274568,
+        "end": 2148274568,
+        "steps": 245,
+        "native_cycles": 260,
+        "shadow_cycles": 260,
+        "cycle_align": 1,
+        "reached": 1,
+        "cap_hit": 0,
+        "matched": 1
+      }
+    ],
+    "runner_sha256": "40353ecb8ccc32f3c5ea86daf89010826be4b9a837bfd9defb0f731fe812715a",
+    "module_sha256": "09296c1d72e4bb44080572964a1b664f148e2142cf691c04503258596f119357",
+    "state_sha256": "5158bc08a5e58986bf5313277e0676b4cad0b77cecacbdf442313f67020eed14",
+    "scope": "Reached unique entries in a bounded audit. Skipped entries and unvisited paths are not validated; not full-game or native-only equivalence."
+  },
+  "reverse_engineering_ghidra_available": true,
+  "inline_dol_lookup_experiment": {
+    "candidate_retained": false,
+    "source_comparisons": 3080,
+    "speed_ratios": [
+      1.0142377660346256,
+      0.9603618092678939
+    ],
+    "performance_gain_conclusive": false,
+    "evidence": "local/analysis/inline-dol-lookup-validation.json"
+  },
+  "diagnostic_hot_rel_clang_candidate_path": "local/analysis/hot-rel-clang-20261009-211914-701572/gRL8E54_recomp.dll",
+  "diagnostic_hot_rel_clang_candidate_default_enabled": false,
+  "diagnostic_hot_rel_clang_recompiled_chunks": 5,
+  "diagnostic_hot_rel_clang_preserved_rel_objects": 473,
+  "diagnostic_hot_rel_clang_reference_cases_passed": 2424,
+  "diagnostic_hot_rel_clang_completed_comparisons": 3637,
+  "diagnostic_hot_rel_clang_skipped_entries": 38,
+  "diagnostic_hot_rel_clang_changed_chunk_entry_comparisons": 176,
+  "diagnostic_hot_rel_clang_speed_ratios": [
+    1.0830013936481493,
+    1.0496231050096732
+  ],
+  "diagnostic_hot_rel_clang_two_pairs_checked": true,
+  "diagnostic_hot_rel_clang_full_game_validated": false,
+  "diagnostic_hot_rel_clang_performance_gain_conclusive": false,
+  "diagnostic_hot_rel_clang_evidence": "local/analysis/hot-rel-clang-validation.json",
+  "diagnostic_hot_rel_clang_report": "docs/hot-rel-clang-report.md"
+}

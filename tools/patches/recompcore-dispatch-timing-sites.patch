@@ -1,0 +1,101 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
+@@ -16,6 +16,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <memory>
++#include <unordered_map>
+ 
+ namespace
+ {
+@@ -99,6 +100,9 @@
+   u64 observed[2]{};
+   Aggregate phases[2][3]{};
+   Aggregate clock_pair{};
++  static constexpr std::size_t max_sites = 4096;
++  std::unordered_map<u64, Aggregate> module_sites;
++  Aggregate dropped_sites[2]{};
+ 
+   static u64 Elapsed(Clock::time_point start)
+   {
+@@ -113,6 +117,8 @@
+       for (auto& phase : context)
+         phase = {};
+     clock_pair = {};
++    module_sites.clear();
++    dropped_sites[0] = dropped_sites[1] = {};
+     if (!path.empty())
+       for (u32 i = 0; i < 10000; ++i)
+         clock_pair.Add(Elapsed(Clock::now()));
+@@ -131,6 +137,51 @@
+   {
+     if (!path.empty() && context < 2 && phase < 3)
+       phases[context][phase].Add(ns);
++  }
++  void AddModuleSample(u32 context, u32 runtime_pc, u64 ns)
++  {
++    if (path.empty() || context >= 2)
++      return;
++    Add(context, 1, ns);
++    const u64 key = (static_cast<u64>(context) << 32) | runtime_pc;
++    auto found = module_sites.find(key);
++    if (found != module_sites.end())
++      found->second.Add(ns);
++    else if (module_sites.size() < max_sites)
++      module_sites.emplace(key, Aggregate{1, ns, ns});
++    else
++      dropped_sites[context].Add(ns);
++  }
++  bool WriteSites() const
++  {
++    if (path.empty())
++      return true;
++    std::FILE* file = std::fopen((path + ".sites.csv").c_str(), "wb");
++    if (!file)
++      return false;
++    std::fprintf(file, "kind,context,pc,samples,total_ns,max_ns\n");
++    for (u32 context = 0; context < 2; ++context)
++    {
++      const Aggregate& dropped = dropped_sites[context];
++      std::fprintf(file, "dropped,%s,00000000,%llu,%llu,%llu\n",
++                   context ? "inside_rel_envelope" : "outside_rel_envelope",
++                   static_cast<unsigned long long>(dropped.samples),
++                   static_cast<unsigned long long>(dropped.total_ns),
++                   static_cast<unsigned long long>(dropped.max_ns));
++    }
++    for (const auto& site : module_sites)
++    {
++      const Aggregate& value = site.second;
++      std::fprintf(file, "site,%s,%08X,%llu,%llu,%llu\n",
++                   (site.first >> 32) ? "inside_rel_envelope" : "outside_rel_envelope",
++                   static_cast<u32>(site.first),
++                   static_cast<unsigned long long>(value.samples),
++                   static_cast<unsigned long long>(value.total_ns),
++                   static_cast<unsigned long long>(value.max_ns));
++    }
++    const bool written = std::ferror(file) == 0;
++    const int closed = std::fclose(file);
++    return written && closed == 0;
+   }
+   bool Write() const
+   {
+@@ -159,7 +210,7 @@
+                  static_cast<unsigned long long>(clock_pair.max_ns));
+     const bool written = std::ferror(file) == 0;
+     const int closed = std::fclose(file);
+-    return written && closed == 0;
++    return written && closed == 0 && WriteSites();
+   }
+ };
+ PowerProsDispatchTiming g_powerpros_dispatch_timing;
+@@ -310,8 +361,8 @@
+                                             PowerProsDispatchTiming::Elapsed(started));
+             started = PowerProsDispatchTiming::Clock::now();
+             m_module->dispatch(&m_guest, linked_dispatch_address);
+-            g_powerpros_dispatch_timing.Add(timing_context, 1,
+-                                            PowerProsDispatchTiming::Elapsed(started));
++            g_powerpros_dispatch_timing.AddModuleSample(timing_context,
++                runtime_dispatch_address, PowerProsDispatchTiming::Elapsed(started));
+             started = PowerProsDispatchTiming::Clock::now();
+             if (m_has_rel_modules)
+               m_guest.pc = TranslateRelAddress(m_guest.pc);

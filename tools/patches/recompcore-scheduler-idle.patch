@@ -1,0 +1,85 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
+@@ -48,6 +48,31 @@
+   return file;
+ }
+ }
++
++
++// POWERPROS_SCHEDULER_IDLE_BEGIN
++namespace
++{
++u32 PowerProsIdleRead32(const u8* ram, u32 offset)
++{
++  return static_cast<u32>(ram[offset]) << 24 | static_cast<u32>(ram[offset + 1]) << 16 |
++         static_cast<u32>(ram[offset + 2]) << 8 | ram[offset + 3];
++}
++
++bool PowerProsCanIdleScheduler(u32 pc, u32 msr, u32 r13, u32 guest_exception,
++                              u32 pending_exceptions, const u8* ram, u32 ram_size)
++{
++  // RL8E54 SelectThread's empty run-queue wait. Require its exact SDA and loop.
++  if (pc != 0x800A4318u || (msr & 0x8000u) == 0 || r13 != 0x80322060u ||
++      guest_exception != 0 || pending_exceptions != 0 || !ram || ram_size < 0x0031B274u)
++    return false;
++  return PowerProsIdleRead32(ram, 0x000A4318u) == 0x800D9210u &&
++         PowerProsIdleRead32(ram, 0x000A431Cu) == 0x2C000000u &&
++         PowerProsIdleRead32(ram, 0x000A4320u) == 0x4182FFF8u &&
++         PowerProsIdleRead32(ram, 0x0031B270u) == 0;
++}
++}
++// POWERPROS_SCHEDULER_IDLE_END
+ 
+ void StaticRecompCore::Run()
+ {
+@@ -199,6 +224,17 @@
+           const u64 total_cycles = m_timebase_cycle_remainder + effective_charge;
+           m_guest.timebase += total_cycles / SystemTimers::TIMER_RATIO;
+           m_timebase_cycle_remainder = total_cycles % SystemTimers::TIMER_RATIO;
++
++          // Opt-in, revision-specific empty scheduler queue wait. CoreTiming::Idle
++          // retains event/GPU synchronization; leave register/PC execution to the module.
++          if (m_scheduler_idle_enabled && current_game_id == "RL8E54" && !lockstep_enabled &&
++              ppc.downcount > 0 && PowerProsCanIdleScheduler(
++                  m_guest.pc, m_guest.msr, m_guest.gpr[13], m_guest.exception,
++                  ppc.Exceptions, m_guest.ram, m_guest.ram_size))
++          {
++            ++m_scheduler_idle_skips;
++            core_timing.Idle();
++          }
+ 
+           // Idle loop skipping for configured target loops (e.g. Wii Menu OSIdleThread)
+           if (m_guest.pc == m_idle_pc && m_idle_pc != 0)
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
+@@ -211,6 +211,8 @@
+   // last hit short-circuits the chunk binary search on the hot path.
+   mutable u32 m_last_chunk_index = 0;
+ 
++  bool m_scheduler_idle_enabled = false;
++  u64 m_scheduler_idle_skips = 0;
+   bool m_collect_dispatch_samples = false;
+   bool m_has_rel_modules = false;
+   u32 m_idle_pc = 0;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
+@@ -172,6 +172,9 @@
+ {
+   g_static_recomp_core = this;
+   PowerProsResetFallbackProfile();
++  const char* scheduler_idle = std::getenv("STATICRECOMP_POWERPROS_SCHEDULER_IDLE");
++  m_scheduler_idle_enabled = scheduler_idle && std::string(scheduler_idle) == "1";
++  m_scheduler_idle_skips = 0;
+   RefreshConfig();
+   m_collect_dispatch_samples = std::getenv("STATICRECOMP_DISPATCH_SAMPLES") != nullptr;
+   const char* fallback_override = std::getenv("STATICRECOMP_FALLBACK_RANGES");
+@@ -231,6 +234,9 @@
+ void StaticRecompCore::Shutdown()
+ {
+   PowerProsWriteFallbackProfile();
++  std::fprintf(stderr, "[powerpros-diagnostic] scheduler_idle_enabled=%u scheduler_idle_skips=%llu\n",
++               m_scheduler_idle_enabled ? 1u : 0u,
++               static_cast<unsigned long long>(m_scheduler_idle_skips));
+   g_static_recomp_core = nullptr;
+   std::fprintf(stderr, "[powerpros-diagnostic] fallback_jit_runs=%llu (invocations, not instructions)\n",
+                (unsigned long long)m_fallback_jit_runs);

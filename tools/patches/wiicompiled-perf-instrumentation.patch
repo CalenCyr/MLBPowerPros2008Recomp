@@ -1,0 +1,425 @@
+diff --git a/aurora-main/include/aurora/gfx.h b/aurora-main/include/aurora/gfx.h
+index f58252f..d19db46 100644
+--- a/aurora-main/include/aurora/gfx.h
++++ b/aurora-main/include/aurora/gfx.h
+@@ -44,6 +44,24 @@ typedef struct {
+   double effectiveFramesPerSecond;
+ } AuroraPresentTiming;
+ 
++// Cumulative renderer wait/work counters since startup (difference two reads to get a window).
++typedef struct {
++  uint64_t stagingMapWaitNs;   // begin_frame blocked on the staging buffer map
++  uint64_t stagingSplits;      // mid-frame batch splits because staging filled up
++  uint64_t submitNs;           // inside wgpu::Queue::Submit
++  uint64_t submits;
++  uint64_t presentNs;          // inside wgpu::Surface::Present
++  uint64_t presents;
++  uint64_t acquireNs;          // presenter acquiring the surface texture
++  uint64_t scheduleWaitNs;     // presenter pacing wait before Present
++  uint64_t encodeNs;           // encode_sealed_frame (render pass encoding)
++  uint64_t encodedFrames;
++  uint64_t efbReadbacks;       // synchronous EFB-to-RAM readbacks (CPU waits on the GPU)
++  uint64_t efbReadbackWaitNs;  // time blocked in those readback map waits
++  uint64_t textureCreates;     // wgpu textures created (dynamic, static, render, conversion)
++} AuroraFrameWaits;
++void aurora_get_frame_waits(AuroraFrameWaits* waits);
++
+ const AuroraStats* aurora_get_stats();
+ void aurora_get_present_timing(AuroraPresentTiming* timing);
+ 
+diff --git a/aurora-main/lib/aurora.cpp b/aurora-main/lib/aurora.cpp
+index aede66a..bb5f34c 100644
+--- a/aurora-main/lib/aurora.cpp
++++ b/aurora-main/lib/aurora.cpp
+@@ -1013,6 +1013,15 @@ bool present_presentation_job(const PresentationJob& job) {
+           }
+           presentDuration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+               PresentClock::now() - presentStarted);
++          {
++            auto& waits = gfx::g_frameWaits;
++            waits.acquireNs.fetch_add(acquireDuration.count(), std::memory_order_relaxed);
++            waits.submitNs.fetch_add(submitDuration.count(), std::memory_order_relaxed);
++            waits.submits.fetch_add(1, std::memory_order_relaxed);
++            waits.scheduleWaitNs.fetch_add(scheduleWaitDuration.count(), std::memory_order_relaxed);
++            waits.presentNs.fetch_add(presentDuration.count(), std::memory_order_relaxed);
++            waits.presents.fetch_add(1, std::memory_order_relaxed);
++          }
+           if (presentStatus == wgpu::Status::Success) {
+             presented = true;
+             record_successful_present(
+@@ -1535,6 +1544,7 @@ void seal_frame_locked(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx) {
+ // without the renderer GPU mutex while the producer records the next frame.
+ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx) {
+   ZoneScopedN("Encode sealed frame");
++  const gfx::ScopedWaitTimer encodeTimer{gfx::g_frameWaits.encodeNs, &gfx::g_frameWaits.encodedFrames};
+   auto encoder = std::move(ctx.encoder);
+   const auto encoderDescriptor = wgpu::CommandEncoderDescriptor{
+       .label = "Redraw encoder",
+diff --git a/aurora-main/lib/gfx/common.cpp b/aurora-main/lib/gfx/common.cpp
+index e093901..e72f45e 100644
+--- a/aurora-main/lib/gfx/common.cpp
++++ b/aurora-main/lib/gfx/common.cpp
+@@ -1049,10 +1049,13 @@ void map_staging_buffer() {
+       });
+ }
+ 
++FrameWaitCounters g_frameWaits;
++
+ static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
+   ZoneScoped;
+   {
+     ZoneScopedN("Wait for buffer map");
++    const ScopedWaitTimer mapWait{g_frameWaits.stagingMapWaitNs, nullptr};
+     map_staging_buffer();
+     while (true) {
+       const auto mappingState = s_mappingState.state();
+@@ -1227,6 +1230,7 @@ void end_frame(const wgpu::CommandEncoder& cmd) { end_batch_impl(cmd, true); }
+ void end_batch(const wgpu::CommandEncoder& cmd) { end_batch_impl(cmd, false); }
+ 
+ void split_staging_batch() {
++  g_frameWaits.stagingSplits.fetch_add(1, std::memory_order_relaxed);
+   // Never called under the decoder's renderer lock: the worker needs that lock
+   // to reach DONE. FIFO admission yields its unconsumed command first.
+   aurora::wait_for_frame_worker();
+@@ -1768,3 +1772,23 @@ void aurora_pop_debug_group() {
+ }
+ 
+ const AuroraStats* aurora_get_stats() { return &aurora::gfx::g_stats; }
++
++void aurora_get_frame_waits(AuroraFrameWaits* waits) {
++  if (waits == nullptr) return;
++  const auto& c = aurora::gfx::g_frameWaits;
++  *waits = AuroraFrameWaits{
++      .stagingMapWaitNs = c.stagingMapWaitNs.load(),
++      .stagingSplits = c.stagingSplits.load(),
++      .submitNs = c.submitNs.load(),
++      .submits = c.submits.load(),
++      .presentNs = c.presentNs.load(),
++      .presents = c.presents.load(),
++      .acquireNs = c.acquireNs.load(),
++      .scheduleWaitNs = c.scheduleWaitNs.load(),
++      .encodeNs = c.encodeNs.load(),
++      .encodedFrames = c.encodedFrames.load(),
++      .efbReadbacks = c.efbReadbacks.load(),
++      .efbReadbackWaitNs = c.efbReadbackWaitNs.load(),
++      .textureCreates = c.textureCreates.load(),
++  };
++}
+diff --git a/aurora-main/lib/gfx/common.hpp b/aurora-main/lib/gfx/common.hpp
+index b2993a8..12c1ffa 100644
+--- a/aurora-main/lib/gfx/common.hpp
++++ b/aurora-main/lib/gfx/common.hpp
+@@ -4,6 +4,8 @@
+ #include "../internal.hpp"
+ #include "../webgpu/gpu.hpp"
+ 
++#include <atomic>
++#include <chrono>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
+@@ -402,6 +404,24 @@ uint64_t staging_storage_bytes(uint64_t bytes);
+ bool staging_has_space(const StagingSizes& demand);
+ void ensure_staging_space(const StagingSizes& demand);
+ void split_staging_batch();
++
++// Cumulative counters behind aurora_get_frame_waits.
++struct FrameWaitCounters {
++  std::atomic<uint64_t> stagingMapWaitNs{0}, stagingSplits{0}, submitNs{0}, submits{0}, presentNs{0}, presents{0},
++      acquireNs{0}, scheduleWaitNs{0}, encodeNs{0}, encodedFrames{0}, efbReadbacks{0}, efbReadbackWaitNs{0}, textureCreates{0};
++};
++extern FrameWaitCounters g_frameWaits;
++// Adds the time since construction to a counter (and bumps an optional event count).
++struct ScopedWaitTimer {
++  std::atomic<uint64_t>& total;
++  std::atomic<uint64_t>* count;
++  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
++  ~ScopedWaitTimer() {
++    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start);
++    total.fetch_add(static_cast<uint64_t>(ns.count()), std::memory_order_relaxed);
++    if (count != nullptr) count->fetch_add(1, std::memory_order_relaxed);
++  }
++};
+ uint64_t staging_epoch() noexcept;
+ StagingSizes staging_usage() noexcept;
+ StagingSizes staging_high_water() noexcept;
+diff --git a/aurora-main/lib/gfx/efb_ram_copy.cpp b/aurora-main/lib/gfx/efb_ram_copy.cpp
+index 29aac8f..aabd5ca 100644
+--- a/aurora-main/lib/gfx/efb_ram_copy.cpp
++++ b/aurora-main/lib/gfx/efb_ram_copy.cpp
+@@ -1,5 +1,6 @@
+ #include "efb_ram_copy.hpp"
+ 
++#include "common.hpp"
+ #include "efb_ram_encoder.hpp"
+ #include "tex_copy_conv.hpp"
+ #include "../internal.hpp"
+@@ -325,7 +326,11 @@ bool complete_downloads() noexcept {
+                                      result->message.assign(message.data, length);
+                                    }
+                                  });
+-    const auto waitStatus = g_instance.WaitAny(future, 5000000000);
++    wgpu::WaitStatus waitStatus;
++    {
++      const ScopedWaitTimer readbackWait{g_frameWaits.efbReadbackWaitNs, &g_frameWaits.efbReadbacks};
++      waitStatus = g_instance.WaitAny(future, 5000000000);
++    }
+     wgpu::MapAsyncStatus mapStatus;
+     std::string mapMessage;
+     {
+diff --git a/aurora-main/lib/gfx/texture.cpp b/aurora-main/lib/gfx/texture.cpp
+index f465f36..4f4a710 100644
+--- a/aurora-main/lib/gfx/texture.cpp
++++ b/aurora-main/lib/gfx/texture.cpp
+@@ -165,6 +165,7 @@ TextureHandle new_dynamic_texture_2d(uint32_t width, uint32_t height, uint32_t m
+       .sampleCount = 1,
+   };
+   auto texture = g_device.CreateTexture(&textureDescriptor);
++  g_frameWaits.textureCreates.fetch_add(1, std::memory_order_relaxed);
+   const auto viewLabel = fmt::format("{} view", label);
+   wgpu::TextureViewDescriptor textureViewDescriptor{
+       .label = viewLabel.c_str(),
+@@ -197,6 +198,7 @@ TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat,
+       .sampleCount = 1,
+   };
+   auto texture = g_device.CreateTexture(&textureDescriptor);
++  g_frameWaits.textureCreates.fetch_add(1, std::memory_order_relaxed);
+ 
+   // Create texture view for color attachments
+   const auto viewLabel = fmt::format("{} view", label);
+@@ -231,6 +233,7 @@ TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, co
+       .sampleCount = 1,
+   };
+   auto texture = g_device.CreateTexture(&textureDescriptor);
++  g_frameWaits.textureCreates.fetch_add(1, std::memory_order_relaxed);
+ 
+   // Create texture view for color attachments
+   const auto viewLabel = fmt::format("{} view", label);
+diff --git a/aurora-main/lib/webgpu/gpu.cpp b/aurora-main/lib/webgpu/gpu.cpp
+index 37515f2..1f8c924 100644
+--- a/aurora-main/lib/webgpu/gpu.cpp
++++ b/aurora-main/lib/webgpu/gpu.cpp
+@@ -7,6 +7,7 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <mutex>
++#include <string>
+ #include <string_view>
+ #include <utility>
+ #include <vector>
+@@ -701,10 +702,34 @@ bool initialize(AuroraBackend auroraBackend) {
+     if (g_backendType == wgpu::BackendType::Vulkan) {
+       enableToggles.push_back("vulkan_monolithic_pipeline_cache");
+     }
++    // AURORA_DAWN_ENABLE_TOGGLES / AURORA_DAWN_DISABLE_TOGGLES: comma-separated Dawn toggle names,
++    // for backend A/B experiments without a rebuild.
++    static std::vector<std::string> s_toggleNames;
++    std::vector<const char*> disableToggles;
++    const auto readToggles = [](const char* env) {
++      const char* value = std::getenv(env);
++      for (std::string_view rest = value ? value : ""; !rest.empty();) {
++        const size_t comma = rest.find(',');
++        if (comma != 0) {
++          s_toggleNames.emplace_back(rest.substr(0, comma));
++          Log.info("{}: {}", env, s_toggleNames.back());
++        }
++        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
++      }
++    };
++    s_toggleNames.clear();
++    readToggles("AURORA_DAWN_ENABLE_TOGGLES");
++    const size_t disableStart = s_toggleNames.size();
++    readToggles("AURORA_DAWN_DISABLE_TOGGLES");
++    const size_t enableStart = 0;
++    for (size_t i = enableStart; i < disableStart; ++i) enableToggles.push_back(s_toggleNames[i].c_str());
++    for (size_t i = disableStart; i < s_toggleNames.size(); ++i) disableToggles.push_back(s_toggleNames[i].c_str());
+     const wgpu::DawnTogglesDescriptor togglesDescriptor({
+         .nextInChain = &cacheDescriptor,
+         .enabledToggleCount = enableToggles.size(),
+         .enabledToggles = enableToggles.data(),
++        .disabledToggleCount = disableToggles.size(),
++        .disabledToggles = disableToggles.data(),
+     });
+ #endif
+     wgpu::DeviceDescriptor deviceDescriptor;
+diff --git a/runtime/src/fiber_manager.cpp b/runtime/src/fiber_manager.cpp
+index 8f4aae0..f2ad393 100644
+--- a/runtime/src/fiber_manager.cpp
++++ b/runtime/src/fiber_manager.cpp
+@@ -485,6 +485,12 @@ bool GuestFiberManager::HasFiber(uint32_t guestThreadAddr) {
+     return s_fibers.count(guestThreadAddr) > 0;
+ }
+ 
++} // namespace Fiber
++namespace OsHleInternal {
++bool DebugSleepTimerInfo(uint32_t threadPtr, double& msUntilDue, bool& parkOutstanding);
++}
++namespace Fiber {
++
+ void GuestFiberManager::DebugDumpThreads() {
+     std::lock_guard<std::mutex> lock(s_mutex);
+     VI_DebugDump();
+@@ -494,7 +500,23 @@ void GuestFiberManager::DebugDumpThreads() {
+     for (const auto& [address, fiber] : s_fibers) {
+         std::cerr << "[threads] thread 0x" << std::hex << address << " entry=0x" << fiber.entryPoint
+                   << std::dec << " state=" << static_cast<uint32_t>(fiber.state)
+-                  << (fiber.terminated ? " terminated" : "") << std::endl;
++                  << (fiber.terminated ? " terminated" : "");
++        uint32_t guestState = 0, suspend = 0, priority = 0, queue = 0;
++        if (Memory::TryRead32(address + 0x2C8u, guestState) && Memory::TryRead32(address + 0x2CCu, suspend) &&
++            Memory::TryRead32(address + 0x2D0u, priority) && Memory::TryRead32(address + 0x2DCu, queue)) {
++            // OSThread: state (u16 at 0x2C8), suspend count, priority, wait queue.
++            std::cerr << " guest{state=" << (guestState >> 16) << " suspend=" << static_cast<int32_t>(suspend)
++                      << " prio=" << priority << " queue=0x" << std::hex << queue << std::dec << "}";
++        }
++        double msUntilDue = 0.0;
++        bool parkOutstanding = false;
++        if (OsHleInternal::DebugSleepTimerInfo(address, msUntilDue, parkOutstanding)) {
++            std::cerr << " sleepTimer=" << msUntilDue << "ms";
++        }
++        if (parkOutstanding) {
++            std::cerr << " parkOutstanding";
++        }
++        std::cerr << std::endl;
+         SystemBridge::DumpCpuState(&fiber.cpuContext);
+     }
+ }
+diff --git a/runtime/src/hle/os/os_sleep.cpp b/runtime/src/hle/os/os_sleep.cpp
+index 5a66c02..70b73ac 100644
+--- a/runtime/src/hle/os/os_sleep.cpp
++++ b/runtime/src/hle/os/os_sleep.cpp
+@@ -60,6 +60,24 @@ void ClearOutstandingPark(uint32_t threadPtr)
+     gOutstandingParks.erase(threadPtr);
+ }
+ 
++// Diagnostics for thread dumps: milliseconds until the thread's sleep timer fires (negative when
++// overdue), whether one is pending, and whether its park is still tracked as outstanding.
++bool DebugSleepTimerInfo(uint32_t threadPtr, double& msUntilDue, bool& parkOutstanding)
++{
++    {
++        std::lock_guard<std::mutex> lock(gOutstandingParkMutex);
++        parkOutstanding = gOutstandingParks.count(threadPtr) != 0;
++    }
++    std::lock_guard<std::mutex> lock(gSleepTimerMutex);
++    for (const SleepTimerEntry& entry : gSleepTimers) {
++        if (entry.threadPtr == threadPtr) {
++            msUntilDue = std::chrono::duration<double, std::milli>(entry.deadline - std::chrono::steady_clock::now()).count();
++            return true;
++        }
++    }
++    return false;
++}
++
+ void ScheduleSleepTimer(uint32_t threadPtr, uint64_t ticks)
+ {
+     using Clock = std::chrono::steady_clock;
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index a103a22..7ce925f 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -27,9 +27,11 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
++#include <cstdlib>
+ #include <limits>
+ #include <iostream>
+ #include <string>
++#include <vector>
+ #include <string_view>
+ #include <utility>
+ 
+@@ -1152,7 +1154,93 @@ void DrawGraphicsSettings() {
+     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+ }
+ 
++// WIICOMPILED_BENCH=<minDraws>,<seconds>[,<maxWaitSeconds>]: event-driven benchmark. Waits until a
++// frame issues at least minDraws draw calls (the scene under test), then records frame-to-frame
++// times for the given seconds, prints a summary to stderr and exits. Exits with code 3 if the
++// scene never shows up within maxWaitSeconds (default 600).
++void RunBenchmarkFrame() {
++    struct Bench { unsigned minDraws = 0, seconds = 0, maxWait = 600; bool on = false; };
++    static const Bench cfg = [] {
++        Bench b;
++        if (const char* env = std::getenv("WIICOMPILED_BENCH")) {
++            b.on = std::sscanf(env, "%u,%u,%u", &b.minDraws, &b.seconds, &b.maxWait) >= 2 && b.seconds > 0;
++        }
++        return b;
++    }();
++    if (!cfg.on) return;
++    using Clock = std::chrono::steady_clock;
++    static const Clock::time_point launch = Clock::now();
++    static Clock::time_point start{}, last{};
++    static std::vector<double> frames;
++    static uint64_t drawSum = 0;
++    const Clock::time_point now = Clock::now();
++    const uint32_t draws = aurora_get_stats()->drawCallCount;
++    static AuroraFrameWaits waitsAtStart{};
++    if (start == Clock::time_point{}) {
++        if (draws >= cfg.minDraws) {
++            start = last = now;
++            aurora_get_frame_waits(&waitsAtStart);
++            std::fprintf(stderr, "[bench] scene reached after %.1f s (%u draws)\n",
++                         std::chrono::duration<double>(now - launch).count(), draws);
++        } else if (now - launch > std::chrono::seconds(cfg.maxWait)) {
++            if (FILE* out = std::fopen("bench_result.txt", "w")) {
++                std::fprintf(out, "[bench] scene with %u draws not reached in %u s\n", cfg.minDraws, cfg.maxWait);
++                std::fclose(out);
++            }
++            std::_Exit(3);
++        }
++        return;
++    }
++    // Only frames of the scene under test count; the demo cuts away from it now and then.
++    static double total = 0.0;
++    const double frameMs = std::chrono::duration<double, std::milli>(now - last).count();
++    last = now;
++    if (draws >= cfg.minDraws) {
++        frames.push_back(frameMs);
++        drawSum += draws;
++        total += frameMs;
++    }
++    if (total < cfg.seconds * 1000.0 && now - start < std::chrono::seconds(cfg.seconds * 6)) return;
++    if (frames.empty()) frames.push_back(0.0);
++    std::vector<double> sorted = frames;
++    std::sort(sorted.begin(), sorted.end());
++    const auto pct = [&](double p) { return sorted[std::min(sorted.size() - 1, static_cast<size_t>(p * sorted.size()))]; };
++    const size_t slow = static_cast<size_t>(std::count_if(frames.begin(), frames.end(), [](double f) { return f > 20.0; }));
++    AuroraFrameWaits w{};
++    aurora_get_frame_waits(&w);
++    const double presents = std::max<double>(1.0, static_cast<double>(w.presents - waitsAtStart.presents));
++    const double encoded = std::max<double>(1.0, static_cast<double>(w.encodedFrames - waitsAtStart.encodedFrames));
++    const auto perMs = [](uint64_t a, uint64_t b, double n) { return static_cast<double>(a - b) / 1e6 / n; };
++    char line[768];
++    std::snprintf(line, sizeof(line),
++                  "[bench] frames=%zu fps=%.2f p50=%.2fms p95=%.2fms p99=%.2fms max=%.2fms slow(>20ms)=%.1f%% avgDraws=%.0f\n"
++                  "[bench] per frame: stagingMapWait=%.2fms splits=%.2f encode=%.2fms acquire=%.2fms submit=%.2fms "
++                  "paceWait=%.2fms present=%.2fms efbReadbacks=%.2f efbReadbackWait=%.2fms textureCreates=%.2f (presents=%.0f encoded=%.0f)\n",
++                  frames.size(), 1000.0 * frames.size() / total, pct(0.50), pct(0.95), pct(0.99), sorted.back(),
++                  100.0 * slow / frames.size(), static_cast<double>(drawSum) / frames.size(),
++                  perMs(w.stagingMapWaitNs, waitsAtStart.stagingMapWaitNs, encoded),
++                  static_cast<double>(w.stagingSplits - waitsAtStart.stagingSplits) / encoded,
++                  perMs(w.encodeNs, waitsAtStart.encodeNs, encoded), perMs(w.acquireNs, waitsAtStart.acquireNs, presents),
++                  perMs(w.submitNs, waitsAtStart.submitNs, presents),
++                  perMs(w.scheduleWaitNs, waitsAtStart.scheduleWaitNs, presents),
++                  perMs(w.presentNs, waitsAtStart.presentNs, presents),
++                  static_cast<double>(w.efbReadbacks - waitsAtStart.efbReadbacks) / static_cast<double>(frames.size()),
++                  perMs(w.efbReadbackWaitNs, waitsAtStart.efbReadbackWaitNs, static_cast<double>(frames.size())),
++                  static_cast<double>(w.textureCreates - waitsAtStart.textureCreates) / static_cast<double>(frames.size()),
++                  presents, encoded);
++    // stderr goes through the runtime's log pipe, whose reader thread dies with _Exit: also
++    // write the summary to bench_result.txt in the working directory.
++    if (FILE* out = std::fopen("bench_result.txt", "w")) {
++        std::fputs(line, out);
++        std::fclose(out);
++    }
++    std::fputs(line, stderr);
++    std::fflush(stderr);
++    std::_Exit(0);
++}
++
+ void DrawFpsOverlay() {
++    RunBenchmarkFrame();
+     AuroraPresentTiming presentTiming{};
+     aurora_get_present_timing(&presentTiming);
+     if (!g_showFps) {

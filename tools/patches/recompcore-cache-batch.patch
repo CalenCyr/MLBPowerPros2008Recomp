@@ -1,0 +1,112 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
+@@ -216,6 +216,9 @@
+   bool m_scheduler_idle_enabled = false;
+   u64 m_scheduler_idle_skips = 0;
+   bool m_dispatch_timing_enabled = false;
++  bool m_cache_batch_enabled = false;
++  u64 m_cache_batch_runs = 0;
++  u64 m_cache_batch_extra_lines = 0;
+   bool m_collect_dispatch_samples = false;
+   bool m_has_rel_modules = false;
+   u32 m_idle_pc = 0;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
+@@ -180,6 +180,9 @@
+   const char* scheduler_idle = std::getenv("STATICRECOMP_POWERPROS_SCHEDULER_IDLE");
+   m_scheduler_idle_enabled = scheduler_idle && std::string(scheduler_idle) == "1";
+   m_scheduler_idle_skips = 0;
++  const char* cache_batch = std::getenv("STATICRECOMP_POWERPROS_CACHE_BATCH");
++  m_cache_batch_enabled = cache_batch && std::string(cache_batch) == "1";
++  m_cache_batch_runs = m_cache_batch_extra_lines = 0;
+   RefreshConfig();
+   m_collect_dispatch_samples = std::getenv("STATICRECOMP_DISPATCH_SAMPLES") != nullptr;
+   const char* fallback_override = std::getenv("STATICRECOMP_FALLBACK_RANGES");
+@@ -240,6 +243,10 @@
+ {
+   PowerProsWriteFallbackProfile();
+   PowerProsWriteDispatchTiming();
++  std::fprintf(stderr, "[powerpros-diagnostic] cache_batch_enabled=%u cache_batch_runs=%llu cache_batch_extra_lines=%llu\n",
++               m_cache_batch_enabled ? 1u : 0u,
++               static_cast<unsigned long long>(m_cache_batch_runs),
++               static_cast<unsigned long long>(m_cache_batch_extra_lines));
+   std::fprintf(stderr, "[powerpros-diagnostic] scheduler_idle_enabled=%u scheduler_idle_skips=%llu\n",
+                m_scheduler_idle_enabled ? 1u : 0u,
+                static_cast<unsigned long long>(m_scheduler_idle_skips));
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Hooks.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Hooks.cpp
+@@ -20,6 +20,47 @@
+ constexpr u32 LOCKED_CACHE_BASE = 0xE0000000u;
+ }
+ 
++
++
++// POWERPROS_CACHE_BATCH_BEGIN
++namespace
++{
++u32 PowerProsCacheBatchCount(const CPUState* cpu, u32 raw, u32 cia, bool allowed,
++                           u32 pending_exceptions, bool dcache, bool lockstep)
++{
++  // Experimental RL8E54 module, compiled with loop budget 256. Preserve its
++  // final iteration and generated back-edge/system-call execution exactly.
++  if (!allowed || raw != 0x7C0018ACu || cia != 0x8009C4A4u || cpu->pc != cia ||
++      cpu->exception || pending_exceptions || dcache || lockstep ||
++      cpu->ctr < 2 || cpu->downcount >= 0 || cpu->downcount <= -254 ||
++      !cpu->ram || cpu->ram_size < 0x0009C4B4u)
++    return 1;
++  const auto read = [cpu](u32 offset) {
++    const u8* p = cpu->ram + offset;
++    return static_cast<u32>(p[0]) << 24 | static_cast<u32>(p[1]) << 16 |
++           static_cast<u32>(p[2]) << 8 | p[3];
++  };
++  if (read(0x9C4A4) != 0x7C0018ACu || read(0x9C4A8) != 0x38630020u ||
++      read(0x9C4AC) != 0x4200FFF8u || read(0x9C4B0) != 0x44000002u)
++    return 1;
++  const u32 until_back_edge = static_cast<u32>((256 + cpu->downcount + 1) / 2);
++  return cpu->ctr < until_back_edge ? cpu->ctr : until_back_edge;
++}
++
++template <typename Invalidate>
++void PowerProsRunCacheBatch(CPUState* cpu, u32 count, Invalidate&& invalidate)
++{
++  // Keep every per-line operation and wrapping u32 effective address. Only
++  // intermediate addi/bdnz pairs move here; generated C executes the last pair.
++  const u32 address = cpu->gpr[3];
++  for (u32 i = 0; i < count; ++i)
++    invalidate(address + i * 32u);
++  cpu->gpr[3] += (count - 1u) * 32u;
++  cpu->ctr -= count - 1u;
++  cpu->downcount -= static_cast<s64>(count - 1u) * 2;
++}
++}
++// POWERPROS_CACHE_BATCH_END
+ 
+ // POWERPROS_FALLBACK_PROFILE_BEGIN
+ namespace
+@@ -476,7 +517,25 @@
+       if (xo == 982u)
+         ppc.iCache.Invalidate(system.GetMemory(), system.GetJitInterface(), ea);
+       else
+-        system.GetJitInterface().InvalidateICacheLine(ea);
++      {
++        u32 batch = 1;
++        if (core->m_cache_batch_enabled && cia == 0x8009C4A4u &&
++            core->m_module && std::string(core->m_module->game_id) == "RL8E54")
++          batch = PowerProsCacheBatchCount(cpu, raw, cia,
++              g_powerpros_fallback_profile.path.empty(), ppc.Exceptions,
++              ppc.m_enable_dcache, core->m_lockstep_verifier->IsEnabled());
++        if (batch > 1)
++        {
++          PowerProsRunCacheBatch(cpu, batch, [&system](u32 address) {
++            system.GetJitInterface().InvalidateICacheLine(address);
++          });
++          ++core->m_cache_batch_runs;
++          core->m_cache_batch_extra_lines += batch - 1u;
++          ppc.downcount -= static_cast<int>((batch - 1u) * 5u);
++        }
++        else
++          system.GetJitInterface().InvalidateICacheLine(ea);
++      }
+       // These bypass SingleStepInner, so charge Dolphin's PPCTables cost
+       // here (icbi 4, dcbf/dcbst/dcbi 5); their emitted block cost is zero.
+       ppc.downcount -= (xo == 982u) ? 4 : 5;

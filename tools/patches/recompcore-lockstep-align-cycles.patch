@@ -1,0 +1,58 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
+@@ -201,6 +201,9 @@
+   u64 m_ls_filtered = 0;
+   bool m_ls_nodedup = false;
+   int m_ls_step_cap = 20000;
++  // STATICRECOMP_LOCKSTEP_ALIGNCYCLES: at any end PC (not only loop headers) keep stepping
++  // until the shadow has done the native charge; regions that chain calls revisit end PCs.
++  bool m_ls_align_cycles = false;
+   u64 m_ls_cap_hits = 0;
+   u64 m_ls_checks = 0;          // distinct blocks differentially checked
+   u64 m_ls_reports = 0;         // divergences reported
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
+@@ -78,6 +78,8 @@
+     m_ls_max_report = std::strtoull(s, nullptr, 0);
+   if (const char* s = std::getenv("STATICRECOMP_LOCKSTEP_STEPCAP"))
+     m_ls_step_cap = std::atoi(s);
++  if (const char* s = std::getenv("STATICRECOMP_LOCKSTEP_ALIGNCYCLES"))
++    m_ls_align_cycles = s[0] != '0';
+   if (const char* s = std::getenv("STATICRECOMP_LOCKSTEP_TRACE"))
+     m_ls_trace_pc = static_cast<u32>(std::strtoull(s, nullptr, 0));
+   if (const char* s = std::getenv("STATICRECOMP_LOCKSTEP_REPEAT"))
+@@ -100,9 +102,11 @@
+ 
+   std::fprintf(
+       stderr,
+-      "[lockstep] ENABLED: start=%llu limit=%llu maxreport=%llu stepcap=%d whitelist=%zu\n",
++      "[lockstep] ENABLED: start=%llu limit=%llu maxreport=%llu stepcap=%d whitelist=%zu"
++      " aligncycles=%d\n",
+       (unsigned long long)m_ls_start, (unsigned long long)m_ls_limit,
+-      (unsigned long long)m_ls_max_report, m_ls_step_cap, m_ls_whitelist.size());
++      (unsigned long long)m_ls_max_report, m_ls_step_cap, m_ls_whitelist.size(),
++      m_ls_align_cycles ? 1 : 0);
+ }
+ 
+ bool StaticRecompLockstepVerifier::ShouldCheck(u32 address) const
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
+@@ -216,7 +216,7 @@
+       // cannot be inferred from the code. Stopping at the first branch arrival
+       // compares two different iterations of the same loop at the same PC,
+       // which is the long-standing GPR divergence on both arm64 and x86-64.
+-      if (!end_is_loop_header)
++      if (!end_is_loop_header && !m_ls_align_cycles)
+         break;
+       if (interp_cycles >= native_charge)
+         break;
+@@ -241,7 +241,8 @@
+   const bool cap_hit = !reached && ppc.Exceptions == 0 && steps >= m_ls_step_cap;
+   if (cap_hit)
+     ++m_ls_cap_hits;
+-  const bool undercharged = reached && (interp_cycles > native_charge + LS_UNDERCHARGE_GRACE) && !end_is_loop_header;
++  const bool undercharged = reached && (interp_cycles > native_charge + LS_UNDERCHARGE_GRACE) &&
++                            !end_is_loop_header && !m_ls_align_cycles;
+ 
+   std::string diff;
+   const auto addu = [&](const std::string& name, u64 nval, u64 ival) {

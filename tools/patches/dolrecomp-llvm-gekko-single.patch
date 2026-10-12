@@ -1,0 +1,142 @@
+diff --git a/src/backend/llvm/instructions.cpp b/src/backend/llvm/instructions.cpp
+index 7b75d5d..b2cfab2 100644
+--- a/src/backend/llvm/instructions.cpp
++++ b/src/backend/llvm/instructions.cpp
+@@ -1,5 +1,6 @@
+ #include "backend/llvm/emitter.h"
+ #include "backend/llvm/native_abi.h"
++#include "backend/llvm/psq_convert.h"
+ 
+ #include <llvm/IR/Constants.h>
+ #include <llvm/IR/Function.h>
+@@ -70,10 +71,9 @@ Value *FunctionEmitter::castValue(DolIROp op, Type *resultType, Value *value) {
+     return builder_.CreateSExt(value, resultType);
+   case DOLIR_OP_BITCAST:
+     return builder_.CreateBitCast(value, resultType);
+-  case DOLIR_OP_FPTRUNC:
+-    return builder_.CreateFPTrunc(value, resultType);
++  case DOLIR_OP_FPTRUNC: // stfs/lfs: Gekko bit rules (psq_convert.cpp)
+   case DOLIR_OP_FPEXT:
+-    return builder_.CreateFPExt(value, resultType);
++    return gekkoFloatCast(builder_, module_, value, resultType);
+   default:
+     return nullptr;
+   }
+diff --git a/src/backend/llvm/psq_convert.cpp b/src/backend/llvm/psq_convert.cpp
+index 457af51..03fcbd7 100644
+--- a/src/backend/llvm/psq_convert.cpp
++++ b/src/backend/llvm/psq_convert.cpp
+@@ -66,7 +66,63 @@ Value *dequantizePSQInteger(IRBuilder<> &builder, Value *value, Value *scale,
+   return builder.CreateFMul(single, power, "psq.dequantized");
+ }
+ 
++Value *convertToSingleBits(IRBuilder<> &builder, Value *x, bool ftz) {
++  Value *exponent = builder.CreateTrunc(
++      builder.CreateAnd(builder.CreateLShr(x, 52), builder.getInt64(0x7ff)),
++      builder.getInt32Ty());
++  Value *sign = builder.CreateTrunc(
++      builder.CreateAnd(builder.CreateLShr(x, 32), builder.getInt64(0x80000000ULL)),
++      builder.getInt32Ty());
++  Value *truncated = builder.CreateTrunc(
++      builder.CreateOr(
++          builder.CreateAnd(builder.CreateLShr(x, 32), builder.getInt64(0xc0000000ULL)),
++          builder.CreateAnd(builder.CreateLShr(x, 29), builder.getInt64(0x3fffffffULL))),
++      builder.getInt32Ty());
++  Value *direct = builder.CreateOr(
++      builder.CreateICmpUGT(exponent, builder.getInt32(896)),
++      builder.CreateICmpEQ(builder.CreateAnd(x, builder.getInt64(0x7fffffffffffffffULL)),
++                           builder.getInt64(0)));
++  if (ftz)
++    return builder.CreateSelect(direct, truncated, sign);
++  // 874 <= exp <= 896: denormalise by shifting; below 874 Gekko truncates.
++  Value *denormal = builder.CreateAnd(
++      builder.CreateNot(direct), builder.CreateICmpUGE(exponent, builder.getInt32(874)));
++  Value *shift = builder.CreateSelect(
++      denormal, builder.CreateSub(builder.getInt32(905), exponent), builder.getInt32(0));
++  Value *mantissa = builder.CreateOr(
++      builder.getInt32(0x80000000u),
++      builder.CreateTrunc(
++          builder.CreateLShr(builder.CreateAnd(x, builder.getInt64(0x000fffffffffffffULL)), 21),
++          builder.getInt32Ty()));
++  Value *shifted = builder.CreateOr(builder.CreateLShr(mantissa, shift), sign);
++  return builder.CreateSelect(denormal, shifted, truncated);
++}
++
++// DolIR emits FPTRUNC/FPEXT only for stfs/lfs. Gekko converts those with
++// integer bit rules: truncation, shifted denormals, no NaN quieting and no
++// dependence on host FTZ/DAZ. Host fptrunc/fpext round and honour MXCSR,
++// which the runtime sets from FPSCR[NI].
++Value *gekkoFloatCast(IRBuilder<> &builder, Module &module, Value *value,
++                      Type *resultType) {
++  if (value->getType()->isDoubleTy() && resultType->isFloatTy())
++    return builder.CreateBitCast(
++        convertToSingleBits(builder, builder.CreateBitCast(value, builder.getInt64Ty()),
++                            false),
++        resultType);
++  if (value->getType()->isFloatTy() && resultType->isDoubleTy())
++    return extendPSQFloat(builder, module,
++                          builder.CreateBitCast(value, builder.getInt32Ty()));
++  return resultType->getPrimitiveSizeInBits() < value->getType()->getPrimitiveSizeInBits()
++             ? builder.CreateFPTrunc(value, resultType)
++             : builder.CreateFPExt(value, resultType);
++}
++
+ Value *truncatePSQFloat(IRBuilder<> &builder, Value *value) {
++  // psq_st float uses Dolphin ConvertToSingleFTZ: truncation, denormals to
++  // signed zero. A host fptrunc would round instead.
++  if (value->getType()->isDoubleTy())
++    return convertToSingleBits(
++        builder, builder.CreateBitCast(value, builder.getInt64Ty()), true);
+   Value *single = value;
+   if (!value->getType()->isFloatTy()) {
+     single = builder.CreateConstrainedFPCast(
+@@ -80,7 +136,8 @@ Value *truncatePSQFloat(IRBuilder<> &builder, Value *value) {
+   Value *denormal =
+       builder.CreateAnd(builder.CreateICmpEQ(exponent, builder.getInt32(0)),
+                         builder.CreateICmpNE(fraction, builder.getInt32(0)));
+-  return builder.CreateSelect(denormal, builder.getInt32(0), bits);
++  return builder.CreateSelect(
++      denormal, builder.CreateAnd(bits, builder.getInt32(0x80000000u)), bits);
+ }
+ 
+ Value *quantizePSQFloat(IRBuilder<> &builder, Value *value, Value *scale,
+diff --git a/src/backend/llvm/psq_convert.h b/src/backend/llvm/psq_convert.h
+index 7cef20f..600b29e 100644
+--- a/src/backend/llvm/psq_convert.h
++++ b/src/backend/llvm/psq_convert.h
+@@ -16,6 +16,14 @@ llvm::Value *dequantizePSQInteger(llvm::IRBuilder<> &builder,
+                                   llvm::Value *value, llvm::Value *scale,
+                                   bool is_signed);
+ llvm::Value *truncatePSQFloat(llvm::IRBuilder<> &builder, llvm::Value *value);
++// Dolphin ConvertToSingle (ftz=false) / ConvertToSingleFTZ (ftz=true) on raw
++// double bits (i64); returns the single-precision bits (i32).
++llvm::Value *convertToSingleBits(llvm::IRBuilder<> &builder, llvm::Value *bits,
++                                 bool ftz);
++// double<->float conversion for stfs/lfs with Gekko rules (Dolphin
++// ConvertToSingle/ConvertToDouble); other type pairs use host fptrunc/fpext.
++llvm::Value *gekkoFloatCast(llvm::IRBuilder<> &builder, llvm::Module &module,
++                            llvm::Value *value, llvm::Type *resultType);
+ llvm::Value *quantizePSQFloat(llvm::IRBuilder<> &builder, llvm::Value *value,
+                               llvm::Value *scale, int minimum, int maximum);
+ 
+diff --git a/src/cpu/cpu.c b/src/cpu/cpu.c
+index 27297aa..801208f 100644
+--- a/src/cpu/cpu.c
++++ b/src/cpu/cpu.c
+@@ -716,8 +716,14 @@ static s64 psq_quantize_int(f64 value, s64 min_value, s64 max_value, s32 scale)
+ static void psq_store_value(CPUState* cpu, u32 ea, u8 type, s32 scale, f64 value) {
+     switch (type) {
+     case 0: {
+-        f32 single = (f32)value;
+-        mem_write32(cpu, ea, f32_is_denormal(single) ? 0u : f32_bits(single));
++        // Dolphin ConvertToSingleFTZ: truncate, denormals become signed zero.
++        u64 x;
++        memcpy(&x, &value, sizeof(x));
++        u32 exp = (u32)((x >> 52) & 0x7FFu);
++        u32 bits = (exp > 896 || (x & ~0x8000000000000000ull) == 0)
++                       ? (u32)(((x >> 32) & 0xC0000000u) | ((x >> 29) & 0x3FFFFFFFu))
++                       : (u32)((x >> 32) & 0x80000000u);
++        mem_write32(cpu, ea, bits);
+         break;
+     }
+     case 4:

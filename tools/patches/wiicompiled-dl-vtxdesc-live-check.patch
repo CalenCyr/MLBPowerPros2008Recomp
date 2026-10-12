@@ -1,0 +1,18 @@
+diff --git a/runtime/src/hle/gx/gx_dl.cpp b/runtime/src/hle/gx/gx_dl.cpp
+index 4a984a7..818478d 100644
+--- a/runtime/src/hle/gx/gx_dl.cpp
++++ b/runtime/src/hle/gx/gx_dl.cpp
+@@ -1129,8 +1129,11 @@ static void ApplyAuroraVtxDesc() {
+         // GXGetVtxDesc only decodes GX_VA_PNMTXIDX..GX_VA_TEX7; the XF array
+         // pseudo-attributes above GX_VA_TEX7 have no CP descriptor bits, so
+         // probing them would always report GX_NONE and republish a no-op.
+-        if (!needsPublish && !IsMatrixIndexAttr(gxAttr) && gxAttr <= GX_VA_TEX7 &&
+-            (type == GX_INDEX8 || type == GX_INDEX16)) {
++        // Every attribute is probed, matrix indices and GX_DIRECT included: other publish
++        // paths change aurora's descriptor behind this mirror, and a stale GX_VA_PNMTXIDX
++        // (MLB skinned models) makes aurora mis-size each vertex and decode the rest of
++        // the list as XF loads.
++        if (!needsPublish && gxAttr <= GX_VA_TEX7) {
+             needsPublish = !AuroraVtxDescMatchesLive(gxAttr, type);
+         }
+         if (needsPublish) {

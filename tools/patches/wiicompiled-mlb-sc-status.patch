@@ -1,0 +1,74 @@
+diff --git a/runtime/src/hle/mlb/sc_check_status.cpp b/runtime/src/hle/mlb/sc_check_status.cpp
+new file mode 100644
+index 0000000..ede9f20
+--- /dev/null
++++ b/runtime/src/hle/mlb/sc_check_status.cpp
+@@ -0,0 +1,68 @@
++// MLB Power Pros 2008 (RL8E54): SCCheckStatus (0x800D1AB0), decompiled.
++//
++// OSInit spins on `while (SCCheckStatus() == SC_STATUS_BUSY)` while SCInit's
++// asynchronous SYSCONF read runs. On the console the IPC interrupt delivers the
++// read's callbacks during that spin; the runtime queues IOS callbacks and only
++// drains them from the scheduler and alarm paths, which a spin never reaches.
++// This native drains the queue first (the interrupt), then runs the original body.
++#include <cstdint>
++
++#include "abi_bridge.h"
++#include "hle_stubs.h"
++#include "memory.h"
++
++bool NandProcessPendingCallbacks(CpuContext* cpu, int maxToProcess);
++extern "C" int32_t OS__DisableInterrupts_801a65ac();
++extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
++
++namespace {
++
++constexpr uint32_t kBgJobStatus = 0x8031B788;  // u8: 1 busy, 3 read finished, 0 done
++constexpr uint32_t kConfBufDirty = 0x8031B79D;  // u8
++constexpr uint32_t kControl = 0x802D3E40;       // +0x16C conf buffer, +0x17C read size
++constexpr uint32_t kConfBuf = 0x802D3FE0;
++constexpr uint32_t kConfBufSize = 0x4000;
++constexpr uint32_t kVerifyConf = 0x800D2064;  // returns 0 when the buffer holds a valid SYSCONF
++constexpr uint32_t kScMemcpy = 0x8000626C, kScMemset = 0x800065BC;
++constexpr uint32_t kMagicHead = 0x8031A890, kMagicTail = 0x8031A898;  // "SCv0", "SCed"
++
++uint32_t ScCall(CpuContext* cpu, uint32_t target, uint32_t a, uint32_t b = 0, uint32_t c = 0) {
++    cpu->gpr[3] = a;
++    cpu->gpr[4] = b;
++    cpu->gpr[5] = c;
++    InvokeIndirectCpu(target, cpu);
++    return cpu->gpr[3];
++}
++
++}  // namespace
++
++extern "C" void MLB_SCCheckStatus_800D1AB0(CpuContext* ctx) {
++    NandProcessPendingCallbacks(ctx, 8);
++
++    int32_t level = OS__DisableInterrupts_801a65ac();
++    uint32_t status = Memory::Read8(kBgJobStatus);
++    if (status != 3) {
++        OS__RestoreInterrupts_801a65d4(level);
++        ctx->gpr[3] = status;
++        return;
++    }
++    Memory::Write8(kBgJobStatus, 1);
++    OS__RestoreInterrupts_801a65d4(level);
++
++    const uint32_t buf = Memory::Read32(kControl + 0x16C);
++    const uint32_t result = ScCall(ctx, kVerifyConf, buf, Memory::Read32(kControl + 0x17C));
++    level = OS__DisableInterrupts_801a65ac();
++    if (result == 0) {
++        if (buf != kConfBuf) ScCall(ctx, kScMemcpy, kConfBuf, buf, kConfBufSize);
++    } else {  // invalid SYSCONF: start from an empty one
++        ScCall(ctx, kScMemset, buf, 0, kConfBufSize);
++        ScCall(ctx, kScMemcpy, buf, kMagicHead, 4);
++        ScCall(ctx, kScMemcpy, buf + kConfBufSize - 4, kMagicTail, 4);
++        Memory::Write16(buf + 6, 8);
++    }
++    Memory::Write8(kConfBufDirty, 0);
++    OS__RestoreInterrupts_801a65d4(level);
++    Memory::Write8(kBgJobStatus, 0);
++    ctx->gpr[3] = result;
++}
++PPC_NATIVE_OVERRIDE_VOID(800D1AB0, MLB_SCCheckStatus_800D1AB0, (CpuContext* ctx), (ctx));

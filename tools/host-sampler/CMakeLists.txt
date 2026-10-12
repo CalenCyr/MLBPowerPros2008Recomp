@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(PowerProsHostSampler LANGUAGES CXX)
+if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "The host sampler requires MSVC on Windows x64")
+endif()
+add_executable(powerpros-host-sampler ../sample_host_thread.cpp)
+target_compile_features(powerpros-host-sampler PRIVATE cxx_std_17)
+target_compile_options(powerpros-host-sampler PRIVATE /W4 /EHsc)

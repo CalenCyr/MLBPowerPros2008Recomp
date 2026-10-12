@@ -1,0 +1,16 @@
+# User-supplied disc, extracted copyrighted data, downloaded tools and generated code
+/local/
+/build/
+/generated/
+/.codebase-memory/
+__pycache__/
+*.pyc
+*.iso
+*.gcz
+*.rvz
+*.wbfs
+*.dol
+*.rel
+*.thp
+*.bnr
+

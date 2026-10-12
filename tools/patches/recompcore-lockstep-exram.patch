@@ -1,0 +1,129 @@
+diff --git a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
+index 2bed07c..f2c57c1 100644
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.cpp
+@@ -128,6 +128,7 @@ void StaticRecompLockstepVerifier::Prepare(const CPUState& guest)
+ {
+   m_ls_entry = guest.pc;
+   m_ls_snapshot = guest;
++  m_ls_exram.Capture(guest.exram, guest.exram_size);
+   m_journal.Clear();
+   m_ls_fallback_seen = false;
+   m_ls_journaling = true;
+diff --git a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
+index fb54480..4185bea 100644
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep.h
+@@ -16,6 +16,7 @@
+ #pragma once
+ 
+ #include <string>
++#include <cstring>
+ #include <unordered_map>
+ #include <unordered_set>
+ #include <vector>
+@@ -111,6 +112,57 @@ struct LsWrite
+ 
+ using SetMemJournalFn = void (*)(void (*)(u32, u32, void*), void*);
+ 
++// POWERPROS_LOCKSTEP_EXRAM_BEGIN
++// The pinned module and MMU journal MEM1, not Wii MEM2. Keep complete MEM2
++// images only while checking a block; replay must not read native's post-image
++// or leak shadow writes back into the canonical native execution.
++struct PowerProsExramSnapshot
++{
++  u8* memory = nullptr;
++  std::vector<u8> pre;
++  std::vector<u8> post;
++  void Capture(u8* bytes, u32 size)
++  {
++    memory = bytes;
++    pre.clear();
++    post.clear();
++    if (bytes && size)
++      pre.assign(bytes, bytes + size);
++  }
++  bool BeginShadow(u8* bytes, u32 size)
++  {
++    if (bytes != memory || (bytes ? size : 0u) != pre.size())
++      return false;
++    if (!pre.empty())
++    {
++      post.assign(bytes, bytes + size);
++      std::memcpy(bytes, pre.data(), pre.size());
++    }
++    return true;
++  }
++  template <typename Report>
++  u64 Differences(Report&& report) const
++  {
++    if (post.empty() || std::memcmp(memory, post.data(), post.size()) == 0)
++      return 0;
++    u64 count = 0;
++    for (std::size_t i = 0; i < post.size(); ++i)
++      if (memory[i] != post[i])
++      {
++        if (count < 32)
++          report(static_cast<u32>(i), post[i], memory[i]);
++        ++count;
++      }
++    return count;
++  }
++  void RestoreNative()
++  {
++    if (!post.empty())
++      std::memcpy(memory, post.data(), post.size());
++  }
++};
++// POWERPROS_LOCKSTEP_EXRAM_END
++
+ class StaticRecompLockstepVerifier
+ {
+ public:
+@@ -164,6 +216,7 @@ private:
+ 
+   u32 m_ls_entry = 0;
+   CPUState m_ls_snapshot{};
++  PowerProsExramSnapshot m_ls_exram;
+ 
+   struct LockstepJournalState
+   {
+diff --git a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
+index 9c486ef..8b9b009 100644
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompLockstep_Check.cpp
+@@ -96,6 +96,12 @@ void StaticRecompLockstepVerifier::LockstepCheck(u32 entry_pc, u32 end_pc, const
+     return;
+   }
+ 
++  if (!m_ls_exram.BeginShadow(m_core.m_guest.exram, m_core.m_guest.exram_size))
++  {
++    std::fprintf(stderr, "[lockstep] MEM2 snapshot invalid; block not compared\n");
++    return;
++  }
++
+   m_journal.ram_post.clear();
+   for (const auto& [off, pre] : m_journal.ram_pre)
+     m_journal.ram_post.emplace(off, off < ram_size ? ram[off] : pre);
+@@ -260,6 +266,13 @@ void StaticRecompLockstepVerifier::LockstepCheck(u32 entry_pc, u32 end_pc, const
+         diff += fmt::format(" mem[{:#010x}]:N={:#04x},I={:#04x}", 0x80000000u + off, post, iv);
+     }
+ 
++    const u64 exram_differences = m_ls_exram.Differences([&](u32 offset, u8 native, u8 shadow) {
++      diff += fmt::format(" mem2[{:#010x}]:N={:#04x},I={:#04x}",
++                          0x90000000u + offset, native, shadow);
++    });
++    if (exram_differences > 32)
++      diff += fmt::format(" mem2_differing_bytes={}", exram_differences);
++
+     if (l1)
+     {
+       for (const auto& [off, post] : m_journal.lc_post)
+@@ -339,6 +352,7 @@ void StaticRecompLockstepVerifier::LockstepCheck(u32 entry_pc, u32 end_pc, const
+     }
+   }
+ 
++  m_ls_exram.RestoreNative();
+   for (const auto& [off, pre] : m_journal.ram_shadow_pre)
+     if (off < ram_size)
+       ram[off] = pre;

@@ -1,0 +1,44 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
+@@ -193,6 +193,10 @@
+     u32 size;
+   };
+   std::vector<ActiveRelSection> m_active_rel_sections;
++  // RefreshRelSections scratch: keeps capacity so data-address cache
++  // invalidations do not allocate on every miss.
++  std::vector<ActiveRelSection> m_rel_discovered_scratch;
++  std::vector<ActiveRelSection> m_rel_candidate_scratch;
+   u32 m_rel_runtime_begin = 0;
+   u64 m_rel_runtime_end = 0;
+   std::vector<int> m_chunk_rel_sections;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_SMC.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_SMC.cpp
+@@ -23,7 +23,8 @@
+   if (!m_module || m_module->num_rel_modules == 0 || !m_guest.ram || m_guest.ram_size < 0x40)
+     return;
+ 
+-  std::vector<ActiveRelSection> discovered;
++  std::vector<ActiveRelSection>& discovered = m_rel_discovered_scratch;
++  discovered.clear();
+   for (u32 module_index = 0; module_index < m_module->num_rel_modules; ++module_index)
+   {
+     const StaticRecompRelModule& module = m_module->rel_modules[module_index];
+@@ -60,7 +61,8 @@
+         continue;
+ #endif
+ 
+-      std::vector<ActiveRelSection> candidate_sections;
++      std::vector<ActiveRelSection>& candidate_sections = m_rel_candidate_scratch;
++      candidate_sections.clear();
+       bool valid = true;
+       for (u32 section_index = 0; section_index < module.num_sections; ++section_index)
+       {
+@@ -127,7 +129,7 @@
+                                    });
+   if (!changed)
+     return;
+-  m_active_rel_sections = std::move(discovered);
++  m_active_rel_sections.swap(discovered);
+   m_rel_runtime_begin = 0xffffffffu;
+   m_rel_runtime_end = 0;
+   for (const ActiveRelSection& section : m_active_rel_sections)

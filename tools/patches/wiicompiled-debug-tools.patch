@@ -1,0 +1,153 @@
+diff --git a/runtime/src/debug_tools.cpp b/runtime/src/debug_tools.cpp
+new file mode 100644
+index 0000000..3ec3828
+--- /dev/null
++++ b/runtime/src/debug_tools.cpp
+@@ -0,0 +1,147 @@
++// Env-gated diagnostics for bring-up (Windows only). Nothing runs unless a variable is set.
++//   WIICOMPILED_DEBUG_MEM1=<path prefix>[,<seconds>]  dump MEM1 to <prefix>-<n>.bin every
++//                                                     <seconds> (default 10), big-endian as in
++//                                                     the guest, comparable with Dolphin dumps.
++//   WIICOMPILED_DEBUG_WATCH=<guest hex addr>          hardware write watchpoint on every host
++//                                                     thread, host view + translated guest view.
++//   WIICOMPILED_DEBUG_WATCH_VALUE=<hex>|any           report only writes leaving that value
++//                                                     (default: non-zero, non-pointer values).
++// Reports go to stderr with exe-relative frame offsets for llvm-symbolizer
++// (address = 0x140000000 + offset).
++#if defined(_WIN32)
++#include "memory.h"
++
++#include <windows.h>
++#include <tlhelp32.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <thread>
++#include <vector>
++
++namespace {
++
++constexpr uint64_t kGuestViewBase = 0x100000000000ull;  // GuestFlat::kFixedFlatGuestBase (x86-64)
++
++uint8_t* g_watchHost = nullptr;
++uint32_t g_watchValue = 0;
++bool g_watchAny = false, g_watchExact = false;
++
++uint32_t WatchedValue() {
++    const uint8_t* p = g_watchHost;
++    return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
++}
++
++LONG CALLBACK WatchHandler(EXCEPTION_POINTERS* info) {
++    if (info->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(info->ContextRecord->Dr6 & 15)) {
++        return EXCEPTION_CONTINUE_SEARCH;
++    }
++    info->ContextRecord->Dr6 = 0;
++    static int reports = 0;
++    const uint32_t v = WatchedValue();
++    const bool hit = g_watchAny || (g_watchExact ? v == g_watchValue : v != 0 && (v < 0x80000000u || v >= 0x94000000u));
++    if (hit && reports++ < 200) {
++        const DWORD64 base = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
++        CONTEXT c = *info->ContextRecord;
++        std::fprintf(stderr, "[watch] tid %lu value 0x%08x stack:", GetCurrentThreadId(), v);
++        for (int i = 0; i < 16 && c.Rip; ++i) {
++            std::fprintf(stderr, " 0x%llx", (unsigned long long)(c.Rip - base));
++            DWORD64 imageBase = 0;
++            auto* entry = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
++            if (!entry) {
++                c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
++                c.Rsp += 8;
++                continue;
++            }
++            void* handlerData = nullptr;
++            DWORD64 establisher = 0;
++            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, c.Rip, entry, &c, &handlerData, &establisher, nullptr);
++        }
++        std::fprintf(stderr, "\n");
++    }
++    return EXCEPTION_CONTINUE_EXECUTION;
++}
++
++// Debug registers are per thread: (re)arm all threads of the process except this one.
++void ArmWatch(uint32_t guest) {
++    const uint32_t low = guest & 0x1FFFFFFFu;
++    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
++    THREADENTRY32 te{};
++    te.dwSize = sizeof(te);
++    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
++        if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId()) continue;
++        HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
++        if (!t) continue;
++        CONTEXT context{};
++        context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
++        SuspendThread(t);
++        GetThreadContext(t, &context);
++        context.Dr0 = reinterpret_cast<DWORD64>(g_watchHost);
++        context.Dr1 = kGuestViewBase + low;
++        context.Dr2 = kGuestViewBase + (0x80000000u | low);
++        context.Dr3 = kGuestViewBase + (0xC0000000u | low);
++        context.Dr7 = 0;
++        for (int i = 0; i < 4; ++i) context.Dr7 |= (1ull << (i * 2)) | (1ull << (16 + i * 4)) | (3ull << (18 + i * 4));
++        SetThreadContext(t, &context);
++        ResumeThread(t);
++        CloseHandle(t);
++    }
++    CloseHandle(snap);
++}
++
++void DumpMem1(const std::string& prefix, int index) {
++    std::vector<uint8_t> mem1(0x01800000);
++    for (uint32_t off = 0; off < mem1.size(); off += 4) {
++        uint32_t v = 0;
++        Memory::TryRead32(0x80000000u + off, v);
++        mem1[off] = uint8_t(v >> 24);
++        mem1[off + 1] = uint8_t(v >> 16);
++        mem1[off + 2] = uint8_t(v >> 8);
++        mem1[off + 3] = uint8_t(v);
++    }
++    const std::string file = prefix + "-" + std::to_string(index) + ".bin";
++    if (FILE* f = std::fopen(file.c_str(), "wb")) {
++        std::fwrite(mem1.data(), 1, mem1.size(), f);
++        std::fclose(f);
++        std::fprintf(stderr, "[debug] MEM1 dumped to %s\n", file.c_str());
++    }
++}
++
++const bool g_debugToolsStarted = [] {
++    const char* mem1 = std::getenv("WIICOMPILED_DEBUG_MEM1");
++    const char* watch = std::getenv("WIICOMPILED_DEBUG_WATCH");
++    if (!mem1 && !watch) return false;
++    if (const char* value = std::getenv("WIICOMPILED_DEBUG_WATCH_VALUE")) {
++        g_watchAny = std::strcmp(value, "any") == 0;
++        g_watchExact = !g_watchAny;
++        g_watchValue = static_cast<uint32_t>(std::strtoul(value, nullptr, 16));
++    }
++    std::string prefix = mem1 ? mem1 : "";
++    int period = 10;
++    if (const auto comma = prefix.find(','); comma != std::string::npos) {
++        period = std::max(1, std::atoi(prefix.c_str() + comma + 1));
++        prefix.resize(comma);
++    }
++    const uint32_t watchAddr = watch ? static_cast<uint32_t>(std::strtoul(watch, nullptr, 16)) : 0;
++    std::thread([prefix, period, watchAddr] {
++        std::this_thread::sleep_for(std::chrono::seconds(2));  // guest memory is mapped by now
++        if (watchAddr) {
++            g_watchHost = Memory::GetPointer(watchAddr, 4);
++            AddVectoredExceptionHandler(1, WatchHandler);
++        }
++        int index = 0;
++        for (int tick = 0;; ++tick) {
++            if (watchAddr) ArmWatch(watchAddr);  // picks up threads created since the last pass
++            if (!prefix.empty() && tick > 0 && tick % period == 0) DumpMem1(prefix, index++);
++            std::this_thread::sleep_for(std::chrono::seconds(1));
++        }
++    }).detach();
++    return true;
++}();
++
++}  // namespace
++#endif

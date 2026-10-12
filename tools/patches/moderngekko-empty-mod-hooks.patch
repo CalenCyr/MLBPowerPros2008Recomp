@@ -1,0 +1,33 @@
+--- a/src/runtime/dolphin_runtime.cpp
++++ b/src/runtime/dolphin_runtime.cpp
+@@ -736,11 +736,25 @@
+     recomp_source = StaticRecompModuleSource::Attached(
+         reinterpret_cast<const StaticRecompModuleDesc *>(
+             impl->config.module.descriptor));
+-  recomp_source.host_call = &ModManager::HostCall;
+-  recomp_source.host_call_contains = &ModManager::HostCallContains;
+-  recomp_source.host_call_range_contains =
+-      &ModManager::HostCallRangeContains;
+-  recomp_source.host_call_user = impl->mods.get();
++  // POWERPROS_EMPTY_MOD_HOOKS_BEGIN
++  const char* skip_empty_mod_hooks = std::getenv("STATICRECOMP_POWERPROS_SKIP_EMPTY_MOD_HOOKS");
++  const bool skip_empty_mod_hooks_requested =
++      skip_empty_mod_hooks && std::string(skip_empty_mod_hooks) == "1";
++  // Mods load before configuring the core and this Runtime owns the manager;
++  // there is no live mod-loading API. Keep all bindings for any loaded mod,
++  // including an event-only mod whose runtime_start callback needs Dispatch.
++  const bool mod_hooks_skipped_empty = skip_empty_mod_hooks_requested && impl->mods->Empty();
++  if (!mod_hooks_skipped_empty) {
++    recomp_source.host_call = &ModManager::HostCall;
++    recomp_source.host_call_contains = &ModManager::HostCallContains;
++    recomp_source.host_call_range_contains =
++        &ModManager::HostCallRangeContains;
++    recomp_source.host_call_user = impl->mods.get();
++  }
++  std::fprintf(stderr, "[powerpros-diagnostic] mod_hooks_skip_empty_requested=%d mod_hooks_skipped_empty=%d loaded_mods=%zu\n",
++               skip_empty_mod_hooks_requested, mod_hooks_skipped_empty,
++               impl->mods->GetLoadedMods().size());
++  // POWERPROS_EMPTY_MOD_HOOKS_END
+   jit.SetStaticRecompModuleSource(std::move(recomp_source));
+ 
+   s_runtime_active = true;

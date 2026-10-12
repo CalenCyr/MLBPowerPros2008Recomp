@@ -1,0 +1,11 @@
+{
+  "rea_version": "6.2.0",
+  "ghidra_version": "12.1.4",
+  "java_version": "21.0.12.1+1",
+  "node": "C:\\Program Files\\nodejs\\node.exe",
+  "rea_entry": "C:\\Users\\david\\AppData\\Local\\npm-cache\\_npx\\9b9809298fe40d2c\\node_modules\\rea-agents\\scripts\\rea.mjs",
+  "ghidra": "D:\\MLBPowerPros2008Recomp\\local\\tools\\ghidra_12.1.4_PUBLIC",
+  "java": "D:\\MLBPowerPros2008Recomp\\local\\tools\\jdk-21.0.12.1+1",
+  "temp": "D:\\MLBPowerPros2008Recomp\\local\\analysis\\rea-temp",
+  "engines_manifest": "local/tools/rea-engines-manifest.json"
+}

@@ -1,0 +1,13 @@
+--- a/src/runtime/dolphin_runtime.cpp
++++ b/src/runtime/dolphin_runtime.cpp
+@@ -466,6 +466,10 @@
+       {
+         SetAutomationError(impl.automation_state,
+                            command_path.filename().string() + ": " + error);
++        // A sharing violation can outlive atomic publication on Windows.
++        // Keep an unreadable command in place and preserve queue ordering.
++        if (error == "could not open command file")
++          break;
+         MoveAutomationCommand(command_path, root, "failed");
+         continue;
+       }

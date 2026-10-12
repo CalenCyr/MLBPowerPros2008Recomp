@@ -1,0 +1,98 @@
+diff --git a/translator/src/Translator.Core/Disassembly/JumpTableDetector.cs b/translator/src/Translator.Core/Disassembly/JumpTableDetector.cs
+index 989e333..8a675f5 100644
+--- a/translator/src/Translator.Core/Disassembly/JumpTableDetector.cs
++++ b/translator/src/Translator.Core/Disassembly/JumpTableDetector.cs
+@@ -76,6 +76,13 @@ internal static class JumpTableDetector
+         // register itself is the more specific bound when there is one.
+         var boundFromMask = TryFindMaskBound(ordered, loadIndex, indexReg.Name, out var upperBound) &&
+                             upperBound < MaxEntryCount;
++        // An index loaded as a byte has no compare either (MLB 0x8092F450 switches on an lbz with a
++        // nine-entry table); a compare nearby tests some other value, so read until the first non-target.
++        if (!boundFromMask && IndexComesFromByteLoad(ordered, loadIndex, indexReg.Name))
++        {
++            upperBound = 255;
++            boundFromMask = true;
++        }
+         var hasCompare = !boundFromMask && TryFindUpperBound(ordered, loadIndex, indexReg.Name, out upperBound);
+         if ((!hasCompare && !boundFromMask) || upperBound < 0 || upperBound >= MaxEntryCount)
+         {
+@@ -416,6 +423,29 @@ internal static class JumpTableDetector
+         return false;
+     }
+ 
++    private static bool IndexComesFromByteLoad(IReadOnlyList<PpcInstruction> ordered, int startIndex, string register)
++    {
++        // Follow the shift that builds the byte offset back to its source; true when that source
++        // is written by a byte load.
++        var current = register;
++        for (var i = startIndex - 1; i >= 0 && startIndex - i <= MaxBacktrackInstructions; i--)
++        {
++            var ins = ordered[i];
++            if (ins.Operands.Count < 2 || ins.Operands[0] is not PpcRegisterOperand reg ||
++                !string.Equals(reg.Name, current, StringComparison.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++            if (ins.Mnemonic is "rlwinm" or "slwi" && ins.Operands[1] is PpcRegisterOperand source)
++            {
++                current = source.Name;
++                continue;
++            }
++            return ins.Mnemonic is "lbz" or "lbzx" or "lbzu" or "lbzux";
++        }
++        return false;
++    }
++
+     private static bool TryFindUpperBound(IReadOnlyList<PpcInstruction> ordered, int startIndex, string register, out int upperBound)
+     {
+         // Preferred: compare directly on the register used for lwzx indexing. Walking back, the
+diff --git a/translator/tests/Translator.Tests/JumpTableDetectorTests.cs b/translator/tests/Translator.Tests/JumpTableDetectorTests.cs
+index 4a22957..8b0d51d 100644
+--- a/translator/tests/Translator.Tests/JumpTableDetectorTests.cs
++++ b/translator/tests/Translator.Tests/JumpTableDetectorTests.cs
+@@ -84,6 +84,45 @@ public class JumpTableDetectorTests
+         Assert.Equal(new uint[] { baseAddr + 0x40, baseAddr + 0x50, baseAddr + 0x60, baseAddr + 0x70 }, targets);
+     }
+ 
++    [Fact]
++    public void ReadsByteIndexedTableUntilFirstNonTarget()
++    {
++        // MLB 0x8092F450: cmpwi r0, 0 tests a flag, then lbz r0 / rlwinm r0, r0, 2, 0, 29 indexes a
++        // table with no compare. The flag compare must not size it to one entry.
++        const uint baseAddr = 0x80003000;
++        const uint tableAddr = 0x80003200;
++        var ordered = new List<PpcInstruction>
++        {
++            PpcInstruction.Synthetic(baseAddr + 0x00, 0, "lbz", new PpcOperand[] { new PpcRegisterOperand("r0", 0), new PpcRegisterOperand("r3", 3), new PpcImmediateOperand(13) }),
++            PpcInstruction.Synthetic(baseAddr + 0x04, 0, "cmpwi", new PpcOperand[] { new PpcRegisterOperand("r0", 0), new PpcImmediateOperand(0) }),
++            PpcInstruction.Synthetic(baseAddr + 0x08, 0, "lbz", new PpcOperand[] { new PpcRegisterOperand("r0", 0), new PpcRegisterOperand("r3", 3), new PpcImmediateOperand(12796) }),
++            PpcInstruction.Synthetic(baseAddr + 0x0C, 0, "lis", new PpcOperand[] { new PpcRegisterOperand("r3", 3), new PpcImmediateOperand(unchecked((short)0x8000)) }),
++            PpcInstruction.Synthetic(baseAddr + 0x10, 0, "addi", new PpcOperand[] { new PpcRegisterOperand("r3", 3), new PpcRegisterOperand("r3", 3), new PpcImmediateOperand(0x3200) }),
++            PpcInstruction.Synthetic(baseAddr + 0x14, 0, "rlwinm", new PpcOperand[] { new PpcRegisterOperand("r0", 0), new PpcRegisterOperand("r0", 0), new PpcImmediateOperand(2), new PpcImmediateOperand(0), new PpcImmediateOperand(29) }),
++            PpcInstruction.Synthetic(baseAddr + 0x18, 0, "lwzx", new PpcOperand[] { new PpcRegisterOperand("r12", 12), new PpcRegisterOperand("r3", 3), new PpcRegisterOperand("r0", 0) }),
++            PpcInstruction.Synthetic(baseAddr + 0x1C, 0, "mtctr", new PpcOperand[] { new PpcRegisterOperand("r12", 12) }),
++            PpcInstruction.Synthetic(baseAddr + 0x20, 0, "bctr", System.Array.Empty<PpcOperand>(), isReturn: false, isCall: false, isConditional: false),
++        };
++
++        var image = TranslatorCppTestHarness.CreateImage(
++            (tableAddr + 0x00, baseAddr + 0x40),
++            (tableAddr + 0x04, baseAddr + 0x44),
++            (tableAddr + 0x08, baseAddr + 0x48),
++            (tableAddr + 0x0C, 0u));
++
++        var recognized = JumpTableDetector.TryRecognize(
++            ordered,
++            BuildIndex(ordered),
++            baseAddr + 0x20,
++            baseAddr,
++            baseAddr + 0x100,
++            image,
++            out var targets);
++
++        Assert.True(recognized);
++        Assert.Equal(new uint[] { baseAddr + 0x40, baseAddr + 0x44, baseAddr + 0x48 }, targets);
++    }
++
+     [Fact]
+     public void UsesFallbackUpperBoundWhenCompareUsesLogicalCounter()
+     {

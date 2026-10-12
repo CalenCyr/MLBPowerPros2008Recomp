@@ -1,0 +1,497 @@
+# Prueba de viabilidad: Wiicompiled con MLB Power Pros 2008
+
+El objetivo es saber si el traductor y el runtime nativo de Wiicompiled (recompilación de Mario Kart Wii, GPL-3.0, `6fa24737`) pueden servir de base para este juego. La alternativa es reimplementar lo mismo sobre DolRecomp y ModernGekko.
+
+El camino actual sigue intacto: es la referencia y aporta el verificador lockstep.
+
+## Por qué encaja
+
+- Wiicompiled admite un DOL más un REL estático en dirección fija (`inputs.rel.load_address`). MLB tiene ese mismo formato: `ovl_main.rel`, con la cabecera en `0x80575580`, como ya fijaba `local/generated/dolrecomp/rel-linked/layout.json`.
+- Su runtime cubre el SDK RVL de forma general:
+  - GX sobre aurora (Dawn/WebGPU);
+  - OSThread como fibras;
+  - mezclador AX nativo;
+  - DVD y NAND;
+  - PAD, WPAD y KPAD;
+  - VI.
+- Sus ~377 ganchos nativos están atados a direcciones de MKW. Para MLB hay que reasignarlos.
+
+## Fase 1: traducción (10 de octubre de 2026)
+
+`tools/wiicompiled-translate.ps1`:
+- crea la copia de trabajo `local/wiicompiled-mlb/src`;
+- aplica `tools/patches/wiicompiled-rel-bss-address.patch`;
+- compila el traductor;
+- convierte el inventario dtk en `MAP.txt` (`tools/dtk_to_wiicompiled_map.py`);
+- traduce con `config/wiicompiled/rl8e54.yml`.
+
+Las cachés de .NET y NuGet, los temporales y las salidas quedan en `local/`. No se escribió nada en C:.
+
+| Medida | Valor |
+|---|---|
+| Tests del traductor | 642 de 642 |
+| Funciones traducidas (DOL + REL) | 48.219 |
+| Alcanzadas por el grafo de llamadas desde `__start` | 3.017; el resto se siembra desde el mapa dtk |
+| Instrucciones no soportadas | 0 |
+| Funciones con SSA inválido | 0 |
+| Tiempo de traducción completa | 57 s en frío, 37 s sin cambios |
+| C++ generado | 394 MB, empaquetado en 72 shards con contenido equilibrado (1,04×) |
+| Datos incrustados | 13,05 MB (DOL 2,30 MB y REL 11,38 MB) |
+
+Para comparar: nuestro generador tarda unos 50 min en una generación completa y unos 22 min con la caché por IR.
+
+Ajustes que hizo falta hacer:
+- **BSS del REL.** El juego reserva la BSS en `0x8102B0C0`, `0x40` más allá de donde la pone Wiicompiled por defecto (justo tras el archivo). Las relocaciones `lis`/`addi` hacia la BSS quedan fijadas en el código traducido, así que el parche añade `inputs.rel.bss_address`, con validación de solapamiento y alineación.
+- **Entradas `gap_*` de dtk.** No son código; por ejemplo, la cadena `MetroTRK` en `.init`, en `0x80004338`. Generaban la única instrucción "no soportada" (`0x4D657472` = "Metr") y el conversor ahora las descarta.
+- **L2CR.** `mfspr 1017` se traduce como `PPC_ReadSpr(1017)`, que su runtime ya conserva como registro sombra.
+
+Alcance: esto es código traducido, no comportamiento validado. El runtime todavía no compila para MLB.
+
+## Cobertura de nombres para reasignar ganchos
+
+El runtime tiene 582 registros nativos:
+- 205 son `gx_stub_*`, que abortan a propósito;
+- 377 son implementaciones reales.
+
+Cruzando sus nombres normalizados (`GX__SetVtxDesc_8016d3a4` → `GXSetVtxDesc`) con los 361 nombres que dtk asignó en MLB, **solo 61 tienen ya dirección conocida en MLB**:
+- 11 de 13 son helpers `PPCM*`;
+- `__init_hardware`;
+- unas pocas funciones de NAND, IOS, DVD y GX.
+
+No tienen dirección conocida en MLB, por ejemplo:
+- casi todo GX: 2 de 71 `GXSet*`, 0 de 9 `GXGet*`, 0 de 9 `GXLoad*`;
+- WPAD: 0 de 14;
+- SC: 0 de 6;
+- las funciones de hilos y alarmas de OS.
+
+Conclusión: sin identificar las funciones del SDK en MLB no se puede aprovechar el runtime de Wiicompiled, ni tampoco hacer reemplazos nativos en el camino actual. Esa identificación es el siguiente trabajo común a ambos caminos.
+
+Hay dos formas viables de hacerla sin MKW:
+- **Firmas de bytes con las relocaciones enmascaradas**, generadas a partir de las decompilaciones públicas del SDK RVL que compilan igual que el original. Las versiones del SDK de MLB, por las cadenas del disco, son: OS de enero de 2008, GX y NAND de diciembre de 2007, y el resto de agosto a octubre de 2007.
+- **Propagación por el grafo de llamadas** desde funciones ya identificadas, por ejemplo `GXInit` (0x800C25CC) llama al resto de inicializadores GX en un orden conocido.
+
+## Identificación del SDK en MLB (10 de octubre de 2026)
+
+Dos herramientas, ninguna de las cuales necesita un binario de MKW:
+
+1. **`tools/identify_sdk_functions.py`** aplica la base de firmas de Dolphin (`Data/Sys/totaldb.dsy`, 10.549 entradas, con el SDK RVL incluido). Reimplementa `HashSignatureDB::ComputeCodeChecksum`, que solo usa los bits de opcode, sobre el DOL y el REL reubicado.
+   - Una coincidencia se acepta solo si el hash es único en el juego y en la base.
+   - Se descartan los nombres C++ sin biblioteca, porque son clases de otros juegos que colisionan en funciones minúsculas.
+   - Si dtk ya tenía un nombre real, gana el de dtk.
+   - Resultado: **1.375 funciones**, con las bibliotecas `gx.a` (108), `os.a` (105), `dvd.a` (63), `vi.a` (26), `wpad.a` (20), `sc.a` (20), `nand.a` (20) y otras.
+   - Donde dtk ya tenía nombre, la firma coincide en 173 de 175 casos. Los 2 desacuerdos llevaron a añadir los filtros anteriores.
+   - Salida: `local/analysis/sdk-symbols.csv`.
+2. **`tools/align_sdk_by_anchors.py`** alinea el orden de enlace con `projects/mkwii/MAP.txt` de Wiicompiled, que solo contiene direcciones y nombres.
+   - Entre dos anclas comunes en orden creciente, nombra las funciones intermedias cuando los tamaños coinciden.
+   - Si los huecos tienen distinto número de funciones, empareja solo desde cada ancla hacia dentro.
+   - Itera usando los nombres nuevos como anclas y descarta los nombres asignados dos veces.
+   - Resultado: **118 funciones más**.
+   - Precisión en una prueba de ocultación (30 % de los nombres conocidos ocultos, 5 semillas): **97 %** (234 de 241), con un 36 % de recuperación.
+   - Salida: `local/analysis/sdk-symbols-aligned.csv`.
+
+`tools/dtk_to_wiicompiled_map.py` fusiona ambas salidas en `MAP.txt` y deja 1.681 funciones con nombre (dtk solo tenía 361). La cobertura de ganchos la mide `tools/wiicompiled_native_coverage.py`:
+
+| Grupo | Antes (dtk) | Ahora |
+|---|---:|---:|
+| GX | 2 de 71 `GXSet*` | 106 de 136 |
+| OS | — | 73 de 99 |
+| Almacenamiento | — | 25 de 53 |
+| Entrada | 0 de 14 (WPAD) | 12 de 22 |
+| Audio | — | 7 de 24 |
+| **Total** | **61 de 377** | **241 de 377 (64 %)** |
+
+Sigue sin dirección una parte importante del SDK:
+- VI: `VIInit`, `VIConfigure`, `VIGetRetraceCount` y los callbacks de retrace;
+- mandos: `PADInit`/`PADRead`, `KPADRead`, `WPADInit`;
+- audio: AI/DSP y `OSInitAudioSystem`;
+- NAND: abrir, cerrar y leer;
+- OS: `__OSInterruptInit`, `__OSPSInit` y `OSGetCurrentThread`.
+
+Algunas pueden no existir en MLB porque el enlazador las eliminó (por ejemplo `GXDrawSphere`). Para el resto quedan dos vías:
+- referencias a registros MMIO (VI `0xCC002000`, AI `0xCD006C00`, DSP `0xCC005000`) y a cadenas de texto;
+- firmas propias compiladas desde las decompilaciones públicas del SDK.
+
+Precisión: los nombres alineados son candidatos al 97 %. Cada gancho que se reasigne debe validarse con comportamiento (lockstep o prueba dirigida) antes de darlo por bueno.
+
+## Fase 2: runtime de Wiicompiled con MLB (10 de octubre de 2026)
+
+**Toolchain**, todo en `local/`:
+- LLVM-MinGW `20260616` (sha256 verificado) en `local/tools/llvm-mingw-20260616-ucrt-x86_64`;
+- Dawn y SDL3 descargados por CMake al configurar;
+- modo portable (`portable.txt`), con `UserData` dentro del directorio de build.
+
+**Ciclo de trabajo:**
+1. `tools/wiicompiled-translate.ps1 -Fresh -Groups os,audio,storage,vi,gx,input` hace, en ~1 min:
+   - clona la copia de trabajo y aplica los tres parches;
+   - regenera los nombres del SDK;
+   - reasigna los ganchos;
+   - traduce y emite los shards.
+2. `tools/wiicompiled-build.ps1 -RunSeconds N` compila (~2–4 min) y ejecuta.
+
+La vuelta completa ronda los 5 min. Un cambio solo en el runtime compila en segundos.
+
+**Parches** (contra `6fa24737`):
+- `wiicompiled-rel-bss-address.patch` (traductor): BSS del REL en su dirección real.
+- `wiicompiled-masked-jump-tables.patch` (traductor): tablas de salto cuyo índice está acotado por la máscara de un `rlwinm` y no por un `cmplwi`.
+  - MLB las usa, por ejemplo en `0x80031218`.
+  - Los 642 tests siguen pasando.
+- `wiicompiled-mlb-bringup.patch` (runtime):
+  - `game_profile.h` con las constantes de cada juego (entrada, constructores, ID del disco, ArenaLo, `OSLoadContext`);
+  - las formas `*_UNBOUND` de los ganchos;
+  - `music_attenuation` vacío fuera de MKW;
+  - `game_aliases_rl8e54.cpp`, que reenvía las llamadas directas del HLE a funciones de MKW;
+  - un volcado de hilos invitados con `WIICOMPILED_DEBUG_THREADS=<s>`.
+
+**Reasignación** (`tools/wiicompiled_rebind.py` + `config/wiicompiled/rl8e54-data.csv`):
+- Cada gancho de un grupo activado recibe la dirección de MLB de la misma función, emparejada por nombre entre el mapa de MKW y el de MLB.
+- Los nombres de MKW repetidos en varias direcciones no se enlazan.
+- Las direcciones de datos se traducen por **bloques verificados**: en cada objeto del SDK, varias anclas leídas en el código de MLB confirman un mismo desplazamiento. La evidencia de cada fila está en el CSV.
+- Lo que no se pudo verificar se descarta explícitamente. Por ejemplo, cuatro escrituras de estado del HLE de DVD caerían en variables distintas de MLB y se sustituyen por `(void)0`.
+- `tools/function_data_refs.py` y `tools/disasm_guest.py` (desensamblado sacado de la salida C de DolRecomp) son las herramientas de esta decompilación dirigida.
+
+Con `os,audio,storage,vi,gx,input` activos: **316 ganchos enlazados, 302 sin enlazar, 94 literales traducidos**, ninguno sin resolver.
+
+**Progreso del arranque**, cada grupo activado hizo avanzar el arranque hasta el siguiente punto:
+
+| Grupos activos | Dónde para |
+|---|---|
+| ninguno | `__start` → escritura MMIO `0xCC003004` (PI) |
+| os | `__OSInitAudioSystem` (MMIO DSP) |
+| + audio | DVD a bajo nivel desde `OSInit` |
+| + storage | `VIInit` (MMIO `0xCC002002`) |
+| + vi | `GXInit` (MMIO `0xCC000002`) |
+| + gx | `main` → `WPADInit` (GPIO de Hollywood) |
+| + input | salto indirecto a una tabla no reconocida, corregido con el parche del traductor |
+| todo lo anterior | **corre 60 s sin fallar** |
+
+En esa última ejecución:
+- `OSInit`, VI, GX, AI y el hilo mezclador AX están activos.
+- Hay 5 hilos invitados como fibras.
+- El juego imprime sus `OSReport` (SDK OS, SC, KPAD, AX).
+- **No dibuja todavía.** La ventana muestra el marcador de WiiCompiled a ~50 FPS.
+- Los hilos activos son del DOL; el REL `ovl_main.rel` aún no se ha cargado ni enlazado.
+- El hilo principal está en el bucle de frame del cargador (`0x800472B4`): sincronización por token de GX y `VIWaitForRetrace`.
+
+**Siguiente paso:** averiguar en qué espera la carga del REL. Seguramente sea la ruta DVD o NAND del cargador del juego (hilo `0x80242888`, entrada `0x80027A54`). El volcado de fibras solo guarda el contexto inicial, así que hace falta trazar las llamadas DVD y NAND.
+
+Alcance: es comportamiento de arranque observado, no validado contra Dolphin. Cada gancho reasignado sigue siendo candidato hasta que se compare con la referencia (lockstep o pruebas dirigidas).
+
+## Render (11 de octubre de 2026)
+
+**Correcciones** (todas en `wiicompiled-mlb-bringup.patch` y `tools/wiicompiled_rebind.py`):
+- **Pantalla de arranque del runtime.** Tapaba la imagen hasta que el gancho de la correa de MKW (`StrapScene`) aceptaba la entrada. Fuera de MKW se da por aceptada.
+- **`dynamic_aspect.cpp`.** Escribía registros de pantalla EGG en direcciones de MKW, que en MLB son datos del juego, e invocaba funciones de MKW por dirección. Ahora se anula fuera de MKW.
+- **Nombres `__GX::X` del mapa de MKW.** Ya se normalizan a `__GXX`, con lo que se enlazan 7 funciones internas de GX: estado sucio, texturas, TMEM, PE e inicialización de revisión.
+- **Stubs fatales de GX (`gx_stub_*`).** No se enlazan nunca. En MKW abortan porque ese juego no los alcanza; en MLB es mejor que corra el original traducido, cuyas escrituras de registros a la FIFO aplica el parser de Wiicompiled.
+- Grupos `ios`, `esp`, `c_stdio` y `trk` activados. `sc` sigue sin activar.
+
+**Diagnósticos opcionales:**
+- `WIICOMPILED_DEBUG_THREADS=<s>`: hilos invitados, pila nativa del hilo principal con nombres de funciones del juego, contadores `GXCopyDisp`/`GXBegin` y estado de presentación de VI.
+- `WIICOMPILED_TRACE_NATIVES=<frame>`: nativos invocados en ese frame. Solo cubre la ruta tipada.
+- `WIICOMPILED_DEBUG_DVD=1`: cada lectura de archivo.
+
+**Estado:**
+- El juego corre su bucle de frames: ~50–60 `GXCopyDisp`/s y ~70 primitivas por frame.
+- Lee del disco los bancos de sonido y `project.bin`.
+- Espera en la pantalla de la correa, que requiere pulsar A; en la referencia esa pantalla aparece a ~15 s.
+- **La salida es negra.**
+
+**Descartado** con instrumentación temporal:
+- Texturas: llegan a aurora y su contenido es el de la correa (volcado DDS).
+- Colores: material `ffffffff` y registro TEV C0 `ffffffff`.
+- Proyección: ortográfica 640×480 correcta.
+- Viewport y scissor: valores válidos.
+- `CULL_NONE`.
+- Array de posiciones indexado: en 0x8054E1C0, idéntico byte a byte al de la referencia de Dolphin.
+- `PSMTXConcat`: un nativo C++ da los mismos resultados. Las matrices de entrada son nulas en los primeros frames y luego identidad.
+- Test de profundidad: desactivarlo no cambia nada.
+- Rango de profundidad: comprimirlo no cambia nada.
+
+**Resuelto (11 de octubre).** La causa era una copia EFB→textura parcial que aurora no reconocía.
+
+Cómo se aisló:
+- Con un color de borrado rojo y sin los dibujos del juego, la pantalla sale roja, así que la presentación funciona.
+- Se dibujó un solo draw cada vez. El último de los 8 del frame es un quad a pantalla completa que pinta negro opaco (blend `NONE`).
+- Ese quad muestrea un `GXTexObj` RGBA8 de 512×512 en `0x90000840`. Allí la RAM está a cero, también en el volcado MEM2 de Dolphin del segundo 16.
+- El juego compone la pantalla y, en cada frame, la copia con `GXCopyTex(0x90000840)` en **512×480**. Después la dibuja como textura de 512×512. Dolphin guarda esa copia solo en GPU, por eso su RAM también está a cero.
+- `find_copy_texture_for_texobj` de aurora exigía alto exacto. Al no coincidir, leía la RAM (ceros) y salía negro.
+
+Arreglo, en `tools/patches/wiicompiled-aurora-partial-efb-copy.patch` (4.º parche, aplicado por `wiicompiled-translate.ps1`):
+- Se acepta la copia cuando ancho y formato coinciden y la copia es más baja que el `texObj`.
+- Se muestrea con el alto real de la copia, de modo que la fila *n* de la textura es la fila *n* de la copia.
+
+**Verificación:**
+- Ciclo limpio con `-Fresh`: 4 parches, traducción en 44 s y compilación.
+- A los 16 s se ve la pantalla de la correa con el contenido de la referencia de Dolphin.
+- A los 20 s ya pasó al segundo panel. Funciona a 60 FPS.
+- Es comportamiento observado. No hay comparación píxel a píxel; la escala horizontal de la copia de 512 px a la ventana no está validada.
+
+**Siguiente paso:** pasar la pantalla de la correa (pulsación de A automatizada) para que siga la carga de `ovl_main.rel`.
+
+## Carga de `ovl_main.rel` (11 de octubre de 2026)
+
+**Entrada automatizada.** `tools/patches/wiicompiled-scripted-kpad.patch` añade un mando Wii virtual en el canal 0. Con `WIICOMPILED_KPAD_SCRIPT="inicioMs-finMs:botonesHex,..."` mantiene los bits `WPAD_BUTTON_*` durante cada ventana de `SDL_GetTicks`. Por ejemplo, `8000-8150:800` pulsa A. Sin la variable el runtime se comporta como antes. Con A, el juego pasa la pantalla de la correa y muestra "NOW LOADING".
+
+Para llegar a la carga del REL hubo que corregir cuatro fallos, en este orden:
+
+1. **`DVDLowInquiry`.** El HLE de Wiicompiled trataba el primer argumento como bloque de comando y nunca llamaba al callback. `DVDInquiryAsync` quedaba como comando en ejecución del SDK y `DVDGetDriveStatus` devolvía "ocupado" para siempre. El gestor de recursos del juego (`fn_80042C28`) solo procesa su cola cuando la unidad está libre, así que no leía nada. Ahora el HLE rellena `DVDDriveInfo` con los valores de Dolphin y señala fin de transferencia.
+2. **`DVDLowSeek`.** No tenía HLE. El SDK real tocaba registros DI y esperaba una interrupción que nunca llega. Ahora el HLE completa el comando al instante. Los puntos 1 y 2 van en `tools/patches/wiicompiled-dvd-low-completion.patch`.
+3. **Arena alta de MEM1.** El runtime usaba la de MKW, `0x817F0520`. Dolphin coloca el FST de MLB, de 0x2C0 bytes, en lo alto de MEM1 y deja la arena alta en `0x817FFD40`. Ahora es `GameProfile::kMem1ArenaHi`. Con el valor de MKW el heap principal del juego tenía 62 KB menos que en Dolphin. El heap era idéntico al de Dolphin en la pantalla de la correa, comprobado con volcados de MEM1.
+4. **Colocación del REL y de su BSS.** Este fue el fallo que congelaba la ventana:
+   - El código traducido lleva fijas las direcciones del módulo (`0x80575580`) y de la BSS (`0x8102B0C0`), pero el juego reserva ambos en su heap.
+   - En Dolphin, el bloque del REL ocupa entero un hueco libre de `0xAB5B20` bytes. Comprobado con un sondeo de Dolphin con A automatizada y volcado de memoria (`boot-probe-20261011-183222-065`).
+   - En el runtime, el reparto de tiempo entre hilos dejaba ese hueco dividido de otra forma, y la BSS caía en `0x8102B0A0`. Las últimas variables de la BSS pisaban el encabezado del bloque siguiente del heap.
+   - Con la lista libre rota, una reserva de 278 KB devolvía NULL y el juego copiaba un paquete `PACKWII` sobre `0x80000000`. Eso machacaba los globales del OS (`__OSCurrentThread` = `0xDC`): `OSSleepThread` no podía aparcar el hilo, `VIWaitForRetrace` giraba sin fin y la ventana dejaba de responder.
+   - El arreglo es una descompilación nativa del cargador de overlays del juego, `fn_80051474`, en `runtime/src/hle/mlb/rel_loader.cpp`. Antes de reservar, divide el bloque libre para que el propio asignador del juego deje el módulo y la BSS en las direcciones traducidas.
+   - Va en `tools/patches/wiicompiled-mlb-overlay-loader.patch`. `tools/wiicompiled_rebind.py` respeta los ganchos `MLB_*`, que ya llevan direcciones de MLB.
+
+**Resultado observado.** Tras pulsar A, el juego:
+- lee los recursos;
+- carga y enlaza `ovl_main.rel`;
+- ejecuta su `_prolog`;
+- lee muchos más recursos de `project.bin`;
+- muestra "The Wii system memory is being checked." a 60 FPS.
+
+Es comportamiento observado, no validado píxel a píxel ni contra Dolphin más allá de la disposición del heap.
+
+**Métodos que funcionaron.**
+- Volcado de MEM1 desde el hilo de diagnóstico, comparado con el de Dolphin.
+- Recorrido de la lista de bloques del heap del juego. La cabecera ocupa 0x20 bytes: `+0` flags, `+8` tamaño, `+0xC/+0x10` enlaces de la lista libre, `+0x14/+0x18` bloques vecinos.
+- Watchpoint hardware de Windows: DR0–DR3 en todos los hilos, sobre la vista host y sobre la vista guest `0x100000000000 + dirección`. El código traducido escribe por la vista guest. El watchpoint imprime la pila host simbolizada con `llvm-symbolizer`.
+
+Esta instrumentación fue temporal y no está en ningún parche.
+
+**Siguiente paso (resuelto abajo):** comprobar hasta dónde avanza tras la comprobación de la memoria del sistema (NAND y partida guardada) y medir el arranque hasta el menú.
+
+## Comprobación de memoria, NAND y menú principal (11 de octubre de 2026)
+
+Un sondeo largo de Dolphin con A automatizada (`boot-probe-20261011-191321-242`, gráficos Vulkan y una captura cada 30 s) dio la referencia. La secuencia es "NOW LOADING", el logo de 2K Sports, el vídeo de introducción, el menú principal y "Game Setup". La comprobación de memoria pasa enseguida.
+
+Fallos corregidos, en orden:
+
+1. **Capa NAND mezclada.**
+   - En Wiicompiled había HLE para `NANDInit`, `NANDRead`/`Write`/`Seek`, `NANDCreate`/`Delete`/`CreateDir`, sus versiones asíncronas, `NANDSafeCloseAsync` e `ISFS_OpenLib`. Por otro lado, `NANDOpen`/`SafeOpen` de MLB se ejecutaban traducidos.
+   - Además, `ISFS_OpenLib_Initialize` escribe `__fsFd` y el heap IPC con desplazamientos `r13` de MKW. En MLB `__fsFd` está en `0x8031A730`, así que la escritura caía en otra variable del juego.
+   - Arreglo: un nuevo tipo de fila `unbind` en `config/wiicompiled/rl8e54-data.csv`, que el rebind respeta. Esos 12 ganchos quedan sin enlazar y MLB ejecuta las bibliotecas NAND e ISFS reales del SDK sobre la capa IOS HLE, que sí es común.
+2. **Llamadas IOS asíncronas.**
+   - `IOS_OpenAsync`, `IoctlAsync` y el resto están en `hle/ios.cpp`, el grupo `ios`, que estaba deshabilitado.
+   - Arreglo: los grupos por defecto de `tools/wiicompiled-translate.ps1` son ahora `os audio storage vi gx input ios`.
+3. **ES** (`tools/patches/wiicompiled-mlb-nand-es.patch`):
+   - `ES_DIGetTicketView` (27), con la vista del ticket del título en el formato TicketView de Dolphin;
+   - `ES_GetConsumption` (22), con 0 entradas, como Dolphin;
+   - `ES_GetTitleDir` (29), que necesita el `NANDInit` real;
+   - ID de título `00010000/524c3845`, como en Dolphin; el runtime usaba el `00010004` de MKW (`GameProfile::kTitleIdHi`);
+   - traza IOS activable con `WIICOMPILED_DEBUG_NAND`.
+4. **`SCCheckStatus`** (`tools/patches/wiicompiled-mlb-sc-status.patch`).
+   - `OSInit` espera en un bucle activo la lectura asíncrona de SYSCONF.
+   - En la consola, la interrupción IPC entrega los callbacks durante ese bucle. El runtime los encola y solo los entrega desde el planificador.
+   - Arreglo: una descompilación nativa de `SCCheckStatus` (`0x800D1AB0`) que primero entrega los callbacks pendientes.
+   - Sin SYSCONF en la NAND gestionada, el juego usa valores por defecto y arranca igual (comprobado).
+5. **`RFLiIsWorking`.** `RFLWaitAsync` (`fn_800876A0`) gira sobre `fn_80087B94`, idéntica a `RFLiIsWorking` de MKW. Wiicompiled ya tenía un HLE que bombea alarmas y callbacks IOS. Se enlaza con una fila `code` y una `range` para el puntero del gestor (`0x8031B168`).
+6. **Rendimiento del menú: de 2 a 60 FPS** (`tools/patches/wiicompiled-tlut-reinit-cache.patch`).
+   - El muestreo de pila apuntaba a la conversión de texturas con paleta y a la compilación de pipelines (`amdxc64.dll`) en cada frame.
+   - Contando en `resolve_static_palette_texture` se vio que cada uso de paleta iba acompañado de un `evict_tlut_object`. MLB vuelve a inicializar su objeto TLUT en cada dibujo, y `CreateHostTlutObj` destruía el anterior. Esa destrucción emitía `DESTROY_TLUT` con un ID que en aurora es de contenido y es compartido, así que tiraba las conversiones que la nueva inicialización iba a reutilizar.
+   - Arreglo: al reinicializar, el objeto se sustituye sin destruirlo. Si el contenido cambia, `resolve_tlut_identity` ya sube la versión.
+
+**Otros cambios.**
+- `tools/patches/wiicompiled-debug-tools.patch` añade `runtime/src/debug_tools.cpp`, que solo se activa por variable de entorno:
+  - `WIICOMPILED_DEBUG_MEM1=<prefijo>[,s]` vuelca MEM1;
+  - `WIICOMPILED_DEBUG_WATCH=<addr>` y `WIICOMPILED_DEBUG_WATCH_VALUE` ponen un watchpoint hardware en todos los hilos y en las vistas host y guest, e imprimen la pila con offsets para `llvm-symbolizer`.
+- `rea` no admite PowerPC: rechaza el DOL y el ELF que genera `tools/dol_to_elf.py`.
+
+**Resultado observado tras un `-Fresh` con 11 parches** (312 ganchos enlazados, 309 sin enlazar):
+- el arranque pasa por la correa, la carga del REL, la comprobación de memoria, el menú principal y el submenú "Power Pros via Wii Remote" con las pulsaciones automáticas;
+- los menús van a 60 FPS.
+
+Es comportamiento observado, no validado contra Dolphin píxel a píxel. El audio y el juego en sí siguen sin comprobar.
+
+**Siguiente paso:** guiar las pulsaciones hasta Exhibition y un partido, y comprobar render y entrada en el juego.
+
+## Dentro del juego: modo Home Run (11 de octubre de 2026)
+
+- **Nunchuk virtual.** `WIICOMPILED_KPAD_EXT=nunchuk` le conecta un Nunchuk al mando del script; C es `0x4000` y Z es `0x2000`. Exhibition, Home Run y el resto de modos lo exigen ("This mode requires the Nunchuk or the Classic Controller"). Sin Nunchuk, el menú propone el modo "Power Pros via Wii Remote".
+- **Fallo del traductor en tablas de salto.**
+  - Síntoma: el runtime se detuvo con "Missing indirect jump target 0x8057BFAC".
+  - Causa: en `func_8057BEEC`, r0 vale primero `r4 - 13` (comparado con 2) y después `slwi r0, r3, 2` indexa una tabla de 10 entradas, acotada por `cmplwi r3, 9`. `JumpTableDetector.TryFindUpperBound` buscaba hacia atrás una comparación sobre el registro índice sin parar al llegar a su redefinición, así que tomó el `cmplwi r0, 2` antiguo y generó solo 3 casos.
+  - Arreglo: al encontrar el desplazamiento que forma el índice, la búsqueda sigue al registro de origen, y cualquier otra escritura la corta.
+  - Cambió la traducción de 67 funciones. Hay una prueba de regresión, `IgnoresCompareOnAnOlderValueOfTheIndexRegister`, y pasan las 643 pruebas del traductor. Va dentro de `tools/patches/wiicompiled-masked-jump-tables.patch`.
+- **Resultado observado** con A cada 6 s y el Nunchuk conectado:
+  - pasa por el título y el menú y entra en Practice/Home Run;
+  - selección de equipo y de estadio;
+  - "NOW LOADING" y el modo Home Run en juego: lanzamientos, "STRIKE 70 mph", contador de lanzamientos, récords y bateador (Lugo);
+  - todo a 60 FPS.
+- **Problema abierto: la geometría 3D del estadio y los jugadores sale rota** (polígonos en astillas y picos). El HUD 2D y los menús se ven bien. Resuelto en la sección siguiente.
+
+## Geometría 3D corregida (11 de octubre de 2026)
+
+**Diagnóstico.** Bisección con interruptores temporales en `GX__CallDisplayList`, ya retirados:
+1. Saltar todas las display lists deja solo el HUD. Todo el 3D va por display lists; el HUD va por escrituras directas al FIFO.
+2. Forzar el parser HLE (`ParseDisplayList`) para todas las listas dibuja el 3D bien. El fallo está en la ruta directa, en la que aurora decodifica la lista.
+3. La caché de escaneo de listas no influye.
+4. Forzar el parser solo para un formato de vértice aisló el culpable: `PNMTXIDX` directo con POS, NRM, CLR0 y TEX0 en `GX_INDEX16`. Es el formato de los modelos con huesos.
+5. Solo las ejecuciones rotas registran unos 1,9 millones de avisos de aurora `XF: PosMtx sub-copy unsupported`, con longitudes como 1, 17 o 23. Aurora se desincronizaba al recorrer la lista y leía bytes de vértice como cargas XF.
+
+**Causa.** `ApplyAuroraVtxDesc` (`gx_dl.cpp`) guarda un espejo del descriptor de vértices ya publicado en aurora. Solo comprobaba contra el estado real de aurora (`GXGetVtxDesc`) los atributos indexados y se saltaba los índices de matriz. Otras rutas cambian el descriptor de aurora sin pasar por el espejo. Con `PNMTXIDX` desactivado en aurora pero marcado como publicado, aurora calculaba vértices de 8 bytes en lugar de 9.
+
+**Arreglo.** `tools/patches/wiicompiled-dl-vtxdesc-live-check.patch`, el parche número 12: compara todos los atributos hasta `GX_VA_TEX7` con el estado real. Es una lectura de registro sombra por atributo.
+
+**Resultado observado** tras recompilar limpio:
+- en el modo Home Run se ven bien el estadio (gradas, marcador, césped, tierra), el bateador, el lanzador y la pelota;
+- 60 FPS;
+- 0 avisos `sub-copy`.
+
+No está validado píxel a píxel contra Dolphin.
+
+**Técnica reutilizable.** Saltar o desviar por ruta y por formato es una bisección barata cuando el HLE tiene dos caminos para lo mismo. El log de avisos de aurora delató la desincronización.
+
+## Mando de GameCube, mando de PS5 y teclado (11 de octubre de 2026)
+
+**El juego admite mando de GameCube.**
+- El código del juego llama a `PADInit` y `PADRead` desde 0x80040B14/0x80040BC8.
+- La pantalla inicial dice "If you prefer using the Nintendo GameCube Controller, please connect it while this screen is displayed".
+
+**Mando de PS5.** El HLE `PAD__Read_HLE` usa el `PADRead` de aurora, que lee cualquier mando SDL. Un PS5 por DS4Windows llega como Xbox 360 o DualSense y se mapea a GameCube:
+
+| PS5 | GameCube |
+|---|---|
+| ✕ | A |
+| ○ | B |
+| □ | X |
+| △ | Y |
+| Options | Start |
+| R1 | Z |
+| L2/R2 | L/R analógicos |
+| Sticks | Stick principal y C-stick |
+| Cruceta | Cruceta |
+
+**Teclado.** Parche número 13, `tools/patches/wiicompiled-mlb-keyboard-gcpad.patch`:
+- **Activación:** aurora traía el teclado sin teclas asignadas y, si se activaba, anulaba el mando en ese puerto. Ahora el teclado viene activado en el puerto 1 y se suma al mando: los botones se combinan con OR y los ejes se suman.
+- **Teclas por defecto:**
+
+| Tecla | GameCube |
+|---|---|
+| J | A |
+| K | B |
+| L | X |
+| I | Y |
+| Enter | Start |
+| U | Z |
+| Q | L |
+| E | R |
+| WASD | Stick principal |
+| TFGH | C-stick |
+| Flechas | Cruceta |
+
+- Se reasignan en el menú F10. Si existe `keyboard_bindings.dat`, se usa en lugar de los valores por defecto.
+- **Guion para pruebas automáticas:** `WIICOMPILED_PAD_SCRIPT="ms-ms:hexbotones,..."` simula un mando de GameCube en el puerto 0.
+
+**Verificado:**
+- solo con pulsaciones A del guion PAD, sin Wiimote, se llega al menú principal con el icono de GameCube activo;
+- igual solo con la tecla J, enviada a la ventana del juego;
+- no se ha probado con un PS5 físico.
+
+## Entrada fantasma: constante int→float pisada por el HLE de STM (11 de octubre de 2026)
+
+**Síntoma.** El cursor del menú se movía solo y las pantallas avanzaban sin pulsar nada, con o sin mando.
+
+**Diagnóstico:**
+1. El registro de `PADRead` mostraba el mando neutro.
+2. Los objetos de entrada del juego son clases con vtable: GC pad en `base+1104`, KPAD en `base+560` y combinado en `base+16`, donde `base` = buffer de `PADRead` − 1648. El objeto GC marcaba arriba, derecha y L/R pulsados de forma continua.
+3. Su anillo de muestras tenía todos los ejes a 1.0.
+4. `func_80040268` convierte s8/u8 a float con el truco de CodeWarrior: escribe `0x43300000` y el entero en la pila, los lee con `lfd` y resta una constante mágica de `.sdata2`. Una sonda temporal en el shard generado mostró la pila correcta, pero la constante en `r2-31664` = `0x8031BD90` valía `0x4330000000000001` en vez de `0x4330000080000000`.
+5. Un volcado de MEM1 comparado con el DOL dio solo 3 palabras distintas en `.sdata2`, `0x8031BD94..9C`, con los valores `1`, `0x00535401` y `0x00535402`.
+
+**Causa.** El HLE `__OSInitSTM` (`hle/os/os_init.cpp`) escribía las variables STM en offsets de r13 de MKW (`r13-0x62cc/-0x62c8/-0x62c4`). En MLB esas direcciones caen sobre esa constante. En MLB, `__OSInitSTM` usa `r13-0x6DDC/-0x6DD8/-0x6DD4`.
+
+**Arreglo.** Parche número 14, `tools/patches/wiicompiled-mlb-stm-sda.patch`, que añade `GameProfile::kStmSdaOffset`.
+
+**Alcance.** Toda conversión int con signo → float que usara esa constante devolvía basura. Probablemente explica también la navegación "errática" vista antes con el Wiimote virtual.
+
+**Verificado:**
+- las constantes quedan intactas;
+- el anillo del mando queda a 0 en reposo;
+- el menú no se mueve;
+- el título espera "Press +" y, sin pulsarlo, arranca la demo, igual que el original.
+
+## Cierre al fildear, respuesta del stick y FPS (11 de octubre de 2026)
+
+**Cierre al fildear.**
+- Error: `missing_jump_target 0x8092F488`.
+- Causa: `func_8092F450` hace un `switch` sobre un `lbz` sin `cmplwi`. `JumpTableDetector` tomó como límite un `cmpwi r0, 0` cercano que comprueba otra cosa, y generó 1 caso de 9.
+- Arreglo: parche número 15, `wiicompiled-byte-index-jump-tables`. Si el índice sale de una carga de byte, lee la tabla hasta la primera entrada que no es destino.
+- Pasan 644 pruebas, incluida `ReadsByteIndexedTableUntilFirstNonTarget`. La retraducción cambió 38 archivos.
+- Auditoría: de los 538 `switch` generados, los únicos de un caso tienen de verdad una entrada.
+
+**Stick.**
+- Parche número 16, `wiicompiled-mlb-pad-stick-range`: escala la deflexión completa a la compuerta real de GameCube, 87 en el stick principal y 74 en el C-stick (valores de Dolphin). MLB divide entre 88 y entre 64, así que con ±127 saturaba al 69 % del recorrido.
+- Parche número 17, `wiicompiled-pad-radial-deadzone`: la zona muerta de aurora era por eje, de 8000, y saltaba de 0 a ~24 %. Ahora es radial, reescalada y de 3000 por defecto.
+
+**FPS al fildear.**
+- Medida: la demo automática del título (sin pulsar Start) reproduce la escena. Un registro temporal de `aurora_get_present_timing` y `aurora_get_stats` dio:
+  - con D3D12, 60 FPS a 200-450 draws y 17-30 FPS a 660-990 draws (vista de fildeo), sin compilar pipelines;
+  - el hilo del juego dormía en `VI_HLE_WaitForNextRetracePoll`, el de render estaba bloqueado en el driver (`amdxc64`) y la GPU estaba al 20-35 %.
+- Con Vulkan, la misma escena de 985 draws va a 60 FPS fijos.
+- Arreglo: parche número 18, `wiicompiled-prefer-vulkan`. El modo `auto` prefiere Vulkan en Windows y cae a D3D12 si no hay Vulkan.
+- Herramientas:
+  - `tools/sample_host_thread.cpp` acepta un argumento `RANK` (el N-ésimo hilo más ocupado) y hay que compilarlo con `-static`;
+  - los scripts de histograma y cadenas de llamada están en el scratchpad.
+
+## D3D12 a 60 FPS y cuelgue en "NOW LOADING" (11 de octubre de 2026)
+
+**Método de medida.**
+- `tools/wiicompiled-bench.ps1` lanza el juego con una A guionada del mando de GameCube y deja correr la demo del título.
+- El runtime, con `WIICOMPILED_BENCH=minDraws,segundos,esperaMax`, espera a un fotograma con al menos `minDraws` draws y mide solo esos fotogramas: p50, p95, p99, máximo y % de fotogramas lentos.
+- También imprime contadores de aurora por fotograma (`aurora_get_frame_waits`): espera de staging, *splits*, codificación, adquisición, `Submit`, espera de ritmo, `Present`, lecturas EFB síncronas y texturas creadas. Escribe `bench_result.txt` y sale.
+- Reintenta si la escena no aparece y solo captura la ventana de los intentos fallidos.
+- La medida cronometrada desde fuera y con capturas no servía: `PrintWindow` provocaba tirones y la escena tardaba un tiempo variable en llegar.
+
+**Cuelgue en "NOW LOADING"** (se reproducía en 4 de 4 intentos).
+- **Hilos:** el hilo cargador (`0x80027A54`) duerme en una cola que despierta un hilo reloj (`0x80027BF8`, `OSSleepTicks` de 5 ms y luego `OSWakeupThread`). El temporizador del reloj estaba vencido hacía 67 s y sin procesar: `ProcessSleepTimers` solo corre en `SelectThread`.
+- **Por qué no se procesaba:** durante la carga, el hilo principal marca el ritmo dentro de `GXCopyDisp` (`VI_HLE_PresentFrame`, un `sleep` del host) y nunca entra en el planificador. Las rutas diferidas de VI, alarmas y audio dejan hilos READY pero nunca cambian de hilo.
+- **Arreglo:** parche `wiicompiled-preemption-point`. Al final de `GXCopyDisp`, `OS_HLE_PreemptionPoint()` llama a `SelectThread(0)` si las interrupciones del juego están activas, el planificador habilitado y no se está avanzando un retrazado. Es la vuelta de la interrupción VI del hardware. Resultado: 0 cuelgues en las ejecuciones posteriores.
+
+**D3D12 al fildear: de 27 FPS a 59,9.**
+- **Diagnóstico:**
+  - con D3D12 el hilo del juego pasaba el 26 % del tiempo en `NtGdiDdDDIWaitForSynchronizationObjectFromCpu`, más `CreateAllocation`;
+  - el hilo de render pasaba el 18 % en `DestroyAllocation2` (exportaciones de `win32u` mapeadas con `dllexports.py` en el scratchpad);
+  - el contador dio 32 texturas creadas por fotograma, 188×128 "Copy Conv" y "Resolved".
+- **Causa:** `GXCopyTex` necesita una textura nueva por copia cuando el destino ya se muestreó en ese fotograma, y MLB hace unas 17 por fotograma. El pool solo guardaba 3 por destino, así que el resto se creaba y destruía en cada fotograma. En D3D12 cada una baja al kernel; en Vulkan es barato.
+- **Arreglo:** parche `wiicompiled-copy-texture-pool`, que sube `kCopyTexturePoolPerKey` a 64.
+- **Medido:**
+
+| Backend | FPS | p95 | Texturas creadas por fotograma | Codificación |
+|---|---|---|---|---|
+| D3D12 (`auto`) | 58,6-59,9 | 17,1 ms | 0,4 | 1,7 ms (antes 8,8) |
+| Vulkan | 60 | 17,1 ms | 0,2 | 1,4 ms |
+
+- Se retiró el parche que daba prioridad a Vulkan: `auto` vuelve a D3D12 y Vulkan sigue seleccionable en `Config.toml`.
+- **Otros:**
+  - parche `wiicompiled-perf-instrumentation`: los contadores, el modo benchmark, `AURORA_DAWN_ENABLE_TOGGLES` / `AURORA_DAWN_DISABLE_TOGGLES` y un volcado de hilos que incluye estado, suspensiones, cola y temporizador de sueño de cada `OSThread`;
+  - `tools/sample_host_thread.cpp` acepta `RANK`;
+  - `tools/wiicompiled-build.ps1` ya no sobrescribe `Config.toml` en cada compilación, solo actualiza `dvd_root`.
+
+**Pendiente:** el `IPCCltInit` HLE usa `r13-26908`, que en MLB coincide con `IPCInit`. Quedan por auditar los demás HLE que usen offsets de r13 o r2 de MKW.
+
+## Launcher al arrancar (11 de octubre de 2026)
+
+- Parche 21, `wiicompiled-launcher`: pantalla previa al juego con el estilo de los menús de Power Pros. Fondo azul con rayos, píldoras brillantes (JUGAR / AJUSTES / SALIR), título con contorno, caja de información y ayudas de botones.
+- **Sin assets del juego:** todo se dibuja con primitivas de ImGui. Las fuentes son del sistema (Bahnschrift, Segoe UI Bold y Arial Black en Windows; DejaVu en Linux). Si no hay ninguna, se usa la fuente de ImGui. La fuente por defecto del overlay F10 no cambia.
+- **Ajustes,** en cuatro pestañas:
+  - VIDEO: API gráfica (solo las que esta compilación puede crear), pantalla, resolución interna, forzar 16:9 y mostrar FPS;
+  - AUDIO: volumen y silenciar;
+  - CONTROLES: Wii Remote y el mapa del teclado;
+  - INTERFAZ: mostrar al iniciar.
+- **Guardado y reinicio:** cada cambio se guarda en `Config.toml` al momento. Al pulsar JUGAR, si algo cambió, el ejecutable se relanza con `WIICOMPILED_SKIP_LAUNCHER=1`. El padre cierra aurora y la transcripción del proceso antes de relanzar.
+- **Controles del launcher:**
+  - Teclado: flechas o WASD, Enter/Espacio/J para aceptar, Esc/K para volver, Q/E para cambiar de pestaña.
+  - Mando: cruceta o stick, A, B, L1 y R1.
+  - Ratón: clic izquierdo y derecho.
+- **Entrada solo con la ventana enfocada:** SDL entrega los mandos aunque la ventana no tenga foco, y en una prueba eso cambió ajustes. `WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT=1` acepta el teclado sin foco, solo para scripts de prueba que envían teclas con PostMessage.
+- **No aparece** con `WIICOMPILED_SKIP_LAUNCHER`, `WIICOMPILED_BENCH`, scripts de mando o `[launcher] show_on_startup = false`. Se puede volver a activar en F10 con "Show launcher at startup".
+- **Variables de prueba:** `WIICOMPILED_LAUNCHER_SELECT=<api>` elige la API y pulsa JUGAR; `WIICOMPILED_LAUNCHER_PAGE=settings` abre los ajustes.
+- **Verificado con teclas enviadas solo a la ventana:**
+  - ruta AJUSTES → MOSTRAR FPS = No → Esc → JUGAR: guarda, relanza y el hijo arranca el juego sin FPS;
+  - pestañas con E;
+  - selección de SALIR;
+  - `LAUNCHER_SELECT=vulkan`: relanza y el juego corre a 59 FPS.
+- **Switch (homebrew):** Dawn no tiene backend para Horizon. Opciones: el backend GLES de Dawn sobre la mesa de devkitPro (switch-mesa/EGL), o un backend de aurora propio en deko3d. OpenGL ES aún no se ofrece porque el paquete de Dawn usado viene sin GL; hace falta compilar Dawn desde fuente. En Switch habrá que cargar la fuente del sistema (`plGetSharedFont`).

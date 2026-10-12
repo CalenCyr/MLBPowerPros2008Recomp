@@ -1,0 +1,114 @@
+diff --git a/Source/Core/Core/Core.cpp b/Source/Core/Core/Core.cpp
+index e58579e..1b7577a 100644
+--- a/Source/Core/Core/Core.cpp
++++ b/Source/Core/Core/Core.cpp
+@@ -294,14 +294,17 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
+ 
+   // This needs to be delayed until after the video backend is ready.
+   DolphinAnalytics::Instance().ReportGameStart();
++  std::fprintf(stderr, "[powerpros-diagnostic] CPU thread analytics returned\n");
+ 
+   // Clear performance data collected from previous threads.
+   system.GetPerfMetrics().Reset();
++  std::fprintf(stderr, "[powerpros-diagnostic] CPU thread metrics reset\n");
+ 
+   // The JIT need to be able to intercept faults, both for fastmem and for the BLR optimization.
+   const bool exception_handler = EMM::IsExceptionHandlerSupported();
+   if (exception_handler)
+     EMM::InstallExceptionHandler();
++  std::fprintf(stderr, "[powerpros-diagnostic] CPU exception handler initialized\n");
+ 
+ #ifdef USE_MEMORYWATCHER
+   s_memory_watcher = std::make_unique<MemoryWatcher>();
+@@ -348,6 +351,7 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
+   }
+ 
+   // Enter CPU run loop. When we leave it - we are done.
++  std::fprintf(stderr, "[powerpros-diagnostic] initial CPU execution state configured\n");
+   system.GetCPU().Run();
+ 
+ #ifdef USE_MEMORYWATCHER
+@@ -546,6 +550,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
+ 
+   HW::Init(system,
+            NetPlay::IsNetPlayRunning() ? &(boot_session_data.GetNetplaySettings()->sram) : nullptr);
++  std::fprintf(stderr, "[powerpros-diagnostic] hardware initialization returned\n");
+ 
+   Common::ScopeGuard hw_guard{[&system] {
+     INFO_LOG_FMT(CONSOLE, "{}", StopMessage(false, "Shutting down HW"));
+@@ -566,6 +571,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
+   // In single-core mode: This holds a video backend shutdown function.
+   // In dual-core mode: This holds a GPU thread stopping function (which does the backend shutdown).
+   const auto video_guard = GetInitializedVideoGuard(system, wsi);
++  std::fprintf(stderr, "[powerpros-diagnostic] video initialization returned\n");
+   if (!video_guard)
+   {
+     PanicAlertFmt("Failed to initialize video backend!");
+@@ -585,6 +591,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
+   }
+ 
+   AudioCommon::PostInitSoundStream(system);
++  std::fprintf(stderr, "[powerpros-diagnostic] DSP and audio initialization returned\n");
+ 
+   // Set execution state to known values (CPU/FIFO/Audio Paused)
+   system.GetCPU().Break();
+@@ -603,8 +610,10 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
+   {
+     ASSERT(IsCPUThread());
+     CPUThreadGuard guard(system);
++    std::fprintf(stderr, "[powerpros-diagnostic] entering disc bootstrap\n");
+     if (!CBoot::BootUp(system, guard, std::move(boot)))
+       return;
++    std::fprintf(stderr, "[powerpros-diagnostic] disc bootstrap returned\n");
+   }
+ 
+   // Initialise Wii filesystem contents.
+@@ -618,9 +627,11 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
+     Core::InitializeWiiFileSystemContents(savegame_redirect, boot_session_data);
+   else
+     wiifs_guard.Dismiss();
++  std::fprintf(stderr, "[powerpros-diagnostic] Wii filesystem initialization returned\n");
+ 
+   // This adds the SyncGPU handler to CoreTiming, so now CoreTiming::Advance might block.
+   system.GetFifo().Prepare();
++  std::fprintf(stderr, "[powerpros-diagnostic] FIFO preparation returned\n");
+ 
+   const Common::EventHook frame_presented =
+       GetVideoEvents().after_present_event.Register(&Core::Callback_FramePresented);
+@@ -636,6 +647,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
+   }
+ 
+   UpdateTitle(system);
++  std::fprintf(stderr, "[powerpros-diagnostic] entering CPU thread\n");
+ 
+   // Become the CPU thread.
+   cpu_thread_func(system, savestate_path, delete_savestate);
+diff --git a/Source/Core/Core/HW/CPU.cpp b/Source/Core/Core/HW/CPU.cpp
+index 4a95a02..2012bda 100644
+--- a/Source/Core/Core/HW/CPU.cpp
++++ b/Source/Core/Core/HW/CPU.cpp
+@@ -4,6 +4,7 @@
+ #include "Core/HW/CPU.h"
+ 
+ #include <condition_variable>
++#include <cstdio>
+ #include <mutex>
+ #include <queue>
+ 
+@@ -118,6 +119,8 @@ void CPUManager::Run()
+   std::unique_lock state_lock(m_state_change_lock);
+   while (m_state != State::PowerDown)
+   {
++    std::fprintf(stderr, "[powerpros-diagnostic] CPU manager state=%d locked=%d\n",
++                 static_cast<int>(m_state), m_state_paused_and_locked);
+     m_state_cpu_cvar.wait(state_lock, [this] { return !m_state_paused_and_locked; });
+     ExecutePendingJobs(state_lock);
+     CPUThreadConfigCallback::CheckForConfigChanges();
+@@ -146,6 +149,7 @@ void CPUManager::Run()
+       }
+ 
+       // Enter a fast runloop
++      std::fprintf(stderr, "[powerpros-diagnostic] entering PowerPC run loop\n");
+       power_pc.RunLoop();
+ 
+       state_lock.lock();

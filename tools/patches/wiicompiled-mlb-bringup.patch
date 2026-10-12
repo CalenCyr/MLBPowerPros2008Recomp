@@ -1,0 +1,557 @@
+diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
+index 16b4922..1b03f2a 100644
+--- a/runtime/CMakeLists.txt
++++ b/runtime/CMakeLists.txt
+@@ -56,6 +56,9 @@ option(MKW_BUILD_PSQ_TESTS "Build focused PSQ ISA tests" OFF)
+ # libraries and the products in cmake/PublicProducts.cmake) inherits them while
+ # aurora-main and its third-party tree stay unaffected.
+ set(MKW_PROJECT_COMPILE_DEFINITIONS NOMINMAX)
++# Game constants come from include/game_profile.h; RMCP01 keeps the original behaviour.
++set(WIICOMPILED_GAME "RMCP01" CACHE STRING "Game id selecting include/game_profile.h constants")
++list(APPEND MKW_PROJECT_COMPILE_DEFINITIONS WIICOMPILED_GAME_${WIICOMPILED_GAME})
+ 
+ set(CMAKE_CXX_STANDARD 17)
+ 
+diff --git a/runtime/include/abi_bridge.h b/runtime/include/abi_bridge.h
+index e4b87f9..6b76fa6 100644
+--- a/runtime/include/abi_bridge.h
++++ b/runtime/include/abi_bridge.h
+@@ -250,7 +250,7 @@ private:
+ // Guest address of OSLoadContext, which models rfi-style context restoration
+ // and intentionally replaces the full guest register file instead of returning
+ // like a normal ABI call. It can never be guarded.
+-inline constexpr uint32_t kOSLoadContextAddress = 0x801A1F58u;
++inline constexpr uint32_t kOSLoadContextAddress = GameProfile::kOSLoadContextAddress;
+ 
+ inline bool ShouldPreserveNonvolatileGprsForRawCpuCall(const TranslatedFunctionInfo* info) noexcept {
+     return info->kind == FunctionKind::Native && info->address != kOSLoadContextAddress;
+@@ -784,11 +784,23 @@ public:
+ // Three hand-written registration macros. Generated code never registers per function; every
+ // translated function reaches the registry via the bulk BulkTranslatedFunctionRecord tables
+ // in the translator's *_registration TUs.
++#define REGISTER_TRANSLATED_UNBOUND(address, fn) static_assert(true)
++#define REGISTER_NATIVE_UNBOUND(address, fn) static_assert(true)
++#define REGISTER_NATIVE_UNBOUND_AS(address, fn, pretty_name) static_assert(true)
++#ifdef WIICOMPILED_NO_MKW_NATIVES
++#define REGISTER_TRANSLATED_FUNCTION(address, fn) static_assert(true)
++#else
+ #define REGISTER_TRANSLATED_FUNCTION(address, fn) \
+     static AbiTrampoline<decltype(fn)> MKW_DETAIL_MAKE_UNIQUE(_abi_trampoline_, __COUNTER__)(address, #fn, fn, FunctionKind::BaseTranslated, false, kPpcAllNonvolatileFprMask, 0, 0, nullptr, KnownTranslatedCpuCall<address>::kMustRemainDynamicallyDispatchable)
++#endif
+ 
++#ifdef WIICOMPILED_NO_MKW_NATIVES
++#define REGISTER_NATIVE_FUNCTION(address, fn) static_assert(true)
++#define REGISTER_NATIVE_FUNCTION_AS(address, fn, pretty_name) static_assert(true)
++#else
+ #define REGISTER_NATIVE_FUNCTION(address, fn) \
+     static AbiTrampoline<decltype(fn)> MKW_DETAIL_MAKE_UNIQUE(_abi_native_trampoline_, __COUNTER__)(address, #fn, fn, FunctionKind::Native, false, kPpcAllNonvolatileFprMask, 0, 0, &AbiRawCpuThunk<&fn>::Invoke)
+ 
+ #define REGISTER_NATIVE_FUNCTION_AS(address, fn, pretty_name) \
+     static AbiTrampoline<decltype(fn)> MKW_DETAIL_MAKE_UNIQUE(_abi_native_trampoline_named_, __COUNTER__)(address, pretty_name, fn, FunctionKind::Native, false, kPpcAllNonvolatileFprMask, 0, 0, &AbiRawCpuThunk<&fn>::Invoke)
++#endif
+diff --git a/runtime/include/fiber_manager.h b/runtime/include/fiber_manager.h
+index cad48c4..a389272 100644
+--- a/runtime/include/fiber_manager.h
++++ b/runtime/include/fiber_manager.h
+@@ -96,6 +96,8 @@ public:
+     // Check if a fiber exists for a guest thread
+     static bool HasFiber(uint32_t guestThreadAddr);
+     static bool IsTerminated(uint32_t guestThreadAddr);
++    // Diagnostics: every guest thread's state and saved registers (WIICOMPILED_DEBUG_THREADS).
++    static void DebugDumpThreads();
+ 
+ private:
+     // The fiber entry point wrapper
+diff --git a/runtime/include/game_profile.h b/runtime/include/game_profile.h
+new file mode 100644
+index 0000000..941d52c
+--- /dev/null
++++ b/runtime/include/game_profile.h
+@@ -0,0 +1,41 @@
++#pragma once
++
++#include <cstdint>
++
++#if __has_include("game_natives_rebound.h")
++#include "game_natives_rebound.h"  // tools/wiicompiled_rebind.py output
++#endif
++
++// Per-game constants the runtime used to hardcode for Mario Kart Wii (RMCP01).
++// Select another game with -DWIICOMPILED_GAME=<id> at configure time.
++namespace GameProfile {
++
++#if defined(WIICOMPILED_GAME_RL8E54)
++#ifndef WIICOMPILED_NATIVES_REBOUND
++#define WIICOMPILED_NO_MKW_NATIVES 1
++#endif
++// MLB Power Pros 2008 (NTSC-U). The game's own __start runs __init_cpp, and its
++// main() DVD-loads ovl_main.rel, OSLinks it and calls _prolog, so no
++// constructor range is replayed by the runtime.
++inline constexpr uint32_t kEntryAddress = 0x8000403Cu;  // __start
++inline constexpr uint32_t kDolCtorStart = 0u, kDolCtorEnd = 0u;
++inline constexpr uint32_t kRelCtorStart = 0u, kRelCtorEnd = 0u;
++inline constexpr uint32_t kDiscGameCode = 0x524C3845u;  // "RL8E"
++inline constexpr uint32_t kDiscMakerId = 0x35340001u;   // "54", disc 0, version 1
++// Dolphin's Wii boot leaves the arena begin at 0; OSInit then uses __ArenaLo.
++inline constexpr uint32_t kMem1ArenaLo = 0u;
++inline constexpr uint32_t kOSLoadContextAddress = 0x8009CD58u;
++// Mario Kart Wii native hooks are bound to MKW addresses; none apply here yet.
++inline constexpr bool kMkwNatives = false;
++#else
++inline constexpr uint32_t kEntryAddress = 0x800060A4u;
++inline constexpr uint32_t kDolCtorStart = 0x80244DE0u, kDolCtorEnd = 0x80244EA0u;
++inline constexpr uint32_t kRelCtorStart = 0x8088F400u, kRelCtorEnd = 0x8088F704u;
++inline constexpr uint32_t kDiscGameCode = 0x524D4350u;  // "RMCP"
++inline constexpr uint32_t kDiscMakerId = 0x30310100u;   // "01", disc 1
++inline constexpr uint32_t kMem1ArenaLo = 0x80399180u;
++inline constexpr uint32_t kOSLoadContextAddress = 0x801A1F58u;
++inline constexpr bool kMkwNatives = true;
++#endif
++
++} // namespace GameProfile
+diff --git a/runtime/include/hle_stubs.h b/runtime/include/hle_stubs.h
+index 92ea526..8c6fb7f 100644
+--- a/runtime/include/hle_stubs.h
++++ b/runtime/include/hle_stubs.h
+@@ -38,10 +38,23 @@ extern "C" void OS_HLE_EndDeferredGuestCallbacks();
+ // renaming requires updating Translator.Cli/Program.cs, RuntimeNativeGuestEffectAnalyzer.cs,
+ // TranslatedBuildShardEmitter.cs and RuntimeNativeFunctionAbiProvider.cs together.
+ 
++// WIICOMPILED_TRACE_NATIVES=<frame>: log every native hook entered during that GX frame.
++void HleTraceCall(const char* name) noexcept;
++
++// Hooks that tools/wiicompiled_rebind.py could not rebind to the current game.
++#define PPC_NATIVE_UNBOUND(addr_hex, name, ret_type, arg_list, call_list) static_assert(true)
++#define PPC_NATIVE_UNBOUND_VOID(addr_hex, name, arg_list, call_list) static_assert(true)
++
++#ifdef WIICOMPILED_NO_MKW_NATIVES
++// MKW addresses: the native bodies still compile, but nothing binds them to guest code.
++#define PPC_NATIVE_OVERRIDE(addr_hex, name, ret_type, arg_list, call_list) static_assert(true)
++#define PPC_NATIVE_OVERRIDE_VOID(addr_hex, name, arg_list, call_list) static_assert(true)
++#else
+ #define PPC_NATIVE_OVERRIDE(addr_hex, name, ret_type, arg_list, call_list) \
+-    extern "C" ret_type func_##addr_hex arg_list { return name call_list; } \
++    extern "C" ret_type func_##addr_hex arg_list { HleTraceCall(#name); return name call_list; } \
+     REGISTER_NATIVE_FUNCTION(0x##addr_hex, name)
+ 
+ #define PPC_NATIVE_OVERRIDE_VOID(addr_hex, name, arg_list, call_list) \
+-    extern "C" void func_##addr_hex arg_list { name call_list; } \
++    extern "C" void func_##addr_hex arg_list { HleTraceCall(#name); name call_list; } \
+     REGISTER_NATIVE_FUNCTION(0x##addr_hex, name)
++#endif
+diff --git a/runtime/include/native_cpu_calls.inc b/runtime/include/native_cpu_calls.inc
+index e8bc77d..0856e7b 100644
+--- a/runtime/include/native_cpu_calls.inc
++++ b/runtime/include/native_cpu_calls.inc
+@@ -43,11 +43,19 @@ extern "C" void GX__SetBlendMode_8017277c(uint32_t t, uint32_t s, uint32_t d, ui
+ extern "C" void GX__LoadPosMtxImm_8017310c(uint32_t ma, uint32_t id);
+ extern "C" void GX__SetCurrentMtx_80173214(uint32_t id);
+ 
++void HleTraceCall(const char* name) noexcept;  // hle_stubs.h
++#define MKW_KNOWN_TYPED_UNBOUND(addr, fn, ...) static_assert(true)
++#define MKW_KNOWN_NATIVE_CPU_UNBOUND(addr, fn) static_assert(true)
++#ifdef WIICOMPILED_NO_MKW_NATIVES
++// Bound to MKW addresses: compile them out until rebound to this game's addresses.
++#define MKW_KNOWN_TYPED_NATIVE(addr, fn, ...) static_assert(true)
++#else
+ #define MKW_KNOWN_TYPED_NATIVE(addr, fn, ...) \
+ template <> struct KnownTypedNativeCpuCall<addr> { \
+     static constexpr bool kAvailable = true; \
+-    static void Invoke(CpuContext* cpu) { (void)cpu; fn(__VA_ARGS__); } \
++    static void Invoke(CpuContext* cpu) { (void)cpu; HleTraceCall(#fn); fn(__VA_ARGS__); } \
+ }
++#endif
+ 
+ MKW_KNOWN_TYPED_NATIVE(0x8016D3A4u, GX__SetVtxDesc_8016d3a4, cpu->gpr[3], cpu->gpr[4]);
+ MKW_KNOWN_TYPED_NATIVE(0x8016DC34u, GX__ClearVtxDesc_8016dc34);
+@@ -85,12 +93,16 @@ MKW_KNOWN_TYPED_NATIVE(0x80173214u, GX__SetCurrentMtx_80173214, cpu->gpr[3]);
+ 
+ #undef MKW_KNOWN_TYPED_NATIVE
+ 
++#ifdef WIICOMPILED_NO_MKW_NATIVES
++#define MKW_KNOWN_NATIVE_CPU_CALL(addr, fn) static_assert(true)
++#else
+ #define MKW_KNOWN_NATIVE_CPU_CALL(addr, fn) \
+ template <> struct KnownNativeCpuCall<addr> { \
+     static constexpr bool kAvailable = true; \
+     static constexpr uint32_t kNonvolatileFprWriteMask = 0; \
+     static constexpr void (*Entry)(CpuContext*) = &fn; \
+ }
++#endif
+ 
+ MKW_KNOWN_NATIVE_CPU_CALL(0x800847C0u, nw4r__lyt__detail__DrawQuad_800847c0);
+ MKW_KNOWN_NATIVE_CPU_CALL(0x80084D20u, nw4r__lyt__detail__DrawQuad_80084d20);
+diff --git a/runtime/include/system_bridge.h b/runtime/include/system_bridge.h
+index a2d4cf6..f66df4c 100644
+--- a/runtime/include/system_bridge.h
++++ b/runtime/include/system_bridge.h
+@@ -9,6 +9,7 @@
+ 
+ #include <csetjmp>
+ 
++#include "game_profile.h"
+ #include "memory.h"
+ 
+ // Windows' SehLogger longjmps out of a vectored exception handler, where plain setjmp/longjmp is
+@@ -67,7 +68,7 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details)
+ // Mario Kart Wii's translated entry point. The products always boot here, so
+ // this is applied as the default while parsing the command line; there is no
+ // flag to override it.
+-inline constexpr uint32_t kDefaultEntryAddress = 0x800060A4u;
++inline constexpr uint32_t kDefaultEntryAddress = GameProfile::kEntryAddress;
+ 
+ class SystemBridge {
+ public:
+diff --git a/runtime/src/dynamic_aspect.cpp b/runtime/src/dynamic_aspect.cpp
+index 693f8a7..b98143d 100644
+--- a/runtime/src/dynamic_aspect.cpp
++++ b/runtime/src/dynamic_aspect.cpp
+@@ -116,6 +116,9 @@ void SweepGfxNodeList(uint32_t list, bool offscreenList) {
+ // record 2), so without this bypass they'd inherit the expansion and render vertically squashed.
+ // Re-arms every scene transition since the offscreen renderer is a per-scene singleton.
+ void AssertOffscreenScreenBypass() {
++#ifndef WIICOMPILED_GAME_RMCP01
++    return;  // EGG screen records and the MKW draw lists exist only in Mario Kart Wii
++#endif
+     SweepGfxNodeList(kMkwGfxDrawList, /*offscreenList=*/false);
+     SweepGfxNodeList(kMkwGfxOffscreenList, /*offscreenList=*/true);
+ }
+@@ -129,6 +132,9 @@ void WriteEggScreenRecord(uint32_t recordAddr, uint32_t width) {
+ }
+ 
+ void ApplyEggScreenRecords(uint32_t surfaceWidth, uint32_t surfaceHeight) {
++#ifndef WIICOMPILED_GAME_RMCP01
++    return;  // EGG screen records and the MKW draw lists exist only in Mario Kart Wii
++#endif
+     using namespace MkwDynamicAspect;
+     const uint32_t width43 =
+         g_widescreenConfigured ? EggRecordWidth(kEggRecordWidth43, surfaceWidth, surfaceHeight)
+diff --git a/runtime/src/fiber_manager.cpp b/runtime/src/fiber_manager.cpp
+index 9eee67c..8f4aae0 100644
+--- a/runtime/src/fiber_manager.cpp
++++ b/runtime/src/fiber_manager.cpp
+@@ -1,4 +1,21 @@
+ #include "fiber_manager.h"
++
++#include <atomic>
++// Counters defined in hle/gx (WIICOMPILED_DEBUG_THREADS diagnostics).
++extern std::atomic<uint64_t> g_debugCopyDispCount;
++extern std::atomic<uint64_t> g_debugGxBeginCount;
++extern "C" void VI_DebugDump();
++extern "C" int g_gxFrameCount;
++
++void HleTraceCall(const char* name) noexcept {
++    static const int traceFrame = [] {
++        const char* frame = std::getenv("WIICOMPILED_TRACE_NATIVES");
++        return frame ? std::atoi(frame) : -1;
++    }();
++    if (traceFrame >= 0 && g_gxFrameCount == traceFrame) {
++        std::fprintf(stderr, "[trace] %d %s\n", g_gxFrameCount, name);
++    }
++}
+ #include "memory.h"
+ #include "abi_bridge.h"
+ #include "hle_stubs.h"
+@@ -468,6 +485,95 @@ bool GuestFiberManager::HasFiber(uint32_t guestThreadAddr) {
+     return s_fibers.count(guestThreadAddr) > 0;
+ }
+ 
++void GuestFiberManager::DebugDumpThreads() {
++    std::lock_guard<std::mutex> lock(s_mutex);
++    VI_DebugDump();
++    std::cerr << "[threads] GXCopyDisp=" << ::g_debugCopyDispCount.load() << " GXBegin=" << ::g_debugGxBeginCount.load() << std::endl;
++    std::cerr << "[threads] current=0x" << std::hex << s_currentGuestThread << std::dec
++              << " fibers=" << s_fibers.size() << std::endl;
++    for (const auto& [address, fiber] : s_fibers) {
++        std::cerr << "[threads] thread 0x" << std::hex << address << " entry=0x" << fiber.entryPoint
++                  << std::dec << " state=" << static_cast<uint32_t>(fiber.state)
++                  << (fiber.terminated ? " terminated" : "") << std::endl;
++        SystemBridge::DumpCpuState(&fiber.cpuContext);
++    }
++}
++
++namespace {
++#if defined(_WIN32)
++// The guest fibers run on the thread that starts the process; static init runs there too.
++HANDLE DebugMainThread() {
++    HANDLE handle = nullptr;
++    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &handle,
++                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
++    return handle;
++}
++
++// Suspends the guest thread and names each native frame through the translated-function
++// registry, which is where a blocked guest is actually waiting.
++void DebugDumpMainThreadStack(HANDLE thread) {
++    CONTEXT context{};
++    context.ContextFlags = CONTEXT_FULL;
++    if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
++        return;
++    }
++    DWORD64 frames[48]{};
++    int count = 0;
++    if (GetThreadContext(thread, &context)) {
++        while (count < 48 && context.Rip != 0) {
++            frames[count++] = context.Rip;
++            DWORD64 imageBase = 0;
++            auto* entry = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
++            if (!entry) {
++                context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
++                context.Rsp += 8;
++                continue;
++            }
++            void* handlerData = nullptr;
++            DWORD64 establisher = 0;
++            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, entry, &context, &handlerData,
++                             &establisher, nullptr);
++        }
++    }
++    ResumeThread(thread);
++    std::cerr << "[threads] main host stack:";
++    for (int i = 0; i < count; ++i) {
++        if (auto info = TranslatedFunctionRegistry::FindByHostAddress(static_cast<uintptr_t>(frames[i]))) {
++            std::cerr << " " << info->name;
++        } else {
++            std::cerr << " 0x" << std::hex << frames[i] << std::dec;
++        }
++    }
++    std::cerr << std::endl;
++}
++#endif
++
++// Periodic dump for diagnosing hangs: WIICOMPILED_DEBUG_THREADS=<seconds>.
++const bool g_debugThreadsStarted = [] {
++    const char* seconds = std::getenv("WIICOMPILED_DEBUG_THREADS");
++    if (!seconds || std::atoi(seconds) <= 0) {
++        return false;
++    }
++#if defined(_WIN32)
++    HANDLE mainThread = DebugMainThread();
++#endif
++    std::thread([period = std::atoi(seconds)
++#if defined(_WIN32)
++                 , mainThread
++#endif
++    ] {
++        for (;;) {
++            std::this_thread::sleep_for(std::chrono::seconds(period));
++            GuestFiberManager::DebugDumpThreads();
++#if defined(_WIN32)
++            DebugDumpMainThreadStack(mainThread);
++#endif
++        }
++    }).detach();
++    return true;
++}();
++} // namespace
++
+ bool GuestFiberManager::IsTerminated(uint32_t guestThreadAddr) {
+     std::lock_guard<std::mutex> lock(s_mutex);
+     auto it = s_fibers.find(guestThreadAddr);
+diff --git a/runtime/src/game_aliases_rl8e54.cpp b/runtime/src/game_aliases_rl8e54.cpp
+new file mode 100644
+index 0000000..4ed32f6
+--- /dev/null
++++ b/runtime/src/game_aliases_rl8e54.cpp
+@@ -0,0 +1,35 @@
++// Guest functions the HLE layer calls directly by their Mario Kart Wii address,
++// forwarded to the same SDK function in MLB Power Pros 2008 (RL8E54). Addresses
++// come from tools/identify_sdk_functions.py / align_sdk_by_anchors.py in the
++// MLB recomp project; functions MLB does not link abort with their name.
++#include "game_profile.h"
++
++#ifdef WIICOMPILED_GAME_RL8E54
++
++#include "abi_bridge.h"
++
++#include <cstdlib>
++
++namespace {
++[[noreturn]] void Missing(const char* name) {
++    ShowRuntimeFatalPopup("MKW-only guest function reached", name);
++    std::abort();
++}
++} // namespace
++
++#define FORWARD(mkw, mlb) \
++    extern "C" void func_##mlb(CpuContext* ctx); \
++    extern "C" void func_##mkw(CpuContext* ctx) { func_##mlb(ctx); }
++#define MISSING(mkw, name) \
++    extern "C" void func_##mkw(CpuContext*) { Missing(name); }
++
++FORWARD(801A0620, 8009B448)  // InsertAlarm
++FORWARD(801A1ED8, 8009CCD8)  // OSSaveContext
++FORWARD(801A961C, 800A3C0C)  // __OSThreadInit
++FORWARD(801AADE0, 800A53A4)  // __OSTimeToSystemTime
++FORWARD(8055531C, 80AA0718)  // StaticR _prolog -> ovl_main.rel _prolog
++MISSING(8012B830, "AXFXReverbStdExpCallback")
++MISSING(801D8D30, "NHTTPStartup")
++MISSING(801D9E94, "NHTTPi_GetSystemInfoP")
++
++#endif // WIICOMPILED_GAME_RL8E54
+diff --git a/runtime/src/hle/gx/gx_copy.cpp b/runtime/src/hle/gx/gx_copy.cpp
+index 5631a01..49c235b 100644
+--- a/runtime/src/hle/gx/gx_copy.cpp
++++ b/runtime/src/hle/gx/gx_copy.cpp
+@@ -111,7 +111,10 @@ PPC_NATIVE_OVERRIDE_VOID(8016fc24, GX__SetDispCopyGamma_8016fc24, (uint32_t g),
+ // Copy Execution
+ // ============================================================================
+ 
++std::atomic<uint64_t> g_debugCopyDispCount{0};  // reported by WIICOMPILED_DEBUG_THREADS
++
+ extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
++    g_debugCopyDispCount.fetch_add(1, std::memory_order_relaxed);
+     EnsureAuroraFrameActive();
+     // GX copies are FIFO-ordered on hardware. Drain submitted draws before
+     // resolving the EFB so high-level copies see the same contents.
+diff --git a/runtime/src/hle/gx/gx_vertex.cpp b/runtime/src/hle/gx/gx_vertex.cpp
+index 68cbf92..80c9be0 100644
+--- a/runtime/src/hle/gx/gx_vertex.cpp
++++ b/runtime/src/hle/gx/gx_vertex.cpp
+@@ -274,7 +274,10 @@ void ServiceDeferredTimingDuringGxWork() {
+ }
+ }
+ 
++std::atomic<uint64_t> g_debugGxBeginCount{0};  // reported by WIICOMPILED_DEBUG_THREADS
++
+ extern "C" void GX__Begin_8016f0f0(uint32_t t, uint32_t vf, uint32_t nv) {
++    g_debugGxBeginCount.fetch_add(1, std::memory_order_relaxed);
+     if(IsDisplayListActive()){
+         WriteDisplayListData((u8)(t|vf), 1);
+         WriteDisplayListData((u16)nv, 2);
+diff --git a/runtime/src/hle/storage/dvd.cpp b/runtime/src/hle/storage/dvd.cpp
+index 1acf239..ac66eee 100644
+--- a/runtime/src/hle/storage/dvd.cpp
++++ b/runtime/src/hle/storage/dvd.cpp
+@@ -910,6 +910,12 @@ extern "C" int32_t DVDReadPrio_8015E834(uint32_t fileInfoPtr, uint32_t bufferPtr
+     }
+ 
+     CopyToGuestAsDma(bufferPtr, tempBuf.data(), uLength);
++    // Diagnostics for boot bring-up: WIICOMPILED_DEBUG_DVD=1 logs every file read.
++    static const bool traceReads = std::getenv("WIICOMPILED_DEBUG_DVD") != nullptr;
++    if (traceReads) {
++        RT_LOG(RT_TAG_DVD) << "read " << HostPathText(entry.hostPath) << " +0x" << std::hex << uOffset
++                           << " len=0x" << uLength << " -> 0x" << bufferPtr << std::dec << std::endl;
++    }
+ 
+     Memory::Write32(fileInfoPtr + DVD_CB_OFFSET_TRANSFERRED, uLength);
+     Memory::Write32(fileInfoPtr + DVD_CB_OFFSET_STATE, DVD_STATE_END);
+diff --git a/runtime/src/hle/vi.cpp b/runtime/src/hle/vi.cpp
+index 7ee76b5..3ed3b1a 100644
+--- a/runtime/src/hle/vi.cpp
++++ b/runtime/src/hle/vi.cpp
+@@ -823,6 +823,16 @@ extern "C" void VIGetNextFrameBuffer_HLE_801bab24(CpuContext* ctx)
+ }
+ PPC_NATIVE_OVERRIDE_VOID(801BAB24, VIGetNextFrameBuffer_HLE_801bab24, (CpuContext* ctx), (ctx));
+ 
++// WIICOMPILED_DEBUG_THREADS diagnostics: the presentation gate state.
++extern "C" void VI_DebugDump()
++{
++    std::lock_guard<std::mutex> lock(g_viMutex);
++    std::cerr << "[threads] VI black=" << g_vi.black << " pendingBlack=" << g_vi.pendingBlack << std::hex
++              << " next=0x" << g_vi.nextFrameBuffer << " current=0x" << g_vi.currentFrameBuffer
++              << " ready=0x" << g_vi.readyXfb << std::dec << " valid=" << g_vi.hasValidXfb
++              << " retrace=" << g_vi.retraceCount << std::endl;
++}
++
+ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
+ {
+     const bool makeBlack = ctx ? (ctx->gpr[3] != 0) : false;
+diff --git a/runtime/src/music_attenuation.cpp b/runtime/src/music_attenuation.cpp
+index d03c3cf..1f0aacb 100644
+--- a/runtime/src/music_attenuation.cpp
++++ b/runtime/src/music_attenuation.cpp
+@@ -1,4 +1,22 @@
+ #include "music_attenuation.h"
++#include "game_profile.h"
++
++#ifndef WIICOMPILED_GAME_RMCP01
++// Attenuation drives Mario Kart Wii's own sound manager (kSoundManagerPointer);
++// other games keep the API as no-ops instead of writing into their memory.
++namespace MusicAttenuation {
++void SetEnabled(bool) noexcept {}
++void SetMusicVolume(float) noexcept {}
++void SetSoundEffectsVolume(float) noexcept {}
++void SetUiVolume(float) noexcept {}
++void SetVoicesVolume(float) noexcept {}
++bool IsExternalMediaPlaying() noexcept { return false; }
++bool IsMediaControlAvailable() noexcept { return false; }
++bool IsMediaControlInitializationComplete() noexcept { return true; }
++void TickGuest() noexcept {}
++void SetSoundPlayerVolume(uint32_t, float) {}
++} // namespace MusicAttenuation
++#else
+ 
+ #include "memory.h"
+ 
+@@ -593,3 +611,4 @@ void SetSoundPlayerVolume(uint32_t soundPlayer, float requestedVolume) {
+ }
+ 
+ } // namespace MusicAttenuation
++#endif // WIICOMPILED_GAME_RMCP01
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index 78c32bf..a103a22 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -1456,6 +1456,11 @@ void InitializeRuntimeSettings() noexcept {
+     g_bootShadersReady.store(false, std::memory_order_relaxed);
+     g_bootShaderNotice = false;
+     g_bootShaderWaitStart = {};
++#ifndef WIICOMPILED_GAME_RMCP01
++    // Only Mario Kart Wii's strap-scene hook dismisses the startup cover; other games have no
++    // such hook, so the cover must only wait for the boot shaders.
++    NotifyStrapInputAccepted();
++#endif
+     PADBlockInput(false);
+     InputBindings::SetInputBlocked(false);
+ }
+diff --git a/runtime/src/system_bridge.cpp b/runtime/src/system_bridge.cpp
+index 8b07d12..028c3c3 100644
+--- a/runtime/src/system_bridge.cpp
++++ b/runtime/src/system_bridge.cpp
+@@ -334,8 +334,8 @@ void SystemBridge::Initialize() {
+     // These set up vtables and other critical infrastructure
+     RT_LOG(RT_TAG_RUNTIME) << "Running static constructors for main DOL..." << std::endl;
+ 
+-    const uint32_t dolCtorStart = 0x80244DE0;
+-    const uint32_t dolCtorEnd = 0x80244EA0;
++    const uint32_t dolCtorStart = GameProfile::kDolCtorStart;
++    const uint32_t dolCtorEnd = GameProfile::kDolCtorEnd;
+ 
+     int dolCount = 0;
+     for (uint32_t addr = dolCtorStart; addr < dolCtorEnd; addr += 4) {
+@@ -374,8 +374,8 @@ void SystemBridge::Initialize() {
+     RT_LOG(RT_TAG_RUNTIME) << "Running static constructors for StaticR.rel..." << std::endl;
+ 
+     // Define range for StaticR.rel .ctors
+-    const uint32_t ctorStart = 0x8088f400;
+-    const uint32_t ctorEnd = 0x8088f704;
++    const uint32_t ctorStart = GameProfile::kRelCtorStart;
++    const uint32_t ctorEnd = GameProfile::kRelCtorEnd;
+ 
+     int count = 0;
+     for (uint32_t addr = ctorStart; addr < ctorEnd; addr += 4) {
+@@ -484,7 +484,7 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
+     };
+ 
+     std::vector<SeedEntry> entries;
+-    constexpr uint32_t kMem1ArenaLoDefault = 0x80399180u;
++    constexpr uint32_t kMem1ArenaLoDefault = GameProfile::kMem1ArenaLo;
+     uint32_t mem1ArenaHiDefault = 0x817f0520u;
+     constexpr uint32_t kBusClockHz =
+         static_cast<uint32_t>(TimeBaseContract::kBusClockHz);
+@@ -508,10 +508,10 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
+     // Retro Rewind reads the region byte directly from here while building its
+     // Retro-WFC payload URL, and OSGetAppGamename reads the app code mirrors
+     // at 0x80003180/0x80003194 while building NAS auth fields.
+-    entries.push_back({0x80000000u, 0x524D4350u, "Disc game code"}); // RMCP
+-    entries.push_back({0x80000004u, 0x30310100u, "Disc maker/id"});  // 01 + disc 1
+-    entries.push_back({0x80003180u, 0x524D4350u, "OS app game code"}); // RMCP
+-    entries.push_back({0x80003194u, 0x524D4350u, "OS app gamename"});  // RMCP
++    entries.push_back({0x80000000u, GameProfile::kDiscGameCode, "Disc game code"});
++    entries.push_back({0x80000004u, GameProfile::kDiscMakerId, "Disc maker/id"});
++    entries.push_back({0x80003180u, GameProfile::kDiscGameCode, "OS app game code"});
++    entries.push_back({0x80003194u, GameProfile::kDiscGameCode, "OS app gamename"});
+     if (RuntimeProduct::IsRetroRewind()) {
+         entries.push_back({0x800017D8u, 0x00000001u, "Retro Rewind recomp runtime marker", true});
+     }

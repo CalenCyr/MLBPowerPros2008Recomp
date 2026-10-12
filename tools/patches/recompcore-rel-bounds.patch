@@ -1,0 +1,51 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.h
+@@ -193,6 +193,8 @@
+     u32 size;
+   };
+   std::vector<ActiveRelSection> m_active_rel_sections;
++  u32 m_rel_runtime_begin = 0;
++  u64 m_rel_runtime_end = 0;
+   std::vector<int> m_chunk_rel_sections;
+   std::vector<u64> m_effective_chunk_hashes;
+   u64 m_rel_mapping_generation = 0;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
+@@ -366,6 +366,8 @@
+     }
+   }
+   m_active_rel_sections.clear();
++  m_rel_runtime_begin = 0;
++  m_rel_runtime_end = 0;
+   m_rel_mapping_generation = 0;
+   m_failed_chunks = 0;
+   m_lookup_ram_size = 0;
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_SMC.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_SMC.cpp
+@@ -128,6 +128,14 @@
+   if (!changed)
+     return;
+   m_active_rel_sections = std::move(discovered);
++  m_rel_runtime_begin = 0xffffffffu;
++  m_rel_runtime_end = 0;
++  for (const ActiveRelSection& section : m_active_rel_sections)
++  {
++    m_rel_runtime_begin = std::min(m_rel_runtime_begin, section.runtime_start);
++    m_rel_runtime_end = std::max(m_rel_runtime_end,
++                                 static_cast<u64>(section.runtime_start) + section.size);
++  }
+   ++m_rel_mapping_generation;
+   for (u32 i = 0; i < m_chunk_rel_sections.size(); ++i)
+   {
+@@ -144,6 +152,11 @@
+                                             u32* rel_section_index)
+ {
+   const auto resolve_active = [&]() {
++    // This envelope only rejects addresses. Gaps and section precedence
++    // still use the exact lookup below, including after a refresh.
++    if (runtime_address < m_rel_runtime_begin ||
++        static_cast<u64>(runtime_address) >= m_rel_runtime_end)
++      return false;
+     for (u32 i = 0; i < m_active_rel_sections.size(); ++i)
+     {
+       const ActiveRelSection& section = m_active_rel_sections[i];

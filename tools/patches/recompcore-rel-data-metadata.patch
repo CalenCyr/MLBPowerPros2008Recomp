@@ -1,0 +1,55 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
+@@ -93,16 +93,38 @@
+         module.section_info_offset < 0x40 || module.file_size < 0x40 ||
+         !module.sections || module.num_sections == 0)
+       return false;
++    bool has_code_section = false;
+     for (u32 j = 0; j < module.num_sections; ++j)
+     {
+       const StaticRecompRelSection& section = module.sections[j];
+       const u64 end = static_cast<u64>(section.linked_start) + section.size;
+       if (section.module_id != module.module_id || section.section_index >= module.section_count ||
+-          section.size == 0 || end > 0x100000000ull ||
+-          !AddressIsCovered(desc.code_ranges, desc.num_code_ranges, section.linked_start) ||
+-          !AddressIsCovered(desc.code_ranges, desc.num_code_ranges, static_cast<u32>(end - 1)))
++          section.size == 0 || end > 0x100000000ull)
+         return false;
++      // Data and independently allocated BSS need address mappings as well.
++      // Mapping them does not advertise dispatch coverage. A section touching
++      // code must still fit wholly inside one advertised executable range.
++      for (u32 k = 0; k < desc.num_code_ranges; ++k)
++      {
++        const StaticRecompRange& code = desc.code_ranges[k];
++        if (section.linked_start < code.end && code.start < end)
++        {
++          if (section.linked_start < code.start || end > code.end)
++            return false;
++          has_code_section = true;
++        }
++      }
++      for (u32 k = 0; k < j; ++k)
++      {
++        const StaticRecompRelSection& other = module.sections[k];
++        if (other.section_index == section.section_index ||
++            (section.linked_start < static_cast<u64>(other.linked_start) + other.size &&
++             other.linked_start < end))
++          return false;
++      }
+     }
++    if (!has_code_section)
++      return false;
+   }
+   return true;
+ }
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Run.cpp
+@@ -188,7 +188,7 @@
+           // downcount. A dispatch that charged nothing (PC-switch default,
+           // pure embedded data) still costs 1 so the burst always makes
+           // downcount progress; this per-dispatch flush is also the
+-          // dispatcher back-edge timing check — CoreTiming regains control
++          // dispatcher back-edge timing check; CoreTiming regains control
+           // with at least CachedInterpreter's per-block frequency, so
+           // external-interrupt latency matches stock.
+           const s64 charge = -m_guest.downcount;

@@ -1,0 +1,59 @@
+diff --git a/runtime/include/hle_stubs.h b/runtime/include/hle_stubs.h
+index 8c6fb7f..f83b85d 100644
+--- a/runtime/include/hle_stubs.h
++++ b/runtime/include/hle_stubs.h
+@@ -27,6 +27,9 @@ void Audio_HLE_Poll(CpuContext* ctx);
+ // arbitrary translated function.
+ void Audio_HLE_PollDeferred();
+ bool OS_HLE_InterruptsEnabled() noexcept;
++// Switches to a higher-priority READY guest thread (and services sleep timers) when the guest
++// could be preempted here: interrupts on, scheduler enabled, not inside a VI retrace.
++extern "C" void OS_HLE_PreemptionPoint();
+ extern "C" void OS_HLE_ProcessAlarmsDeferred(int maxToProcess);
+ extern "C" void OS_HLE_BeginDeferredGuestCallbacks();
+ extern "C" void OS_HLE_EndDeferredGuestCallbacks();
+diff --git a/runtime/src/hle/gx/gx_copy.cpp b/runtime/src/hle/gx/gx_copy.cpp
+index 49c235b..eaf6809 100644
+--- a/runtime/src/hle/gx/gx_copy.cpp
++++ b/runtime/src/hle/gx/gx_copy.cpp
+@@ -132,6 +132,8 @@ extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
+     // Seal, pace to the VI retrace boundary (Aurora renders the sealed frame
+     // during the wait), and pre-warm the next frame.
+     VI_HLE_PresentFrame(/*presentedXfb=*/true, /*paceToRetrace=*/true);
++    // The pacing above is this frame's VI interrupt; return from it like hardware does.
++    OS_HLE_PreemptionPoint();
+ }
+ 
+ PPC_NATIVE_OVERRIDE_VOID(8016fc38, GX__CopyDisp_8016fc38, (uint32_t da, uint32_t c), (da, c));
+diff --git a/runtime/src/hle/os/os_scheduler.cpp b/runtime/src/hle/os/os_scheduler.cpp
+index c6bbd00..2c46300 100644
+--- a/runtime/src/hle/os/os_scheduler.cpp
++++ b/runtime/src/hle/os/os_scheduler.cpp
+@@ -127,6 +127,27 @@ extern "C" void func_801A1ED8(CpuContext* ctx);
+ // Fibers instead of blocking InvokeIndirectJump.
+ // ============================================================================
+ 
++// Return-from-interrupt preemption for direct-ABI HLE that paces on the host (GXCopyDisp's VI
++// pacing). Deferred VI/alarm/audio callbacks only leave threads READY and the scheduler pending;
++// on hardware the interrupt return then switches to a higher-priority READY thread. Without this,
++// a guest loop that never blocks (MLB's NOW LOADING screen) starved its loader thread forever:
++// the loader's 5 ms OSSleepTicks ticker was only ever woken from SelectThread.
++extern "C" void OS_HLE_PreemptionPoint()
++{
++    if (!OS_HLE_InterruptsEnabled() || ::Memory::Read32(kSchedulerIdleFlagAddr) != 0 ||
++        VI_HLE_IsAdvancingRetrace()) {
++        return;
++    }
++    CpuContext* cpu = CurrentCpuContext();
++    if (cpu == nullptr) {
++        cpu = &GetPersistentCpuContext();
++    }
++    const uint32_t savedR3 = cpu->gpr[3];
++    cpu->gpr[3] = 0;  // no forced switch: SelectThread keeps the current thread unless outranked
++    SelectThread_801a9c08(cpu);
++    cpu->gpr[3] = savedR3;
++}
++
+ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
+ {
+     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();

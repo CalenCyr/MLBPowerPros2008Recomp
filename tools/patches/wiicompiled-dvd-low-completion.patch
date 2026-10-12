@@ -1,0 +1,52 @@
+diff --git a/runtime/src/hle/storage/dvd.cpp b/runtime/src/hle/storage/dvd.cpp
+index ac66eee..425aa1f 100644
+--- a/runtime/src/hle/storage/dvd.cpp
++++ b/runtime/src/hle/storage/dvd.cpp
+@@ -1022,16 +1022,21 @@ extern "C" int32_t DVDLowInit_80164848() {
+ }
+ PPC_NATIVE_OVERRIDE(80164848, DVDLowInit_80164848, int32_t, (), ());
+ 
+-extern "C" int32_t DVDLowInquiry_80165A30(uint32_t cmdBlockPtr, uint32_t callback)
++extern "C" int32_t DVDLowInquiry_80165A30(uint32_t driveInfoPtr, uint32_t callback)
+ {
+-    // HLE: acknowledge the drive is present. Must mark the command block complete
+-    // (State = 0) or callers polling this address hang waiting for "Busy" to clear.
+-    if (cmdBlockPtr) {
+-        Memory::Write32(cmdBlockPtr + DVD_CB_OFFSET_STATE, DVD_STATE_END);
+-    }
++    // DVDLowInquiry(DVDDriveInfo* info, DVDLowCallback cb). Fill the drive info
++    // with a retail drive's answer (Dolphin's values) and raise transfer complete:
++    // the SDK's busy-state callback then retires `executing`. Without it
++    // DVDInquiryAsync stays the executing command and DVDGetDriveStatus reports
++    // busy forever.
++    if (driveInfoPtr && Memory::Contains(driveInfoPtr, 0x20)) {
++        Memory::Write32(driveInfoPtr + 0x0, 0x00000002); // revisionLevel 0, deviceCode 2
++        Memory::Write32(driveInfoPtr + 0x4, 0x20060526); // releaseDate
++        Memory::Write32(driveInfoPtr + 0x8, 0x41000000);
++    }
++    InvokeDvdLowCallback(callback, DvdReadContract::kInterruptTransferComplete);
+     CompleteDvdCancelState();
+-
+-    return 1; // Return 1 to indicate the command was successfully issued.
++    return 1;
+ }
+ PPC_NATIVE_OVERRIDE(80165A30, DVDLowInquiry_80165A30, int32_t, (uint32_t b, uint32_t c), (b, c));
+ 
+@@ -1108,6 +1113,17 @@ extern "C" int32_t DVDLowRead_80166330(uint32_t buffer, uint32_t length, uint32_
+ }
+ PPC_NATIVE_OVERRIDE(80166330, DVDLowRead_80166330, int32_t, (uint32_t b, uint32_t l, uint32_t o, uint32_t c), (b, l, o, c));
+ 
++// DVDLowSeek(offset, cb): host files need no head positioning; report transfer
++// complete so DVDSeekAsync retires like on the console.
++extern "C" int32_t DVDLowSeek_801664E0(uint32_t offset, uint32_t callback)
++{
++    (void)offset;
++    InvokeDvdLowCallback(callback, DvdReadContract::kInterruptTransferComplete);
++    CompleteDvdCancelState();
++    return 1;
++}
++PPC_NATIVE_OVERRIDE(801664E0, DVDLowSeek_801664E0, int32_t, (uint32_t o, uint32_t c), (o, c));
++
+ // UnencryptedRead has the same completion and failure contract as DVDLowRead.
+ extern "C" int32_t DVDLowUnencryptedRead_80165708(uint32_t b, uint32_t l, uint32_t o, uint32_t c) {
+     return DVDLowRead_80166330(b, l, o, c);

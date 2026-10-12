@@ -1,0 +1,20 @@
+{
+  "dtk": {
+    "version": "1.8.4",
+    "commit": "a0c455e46cab58e1d2e0885623f85089ff0499db",
+    "url": "https://github.com/encounter/decomp-toolkit/releases/download/v1.8.4/dtk-windows-x86_64.exe",
+    "sha256": "6a693e95aa4d30acccc673343302a4abdfa3146bd0fb15cb1a2bce924cbc782a"
+  },
+  "nkit": {
+    "version": "3.1.0",
+    "url": "https://github.com/Nanook/NKit/releases/download/v3.1.0/NKit_win-x64_CLI_3.1.0.zip",
+    "sha256": "7b194152cd916d90abb6b1c5e98f16a9402bd94abd96b12dd658103f208d70b2"
+  },
+  "llvm": {
+    "version": "20.1.8",
+    "purpose": "DolRecomp LLVM backend development libraries (requires LLVM 19 or 20)",
+    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
+    "sha256": "f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f",
+    "install_dir": "local/tools/llvm-20.1.8"
+  }
+}

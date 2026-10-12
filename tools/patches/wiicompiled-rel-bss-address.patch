@@ -1,0 +1,89 @@
+diff --git a/translator/src/Translator.Cli/Program.cs b/translator/src/Translator.Cli/Program.cs
+index 2ffd646..67cb216 100644
+--- a/translator/src/Translator.Cli/Program.cs
++++ b/translator/src/Translator.Cli/Program.cs
+@@ -2836,7 +2836,7 @@ int RunGenerateDataInit()
+     RelImage? relImage = null;
+     if (!string.IsNullOrWhiteSpace(relPath) && loadedProject.Inputs.Rel is { } configuredRel && File.Exists(relPath))
+     {
+-        relImage = RelFile.Load(relPath).BuildImage(
++        relImage = RelFile.Load(relPath, configuredRel.BssOffset).BuildImage(
+             configuredRel.LoadAddress,
+             applyRelocations: true);
+     }
+@@ -3743,7 +3743,7 @@ DolFile LoadDol()
+ 
+ RelFile? LoadRel()
+ {
+-    return RequireProject().Inputs.Rel is { } rel ? RelFile.Load(rel.Path) : null;
++    return RequireProject().Inputs.Rel is { } rel ? RelFile.Load(rel.Path, rel.BssOffset) : null;
+ }
+ 
+ static uint ParseAddress(string text) => GuestTargetParser.ParseHexAddress(text);
+diff --git a/translator/src/Translator.Cli/TranslationProjectConfig.cs b/translator/src/Translator.Cli/TranslationProjectConfig.cs
+index 2deb7df..980c432 100644
+--- a/translator/src/Translator.Cli/TranslationProjectConfig.cs
++++ b/translator/src/Translator.Cli/TranslationProjectConfig.cs
+@@ -81,7 +81,8 @@ internal sealed class TranslationProjectConfig
+             rel = new ProjectRelInput(
+                 relInput.Path,
+                 relInput.Sha256,
+-                ParseUInt32(relDto.LoadAddress, null, "inputs.rel.load_address"));
++                ParseUInt32(relDto.LoadAddress, null, "inputs.rel.load_address"),
++                ParseOptionalUInt32(relDto.BssAddress, "inputs.rel.bss_address"));
+         }
+ 
+         var entryPoints = (dto.Translation?.EntryPoints ?? [])
+@@ -395,6 +396,7 @@ internal sealed class TranslationProjectConfig
+     private sealed class RelInputDto : BinaryInputDto
+     {
+         public string? LoadAddress { get; init; }
++        public string? BssAddress { get; init; }
+     }
+ 
+     // Translation behaviour (state-free ABI, register residency, leaf inlining, flat guest memory) is
+@@ -467,7 +469,10 @@ internal sealed record ProjectIdentity(
+     string BaseManifestStem);
+ internal sealed record ProjectMemory(uint Base, int Size, uint? SdaBase = null, uint? Sda2Base = null);
+ internal record ProjectBinaryInput(string Path, string? Sha256);
+-internal sealed record ProjectRelInput(string Path, string? Sha256, uint LoadAddress) : ProjectBinaryInput(Path, Sha256);
++internal sealed record ProjectRelInput(string Path, string? Sha256, uint LoadAddress, uint? BssAddress = null) : ProjectBinaryInput(Path, Sha256)
++{
++    public uint? BssOffset => BssAddress is { } bss ? checked(bss - LoadAddress) : null;
++}
+ internal sealed record ProjectInputs(ProjectBinaryInput Dol, ProjectRelInput? Rel);
+ internal sealed record ProjectTranslation(
+     IReadOnlyList<uint> EntryPoints,
+diff --git a/translator/src/Translator.Core/Parsing/Rel/RelFile.cs b/translator/src/Translator.Core/Parsing/Rel/RelFile.cs
+index d0f6113..17c2100 100644
+--- a/translator/src/Translator.Core/Parsing/Rel/RelFile.cs
++++ b/translator/src/Translator.Core/Parsing/Rel/RelFile.cs
+@@ -30,7 +30,9 @@ public sealed class RelFile
+     /// <summary>The only REL header surface any caller outside this file reads.</summary>
+     public IReadOnlyList<RelSection> Sections { get; }
+ 
+-    public static RelFile Load(string path)
++    /// <param name="bssOffset">BSS offset from the load address when the game allocates BSS
++    /// somewhere other than right after the REL bytes (inputs.rel.bss_address).</param>
++    public static RelFile Load(string path, uint? bssOffset = null)
+     {
+         var raw = File.ReadAllBytes(path);
+         using var stream = new MemoryStream(raw, writable: false);
+@@ -77,9 +79,14 @@ public sealed class RelFile
+         {
+             bssAlign = 0x20;
+         }
+-        var bssOffset = AlignUp(CalculateBssOffset(raw.Length), bssAlign);
+-        var totalSize = checked(bssOffset + bssSize);
+-        var adjustedSections = ApplyBssLayout(sections, bssSectionIndex, bssOffset, bssSize);
++        var defaultBssOffset = AlignUp(CalculateBssOffset(raw.Length), bssAlign);
++        if (bssOffset is { } configured && (configured < defaultBssOffset || configured % bssAlign != 0))
++        {
++            throw new InvalidDataException($"BSS offset 0x{configured:X} overlaps the REL bytes or breaks its 0x{bssAlign:X} alignment");
++        }
++        var resolvedBssOffset = bssOffset ?? defaultBssOffset;
++        var totalSize = checked(resolvedBssOffset + bssSize);
++        var adjustedSections = ApplyBssLayout(sections, bssSectionIndex, resolvedBssOffset, bssSize);
+         var imports = ParseImports(raw, importTableOffset, importTableSize);
+ 
+         return new RelFile(

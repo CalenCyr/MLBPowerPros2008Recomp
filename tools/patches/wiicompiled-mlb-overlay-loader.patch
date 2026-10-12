@@ -1,0 +1,189 @@
+diff --git a/runtime/include/game_profile.h b/runtime/include/game_profile.h
+index 941d52c..ab764dd 100644
+--- a/runtime/include/game_profile.h
++++ b/runtime/include/game_profile.h
+@@ -24,6 +24,10 @@ inline constexpr uint32_t kDiscGameCode = 0x524C3845u;  // "RL8E"
+ inline constexpr uint32_t kDiscMakerId = 0x35340001u;   // "54", disc 0, version 1
+ // Dolphin's Wii boot leaves the arena begin at 0; OSInit then uses __ArenaLo.
+ inline constexpr uint32_t kMem1ArenaLo = 0u;
++// Dolphin's apploader puts the 0x2C0-byte FST at the top of MEM1 and the arena hi
++// right below it. The game sizes its main heap to the arena, then fills it nearly
++// to the byte: a lower arena hi makes a 278 KB load allocation return NULL.
++inline constexpr uint32_t kMem1ArenaHi = 0x817FFD40u;
+ inline constexpr uint32_t kOSLoadContextAddress = 0x8009CD58u;
+ // Mario Kart Wii native hooks are bound to MKW addresses; none apply here yet.
+ inline constexpr bool kMkwNatives = false;
+@@ -34,6 +38,7 @@ inline constexpr uint32_t kRelCtorStart = 0x8088F400u, kRelCtorEnd = 0x8088F704u
+ inline constexpr uint32_t kDiscGameCode = 0x524D4350u;  // "RMCP"
+ inline constexpr uint32_t kDiscMakerId = 0x30310100u;   // "01", disc 1
+ inline constexpr uint32_t kMem1ArenaLo = 0x80399180u;
++inline constexpr uint32_t kMem1ArenaHi = 0x817F0520u;
+ inline constexpr uint32_t kOSLoadContextAddress = 0x801A1F58u;
+ inline constexpr bool kMkwNatives = true;
+ #endif
+diff --git a/runtime/src/hle/mlb/rel_loader.cpp b/runtime/src/hle/mlb/rel_loader.cpp
+new file mode 100644
+index 0000000..26ea5cf
+--- /dev/null
++++ b/runtime/src/hle/mlb/rel_loader.cpp
+@@ -0,0 +1,147 @@
++// MLB Power Pros 2008 (RL8E54) game-specific native: the overlay loader at 0x80051474.
++//
++// The translated ovl_main.rel code has its module and BSS addresses baked in
++// (config/wiicompiled/rl8e54.yml: load_address 0x80575580, bss_address 0x8102B0C0),
++// but the game allocates both from its main heap, so where they land depends on the
++// heap state at that moment. On the console (and in Dolphin) the REL block takes a
++// whole 0xAB5B20-byte free block and the BSS follows at 0x8102B0C0; the runtime's
++// different thread interleaving left a split block there, put the BSS 0x20 lower,
++// and the BSS tail then overwrote the next heap block's header, which broke the
++// free list and later made a 278 KB allocation return NULL.
++//
++// This is the decompiled loader with one addition: before allocating, the free
++// block that will receive the REL is carved so the game's own first-fit allocator
++// puts the module and BSS at the translated addresses.
++#include <cstdint>
++#include <cstdio>
++
++#include "abi_bridge.h"
++#include "hle_stubs.h"
++#include "memory.h"
++
++namespace {
++
++constexpr uint32_t kOverlayTable = 0x8020B920;  // 0x28-byte entries
++constexpr uint32_t kMainHeap = 0x802B57A8;
++constexpr uint32_t kRelModule = 0x80575580;
++constexpr uint32_t kRelBss = 0x8102B0C0;
++constexpr uint32_t kHeader = 0x20;  // heap block header ahead of the data
++
++constexpr uint32_t kDVDOpen = 0x800A9764, kDVDClose = 0x800A9A10, kDVDReadPrio = 0x800A9CDC;
++constexpr uint32_t kHeapAlloc = 0x8005A804, kHeapFree = 0x8005A76C;
++constexpr uint32_t kMemset = 0x800065BC, kDCFlushRange = 0x8009C488, kOSLink = 0x800A1678;
++
++// Heap block header: +0 flags (0x80000000 free, 0x40000000 used), +8 data size,
++// +0xC/+0x10 free-list links (the allocator walks +0x10 from the start sentinel),
++// +0x14/+0x18 previous/next block in address order.
++uint32_t R(uint32_t a) { return Memory::Read32(a); }
++void W(uint32_t a, uint32_t v) { Memory::Write32(a, v); }
++
++// Splits free block `block` so a new free block of the remaining size starts at `at`.
++void SplitFree(uint32_t block, uint32_t at) {
++    const uint32_t end = block + kHeader + R(block + 8);
++    for (uint32_t off = 0; off < kHeader; off += 4) W(at + off, 0);
++    W(at + 0x00, 0x80000000u);
++    W(at + 0x08, end - (at + kHeader));
++    W(block + 0x08, at - (block + kHeader));
++    const uint32_t nextFree = R(block + 0x10);
++    W(at + 0x0C, block);
++    W(at + 0x10, nextFree);
++    W(nextFree + 0x0C, at);
++    W(block + 0x10, at);
++    const uint32_t nextBlock = R(block + 0x18);
++    W(at + 0x14, block);
++    W(at + 0x18, nextBlock);
++    W(nextBlock + 0x14, at);
++    W(block + 0x18, at);
++}
++
++// Leaves a free block spanning exactly [kRelModule - header, kRelBss - header), so the
++// REL allocation takes it whole and the BSS allocation splits the free block after it.
++void CarveRelLayout(uint32_t relSize) {
++    const uint32_t relBlock = kRelModule - kHeader;
++    const uint32_t bssBlock = kRelBss - kHeader;
++    for (uint32_t b = R(R(kMainHeap + 8) + 0x10); b != 0 && (R(b) >> 31); b = R(b + 0x10)) {
++        const uint32_t end = b + kHeader + R(b + 8);
++        if (b > relBlock || end < bssBlock + kHeader) {
++            if (b < relBlock && R(b + 8) >= relSize) {
++                // ponytail: assumes no earlier free block fits the REL; widen the carve if this fires.
++                std::fprintf(stderr, "[mlb] free block 0x%08x fits the REL before 0x%08x\n", b, relBlock);
++            }
++            continue;
++        }
++        if (b < relBlock) SplitFree(b, relBlock);
++        if (end > bssBlock + kHeader) SplitFree(relBlock, bssBlock);
++        return;
++    }
++    std::fprintf(stderr, "[mlb] no free block covers 0x%08x-0x%08x; REL layout not pinned\n", relBlock, bssBlock);
++}
++
++uint32_t Call(CpuContext* cpu, uint32_t target, uint32_t a = 0, uint32_t b = 0, uint32_t c = 0,
++              uint32_t d = 0, uint32_t e = 0) {
++    cpu->gpr[3] = a;
++    cpu->gpr[4] = b;
++    cpu->gpr[5] = c;
++    cpu->gpr[6] = d;
++    cpu->gpr[7] = e;
++    InvokeIndirectCpu(target, cpu);
++    return cpu->gpr[3];
++}
++
++uint32_t LoadRel(CpuContext* cpu, uint32_t index) {
++    const uint32_t entry = kOverlayTable + index * 0x28;
++    if (R(entry + 0x14) != 0) {  // already loaded: count another user
++        W(entry + 0x10, R(entry + 0x10) + 1);
++        return 1;
++    }
++    const uint32_t fileInfo = cpu->gpr[1] + 8;  // DVDFileInfo in this frame
++    if (Call(cpu, kDVDOpen, R(entry + 0xC), fileInfo) == 0) return 0;
++    const uint32_t size = (R(fileInfo + 0x34) + 0x1F) & ~0x1Fu;
++
++    CarveRelLayout(size);
++    const uint32_t module = Call(cpu, kHeapAlloc, kMainHeap, size, 0x20);
++    if (module == 0) return 0;
++    Call(cpu, kMemset, module, 0, size);
++    Call(cpu, kDCFlushRange, module, size);
++    if (static_cast<int32_t>(Call(cpu, kDVDReadPrio, fileInfo, module, size, 0, 2)) < 0) {
++        Call(cpu, kDVDClose, fileInfo);
++        Call(cpu, kHeapFree, module);
++        return 0;
++    }
++    Call(cpu, kDVDClose, fileInfo);
++
++    const uint32_t bssSize = R(module + 0x20);
++    const uint32_t bss = Call(cpu, kHeapAlloc, kMainHeap, bssSize, 0x20);
++    if (bss == 0) {
++        Call(cpu, kHeapFree, module);
++        return 0;
++    }
++    Call(cpu, kMemset, bss, 0, bssSize);
++    Call(cpu, kDCFlushRange, bss, bssSize);
++    if (module != kRelModule || bss != kRelBss) {
++        std::fprintf(stderr, "[mlb] ovl module 0x%08x bss 0x%08x, translated code expects 0x%08x/0x%08x\n",
++                     module, bss, kRelModule, kRelBss);
++    }
++    Call(cpu, kOSLink, module, bss);
++
++    W(entry + 0x10, 1);
++    W(entry + 0x1C, bss);
++    W(entry + 0x20, R(module + 0x20));
++    W(entry + 0x14, module);
++    W(entry + 0x18, size);
++    // ponytail: the original OSReports every module header field here; skipped (diagnostic only).
++    InvokeIndirectCpu(R(module + 0x34), cpu);  // _prolog
++    return 1;
++}
++
++}  // namespace
++
++extern "C" void MLB_LoadOverlay_80051474(CpuContext* ctx) {
++    const uint32_t savedSp = ctx->gpr[1];
++    ctx->gpr[1] = savedSp - 0x60;  // same frame size as the original: DVDFileInfo at sp+8
++    W(ctx->gpr[1], savedSp);       // back chain
++    const uint32_t result = LoadRel(ctx, ctx->gpr[4]);
++    ctx->gpr[1] = savedSp;
++    ctx->gpr[3] = result;
++}
++PPC_NATIVE_OVERRIDE_VOID(80051474, MLB_LoadOverlay_80051474, (CpuContext* ctx), (ctx));
+diff --git a/runtime/src/system_bridge.cpp b/runtime/src/system_bridge.cpp
+index 028c3c3..6a72cc9 100644
+--- a/runtime/src/system_bridge.cpp
++++ b/runtime/src/system_bridge.cpp
+@@ -485,7 +485,7 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
+ 
+     std::vector<SeedEntry> entries;
+     constexpr uint32_t kMem1ArenaLoDefault = GameProfile::kMem1ArenaLo;
+-    uint32_t mem1ArenaHiDefault = 0x817f0520u;
++    uint32_t mem1ArenaHiDefault = GameProfile::kMem1ArenaHi;
+     constexpr uint32_t kBusClockHz =
+         static_cast<uint32_t>(TimeBaseContract::kBusClockHz);
+     constexpr uint32_t kCpuClockHz = kBusClockHz * 3u;

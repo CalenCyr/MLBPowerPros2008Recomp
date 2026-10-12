@@ -1,0 +1,137 @@
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Hooks.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore_Hooks.cpp
+@@ -13,10 +13,89 @@
+ #include "Common/Logging/Log.h"
+ 
+ #include <cstdio>
++#include <cstdlib>
+ 
+ namespace
+ {
+ constexpr u32 LOCKED_CACHE_BASE = 0xE0000000u;
++}
++
++
++// POWERPROS_FALLBACK_PROFILE_BEGIN
++namespace
++{
++struct PowerProsFallbackProfile
++{
++  static constexpr u64 stride = 1024;
++  static constexpr std::size_t max_sites = 4096;
++  std::string path;
++  u64 observed[2]{};
++  u64 dropped[2]{};
++  std::unordered_map<u64, u64> sites[2];
++
++  void Reset(const char* output)
++  {
++    path = output ? output : "";
++    for (int kind = 0; kind < 2; ++kind)
++    {
++      observed[kind] = dropped[kind] = 0;
++      sites[kind].clear();
++    }
++  }
++
++  void Observe(u32 pc, u32 raw, bool cache_fast)
++  {
++    if (path.empty())
++      return;
++    const int kind = cache_fast ? 1 : 0;
++    if ((++observed[kind] % stride) != 0)
++      return;
++    const u64 key = (static_cast<u64>(pc) << 32) | raw;
++    auto found = sites[kind].find(key);
++    if (found != sites[kind].end())
++      ++found->second;
++    else if (sites[kind].size() < max_sites)
++      sites[kind].emplace(key, 1);
++    else
++      ++dropped[kind];
++  }
++
++  bool Write() const
++  {
++    if (path.empty())
++      return true;
++    std::FILE* file = std::fopen(path.c_str(), "w");
++    if (!file)
++      return false;
++    bool ok = std::fprintf(file, "kind,pc,raw,count\nstride,00000000,00000000,%llu\n",
++                           static_cast<unsigned long long>(stride)) >= 0;
++    for (int kind = 0; kind < 2; ++kind)
++    {
++      const char* label = kind ? "cache_fast" : "slow";
++      ok &= std::fprintf(file, "total_%s,00000000,00000000,%llu\ndropped_%s,00000000,00000000,%llu\n",
++                         label, static_cast<unsigned long long>(observed[kind]),
++                         label, static_cast<unsigned long long>(dropped[kind])) >= 0;
++      for (const auto& site : sites[kind])
++        ok &= std::fprintf(file, "%s,%08X,%08X,%llu\n", label,
++                           static_cast<u32>(site.first >> 32), static_cast<u32>(site.first),
++                           static_cast<unsigned long long>(site.second)) >= 0;
++    }
++    return std::fclose(file) == 0 && ok;
++  }
++};
++PowerProsFallbackProfile g_powerpros_fallback_profile;
++}
++// POWERPROS_FALLBACK_PROFILE_END
++
++void PowerProsResetFallbackProfile()
++{
++  g_powerpros_fallback_profile.Reset(std::getenv("STATICRECOMP_FALLBACK_PROFILE"));
++}
++
++void PowerProsWriteFallbackProfile()
++{
++  if (!g_powerpros_fallback_profile.Write())
++    std::fprintf(stderr, "[powerpros-diagnostic] fallback profile write failed\n");
+ }
+ 
+ bool StaticRecompCore::HookHostCall(CPUState* cpu, u32 address)
+@@ -390,6 +469,7 @@
+     const u32 xo = (raw >> 1) & 0x3FFu;
+     if (xo == 86u || xo == 54u || xo == 982u || (xo == 470u && (cpu->msr & 0x4000u) == 0))
+     {
++      g_powerpros_fallback_profile.Observe(cia, raw, true);
+       const u32 ra = (raw >> 16) & 31u;
+       const u32 rb = (raw >> 11) & 31u;
+       const u32 ea = (ra ? cpu->gpr[ra] : 0u) + cpu->gpr[rb];
+@@ -405,6 +485,8 @@
+     }
+   }
+ 
++  g_powerpros_fallback_profile.Observe(cia, raw, false);
++
+   // The recompiled segment resumes via the dispatcher at the PC this leaves
+   // behind, so this must execute exactly the instruction at cia via
+   // Dolphin's interpreter and hand the register state back.
+--- a/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
++++ b/Source/Core/Core/PowerPC/StaticRecomp/StaticRecompCore.cpp
+@@ -26,6 +26,9 @@
+ #include "Core/PowerPC/JitArm64/Jit.h"
+ #endif
+ 
++
++void PowerProsResetFallbackProfile();
++void PowerProsWriteFallbackProfile();
+ 
+ StaticRecompCore* g_static_recomp_core = nullptr;
+ 
+@@ -168,6 +171,7 @@
+ void StaticRecompCore::Init()
+ {
+   g_static_recomp_core = this;
++  PowerProsResetFallbackProfile();
+   RefreshConfig();
+   m_collect_dispatch_samples = std::getenv("STATICRECOMP_DISPATCH_SAMPLES") != nullptr;
+   const char* fallback_override = std::getenv("STATICRECOMP_FALLBACK_RANGES");
+@@ -226,6 +230,7 @@
+ 
+ void StaticRecompCore::Shutdown()
+ {
++  PowerProsWriteFallbackProfile();
+   g_static_recomp_core = nullptr;
+   std::fprintf(stderr, "[powerpros-diagnostic] fallback_jit_runs=%llu (invocations, not instructions)\n",
+                (unsigned long long)m_fallback_jit_runs);

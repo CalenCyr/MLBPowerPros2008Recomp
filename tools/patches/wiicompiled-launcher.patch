@@ -1,0 +1,862 @@
+diff --git a/runtime/include/launcher.h b/runtime/include/launcher.h
+new file mode 100644
+index 0000000..116aa0d
+--- /dev/null
++++ b/runtime/include/launcher.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++// Pre-boot settings screen drawn with the runtime's ImGui before the guest starts.
++namespace launcher {
++enum class Result { Play, Quit, Relaunch };
++
++// Runs the launcher when enabled ([launcher] show_on_startup, default on). Skipped when
++// WIICOMPILED_SKIP_LAUNCHER is set and for automated runs (WIICOMPILED_BENCH, scripted pad input).
++// Relaunch means a setting that needs a fresh renderer was saved: shut the renderer and the process
++// transcript down (so the standard handles are the original ones again), then call Relaunch().
++Result Run(int argc, char** argv);
++
++// Starts this executable again, same arguments, with WIICOMPILED_SKIP_LAUNCHER=1.
++bool Relaunch();
++} // namespace launcher
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index 2204f70..8eed306 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -48,6 +48,8 @@ struct RuntimeUserConfig {
+     std::optional<bool> textureReplacements;
+     std::optional<bool> textureDumps;
+     std::optional<bool> showFps;
++    // [launcher] show_on_startup: the pre-boot settings screen (launcher.cpp).
++    std::optional<bool> launcherOnStartup;
+     std::optional<uint32_t> disabledPostProcessingPaths;
+     std::optional<float> audioVolume;
+     std::optional<float> audioMusicVolume;
+@@ -465,6 +467,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
+     config.skipUnreadyPipelines = FindConfigValue<bool>(document, "video", "skip_unready_pipelines");
+     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
+     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
++    config.launcherOnStartup = FindConfigValue<bool>(document, "launcher", "show_on_startup");
+     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
+     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
+     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
+@@ -691,6 +694,19 @@ inline bool SetShowFps(bool value) {
+     return WriteSetting("video", "show_fps", value ? "true" : "false");
+ }
+ 
++inline bool SetGraphicsApi(std::string value) {
++    if (!IsSupportedGraphicsApi(value)) {
++        return false;
++    }
++    Mutable().graphicsApi = value;
++    return WriteSetting("video", "graphics_api", FormatString(value));
++}
++
++inline bool SetLauncherOnStartup(bool value) {
++    Mutable().launcherOnStartup = value;
++    return WriteSetting("launcher", "show_on_startup", value ? "true" : "false");
++}
++
+ inline bool SetDisabledPostProcessingPaths(uint32_t value) {
+     Mutable().disabledPostProcessingPaths = value;
+     std::ostringstream formatted;
+@@ -951,6 +967,10 @@ inline uint32_t DisabledPostProcessingPaths(uint32_t fallback = 0) {
+     return Get().disabledPostProcessingPaths.value_or(fallback) & 0x10u;
+ }
+ 
++inline bool LauncherOnStartup(bool fallback = true) {
++    return Get().launcherOnStartup.value_or(fallback);
++}
++
+ inline std::string GraphicsApi(std::string fallback = "auto") {
+     return Get().graphicsApi.value_or(std::move(fallback));
+ }
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+new file mode 100644
+index 0000000..f939bd1
+--- /dev/null
++++ b/runtime/src/launcher.cpp
+@@ -0,0 +1,738 @@
++// Pre-boot launcher in the style of the game's own menus: picks the graphics API and other settings
++// before the game starts. Drawn entirely with ImGui draw lists (procedural backdrop, glossy pills,
++// system fonts); no game assets are used. Everything it changes is read once at start-up, so a
++// changed setting is saved to Config.toml right away and Play relaunches the runtime with
++// WIICOMPILED_SKIP_LAUNCHER=1; the guest has not started yet, so that costs only the renderer
++// start-up.
++#include "launcher.h"
++
++#include "aurora_events.h"
++#include "runtime_config.h"
++#include "runtime_log.h"
++
++#include <aurora/aurora.h>
++#include <imgui.h>
++#include <imgui_internal.h>
++#include <SDL3/SDL_keyboard.h>
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cmath>
++#include <cstdlib>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <initializer_list>
++#include <iterator>
++#include <string>
++#include <thread>
++#include <vector>
++
++#if defined(_WIN32)
++#include <windows.h>
++#else
++#include <unistd.h>
++#endif
++
++namespace launcher {
++namespace {
++
++struct ApiOption {
++    AuroraBackend backend;
++    const char* configName;
++    const char* label;
++};
++
++// Config names match RuntimeConfigFile::IsSupportedGraphicsApi and the backend table in main.cpp.
++constexpr std::array<ApiOption, 5> kApis{{
++    {BACKEND_AUTO, "auto", "Automática"},
++    {BACKEND_D3D12, "d3d12", "Direct3D 12"},
++    {BACKEND_VULKAN, "vulkan", "Vulkan"},
++    {BACKEND_METAL, "metal", "Metal"},
++    {BACKEND_OPENGLES, "opengles", "OpenGL ES"},
++}};
++
++constexpr std::array<const char*, 3> kDisplayModes{"windowed", "borderless", "exclusive"};
++constexpr std::array<float, 6> kResolutions{1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 0.0f};
++
++bool AutomatedRun() {
++    for (const char* env : {"WIICOMPILED_SKIP_LAUNCHER", "WIICOMPILED_BENCH", "WIICOMPILED_PAD_SCRIPT",
++                            "WIICOMPILED_KPAD_SCRIPT"}) {
++        const char* value = std::getenv(env);
++        if (value != nullptr && *value != '\0') return true;
++    }
++    return false;
++}
++
++int g_argc = 0;
++char** g_argv = nullptr;
++
++// ---- Fonts -------------------------------------------------------------------------------------
++// System fonts only; ImGui's built-in font is the fallback. Baked large and drawn smaller.
++ImFont* g_text = nullptr;
++ImFont* g_bold = nullptr;
++ImFont* g_title = nullptr;
++
++ImFont* LoadFirstFont(std::initializer_list<const char*> paths, float size) {
++    for (const char* path : paths) {
++        std::ifstream file(path, std::ios::binary);
++        if (!file) continue;
++        std::vector<char> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
++        if (data.empty()) continue;
++        ImFontConfig config;
++        config.FontDataOwnedByAtlas = true;
++        void* owned = IM_ALLOC(data.size());
++        std::memcpy(owned, data.data(), data.size());
++        if (ImFont* font = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(data.size()), size,
++                                                                        &config)) {
++            return font;
++        }
++    }
++    return nullptr;
++}
++
++void LoadFonts() {
++    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
++    if (atlas->Fonts.empty()) atlas->AddFontDefault();  // the in-game overlay keeps ImGui's font
++#if defined(_WIN32)
++    g_text = LoadFirstFont({"C:/Windows/Fonts/bahnschrift.ttf", "C:/Windows/Fonts/segoeui.ttf",
++                            "C:/Windows/Fonts/arial.ttf"}, 48.0f);
++    g_bold = LoadFirstFont({"C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf"}, 40.0f);
++    g_title = LoadFirstFont({"C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/segoeuib.ttf"}, 112.0f);
++#else
++    g_text = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
++                            "/usr/share/fonts/TTF/DejaVuSans.ttf"}, 48.0f);
++    g_bold = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
++                            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"}, 40.0f);
++#endif
++    ImFont* fallback = atlas->Fonts[0];
++    if (g_text == nullptr) g_text = fallback;
++    if (g_bold == nullptr) g_bold = g_text;
++    if (g_title == nullptr) g_title = g_bold;
++}
++
++// ---- Drawing helpers ---------------------------------------------------------------------------
++ImU32 Rgba(int r, int g, int b, int a = 255) { return IM_COL32(r, g, b, a); }
++
++ImVec2 TextSize(ImFont* font, float size, const char* text) {
++    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
++}
++
++void Text(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
++          float wrap = 0.0f) {
++    dl->AddText(font, size, pos, color, text, nullptr, wrap);
++}
++
++void ShadowedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
++                  float wrap = 0.0f) {
++    const float d = std::max(1.0f, size * 0.05f);
++    dl->AddText(font, size, ImVec2(pos.x + d, pos.y + d), Rgba(0, 20, 70, 170), text, nullptr, wrap);
++    dl->AddText(font, size, pos, color, text, nullptr, wrap);
++}
++
++// Fills the vertices added since `start` with a vertical gradient between y0 and y1.
++void Shade(ImDrawList* dl, int start, float y0, float y1, ImU32 top, ImU32 bottom) {
++    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, start, dl->VtxBuffer.Size, ImVec2(0, y0), ImVec2(0, y1), top,
++                                                  bottom);
++}
++
++// Chunky cartoon lettering: dark outer rim (dropped a little), light inner rim, gradient fill.
++void LogoText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 top, ImU32 bottom, const char* text,
++              ImU32 rim = IM_COL32_WHITE, ImU32 outer = IM_COL32(12, 36, 104, 255)) {
++    const float r = std::max(1.5f, size * 0.055f);
++    for (int pass = 0; pass < 2; ++pass) {
++        const float radius = pass == 0 ? r * 2.0f : r;
++        const float drop = pass == 0 ? r * 0.9f : 0.0f;
++        for (int i = 0; i < 16; ++i) {
++            const float a = 6.2831853f * static_cast<float>(i) / 16.0f;
++            dl->AddText(font, size, ImVec2(pos.x + std::cos(a) * radius, pos.y + std::sin(a) * radius + drop),
++                        pass == 0 ? outer : rim, text);
++        }
++    }
++    const int start = dl->VtxBuffer.Size;
++    dl->AddText(font, size, pos, IM_COL32_WHITE, text);
++    Shade(dl, start, pos.y + size * 0.2f, pos.y + size * 0.9f, top, bottom);
++}
++
++ImVec2 LogoTextCentered(ImDrawList* dl, ImFont* font, float size, float cx, float y, ImU32 top, ImU32 bottom,
++                        const char* text, ImU32 rim = IM_COL32_WHITE, ImU32 outer = IM_COL32(12, 36, 104, 255)) {
++    const ImVec2 s = TextSize(font, size, text);
++    LogoText(dl, font, size, ImVec2(cx - s.x * 0.5f, y), top, bottom, text, rim, outer);
++    return s;
++}
++
++// Glossy pill: drop shadow, white rim, vertical gradient body and a soft highlight on the top half.
++void Pill(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, float u, ImU32 rim = IM_COL32_WHITE) {
++    const float r = (b.y - a.y) * 0.5f;
++    const float e = 4.0f * u;
++    dl->AddRectFilled(ImVec2(a.x - e, a.y - e + 6 * u), ImVec2(b.x + e, b.y + e + 6 * u), Rgba(0, 20, 70, 110), r + e);
++    dl->AddRectFilled(ImVec2(a.x - e, a.y - e), ImVec2(b.x + e, b.y + e), rim, r + e);
++    const int start = dl->VtxBuffer.Size;
++    dl->AddRectFilled(a, b, IM_COL32_WHITE, r);
++    Shade(dl, start, a.y, b.y, top, bottom);
++    const float gh = (b.y - a.y) * 0.42f;
++    const int gloss = dl->VtxBuffer.Size;
++    dl->AddRectFilled(ImVec2(a.x + r * 0.45f, a.y + 3 * u), ImVec2(b.x - r * 0.45f, a.y + 3 * u + gh),
++                      Rgba(255, 255, 255, 110), gh * 0.5f);
++    Shade(dl, gloss, a.y, a.y + gh, IM_COL32_WHITE, top);  // keeps the vertex alpha: fades into the body
++}
++
++float Hash(int i) {
++    const float s = std::sin(static_cast<float>(i) * 12.9898f) * 43758.5453f;
++    return s - std::floor(s);
++}
++
++// Power Pros menu backdrop: bright blue with a radial glow, slowly turning rays, a big emblem ring,
++// fine scanlines and a scrolling marquee band at the top.
++void DrawBackground(ImDrawList* dl, float w, float h, float u, float t, ImFont* font) {
++    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h), Rgba(28, 112, 214), Rgba(28, 112, 214),
++                                Rgba(8, 56, 158), Rgba(8, 56, 158));
++    const ImVec2 c(w * 0.5f, h * 0.47f);
++    const float big = std::max(w, h);
++    for (int i = 14; i >= 1; --i) {
++        dl->AddCircleFilled(c, big * 0.05f * static_cast<float>(i), Rgba(120, 200, 255, 9), 96);
++    }
++    for (int i = 0; i < 24; ++i) {  // rays
++        const float a0 = t * 0.04f + 6.2831853f * static_cast<float>(i) / 24.0f;
++        const float a1 = a0 + 6.2831853f / 48.0f;
++        dl->AddTriangleFilled(c, ImVec2(c.x + std::cos(a0) * big, c.y + std::sin(a0) * big),
++                              ImVec2(c.x + std::cos(a1) * big, c.y + std::sin(a1) * big), Rgba(255, 255, 255, 10));
++    }
++    dl->AddCircle(c, h * 0.40f, Rgba(255, 255, 255, 38), 128, 16 * u);
++    dl->AddCircle(c, h * 0.33f, Rgba(255, 255, 255, 26), 128, 5 * u);
++    dl->AddCircleFilled(c, h * 0.31f, Rgba(160, 220, 255, 18), 128);
++    for (float y = 0; y < h; y += 4 * u) {  // scanlines
++        dl->AddLine(ImVec2(0, y), ImVec2(w, y), Rgba(255, 255, 255, 7), 1.0f);
++    }
++
++    // Top band with a faint scrolling marquee.
++    const float band = 44 * u;
++    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, band), Rgba(6, 40, 120, 230), Rgba(6, 40, 120, 230),
++                                Rgba(10, 60, 160, 200), Rgba(10, 60, 160, 200));
++    dl->AddLine(ImVec2(0, band), ImVec2(w, band), Rgba(255, 255, 255, 140), 3 * u);
++    dl->AddLine(ImVec2(0, band + 5 * u), ImVec2(w, band + 5 * u), Rgba(230, 40, 50, 200), 3 * u);
++    const char* marquee = "MLB POWER PROS 2008   \xC2\xB7   ";
++    const float ms = 24 * u;
++    const float mw = TextSize(font, ms, marquee).x;
++    for (float x = -std::fmod(t * 40 * u, mw); x < w; x += mw) {
++        dl->AddText(font, ms, ImVec2(x, (band - ms) * 0.5f), Rgba(255, 255, 255, 60), marquee);
++    }
++}
++
++void DrawCheck(ImDrawList* dl, ImVec2 p, float s, ImU32 color) {
++    dl->AddLine(ImVec2(p.x, p.y + s * 0.55f), ImVec2(p.x + s * 0.35f, p.y + s * 0.9f), color, s * 0.16f);
++    dl->AddLine(ImVec2(p.x + s * 0.35f, p.y + s * 0.9f), ImVec2(p.x + s, p.y + s * 0.15f), color, s * 0.16f);
++}
++
++// Button hint: a round badge with a letter, then a label. Returns the x after it.
++float Hint(ImDrawList* dl, ImFont* bold, ImFont* text, float x, float y, float u, ImU32 badge, const char* key,
++           const char* label) {
++    const float r = 13 * u;
++    dl->AddCircleFilled(ImVec2(x + r, y + r), r + 2 * u, IM_COL32_WHITE, 24);
++    dl->AddCircleFilled(ImVec2(x + r, y + r), r, badge, 24);
++    const float ks = 16 * u;
++    const ImVec2 kz = TextSize(bold, ks, key);
++    dl->AddText(bold, ks, ImVec2(x + r - kz.x * 0.5f, y + r - kz.y * 0.5f), IM_COL32_WHITE, key);
++    if (*label == '\0') return x + 2 * r + 6 * u;
++    const float ls = 22 * u;
++    ShadowedText(dl, text, ls, ImVec2(x + 2 * r + 8 * u, y + r - ls * 0.55f), IM_COL32_WHITE, label);
++    return x + 2 * r + 8 * u + TextSize(text, ls, label).x + 30 * u;
++}
++
++// ---- Input -------------------------------------------------------------------------------------
++// Keyboard comes from SDL's key state, like the in-game keyboard pad; gamepads come through ImGui.
++// Input only counts while the window has focus: SDL reports gamepads even in the background, so a
++// pad used for something else must not change settings here. WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT=1
++// lifts that for the keyboard only, for scripted tests that post keys to an unfocused window.
++bool g_keyboardEnabled = false;
++bool g_padEnabled = false;
++
++bool KeyPressed(SDL_Scancode key) {
++    struct Repeat { double down = -1.0, next = 0.0; };
++    static std::array<Repeat, SDL_SCANCODE_COUNT> state;
++    const double now = ImGui::GetTime();
++    Repeat& r = state[key];
++    if (!g_keyboardEnabled || !SDL_GetKeyboardState(nullptr)[key]) {
++        r.down = -1.0;
++        return false;
++    }
++    if (r.down < 0.0) {
++        r.down = now;
++        r.next = now + 0.4;
++        return true;
++    }
++    if (now < r.next) return false;
++    r.next = now + 0.09;
++    return true;
++}
++
++bool Pressed(std::initializer_list<SDL_Scancode> keys, std::initializer_list<ImGuiKey> pad) {
++    bool hit = false;
++    for (SDL_Scancode key : keys) hit = KeyPressed(key) || hit;  // poll every key so repeat state stays fresh
++    for (ImGuiKey key : pad) hit = (g_padEnabled && ImGui::IsKeyPressed(key, true)) || hit;
++    return hit;
++}
++bool Up() { return Pressed({SDL_SCANCODE_UP, SDL_SCANCODE_W}, {ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp}); }
++bool Down() {
++    return Pressed({SDL_SCANCODE_DOWN, SDL_SCANCODE_S}, {ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadLStickDown});
++}
++bool Left() {
++    return Pressed({SDL_SCANCODE_LEFT, SDL_SCANCODE_A}, {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft});
++}
++bool Right() {
++    return Pressed({SDL_SCANCODE_RIGHT, SDL_SCANCODE_D}, {ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight});
++}
++bool Accept() {
++    return Pressed({SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER, SDL_SCANCODE_SPACE, SDL_SCANCODE_J},
++                   {ImGuiKey_GamepadFaceDown, ImGuiKey_GamepadStart});
++}
++bool Back() {
++    return Pressed({SDL_SCANCODE_ESCAPE, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_K}, {ImGuiKey_GamepadFaceRight});
++}
++
++bool Hovered(ImVec2 a, ImVec2 b) {
++    const ImVec2 m = ImGui::GetIO().MousePos;
++    return m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
++}
++bool MouseMoved() {
++    const ImVec2 d = ImGui::GetIO().MouseDelta;
++    return d.x != 0.0f || d.y != 0.0f;
++}
++
++// ---- Settings model ----------------------------------------------------------------------------
++struct Option {
++    const char* label;
++    const char* help;
++    std::vector<std::string> choices;
++    int value = 0;
++    bool restart = true;
++};
++
++struct Tab {
++    const char* name;
++    std::vector<Option> options;
++    const char* footer = nullptr;
++};
++
++std::vector<std::string> YesNo() { return {"No", "Sí"}; }
++
++std::string GameStatusLine(bool& ready) {
++    const std::filesystem::path root = RuntimeConfigFile::ResolvedDvdRoot();
++    std::error_code ec;
++    ready = !root.empty() && std::filesystem::exists(root / "sys" / "main.dol", ec);
++    if (!ready) return root.empty() ? "No hay disco configurado (paths.dvd_root)." : "No se encontró el disco.";
++    char id[7] = {};
++    std::ifstream boot(root / "sys" / "boot.bin", std::ios::binary);
++    boot.read(id, 6);
++    const char* region = id[3] == 'E' ? "USA" : id[3] == 'P' ? "Europa" : id[3] == 'J' ? "Japón" : "?";
++    return std::string("Wii · ") + region + " · " + id;
++}
++
++} // namespace
++
++bool Relaunch() {
++    // The runtime rejects command-line options, so the child learns to skip the launcher from
++    // the environment it inherits.
++#if defined(_WIN32)
++    SetEnvironmentVariableW(L"WIICOMPILED_SKIP_LAUNCHER", L"1");
++    std::wstring command = GetCommandLineW();
++    STARTUPINFOW startup{};
++    startup.cb = sizeof(startup);
++    PROCESS_INFORMATION process{};
++    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process)) {
++        return false;
++    }
++    CloseHandle(process.hThread);
++    CloseHandle(process.hProcess);
++    return true;
++#else
++    setenv("WIICOMPILED_SKIP_LAUNCHER", "1", 1);
++    std::vector<char*> args(g_argv, g_argv + g_argc);
++    args.push_back(nullptr);
++    if (fork() == 0) {
++        execv("/proc/self/exe", args.data());
++        _exit(127);
++    }
++    return true;
++#endif
++}
++
++Result Run(int argc, char** argv) {
++    g_argc = argc;
++    g_argv = argv;
++    if (AutomatedRun() || !RuntimeConfigFile::LauncherOnStartup(true)) {
++        return Result::Play;
++    }
++
++    // Only APIs this build can actually create are offered.
++    size_t availableCount = 0;
++    const AuroraBackend* available = aurora_get_available_backends(&availableCount);
++    std::vector<ApiOption> apis{kApis[0]};
++    for (size_t i = 0; i < availableCount; ++i) {
++        for (const ApiOption& option : kApis) {
++            if (option.backend == available[i] && RuntimeConfigFile::IsSupportedGraphicsApi(option.configName)) {
++                apis.push_back(option);
++            }
++        }
++    }
++    const char* runningApi = "?";
++    for (const ApiOption& option : kApis) {
++        if (option.backend == aurora_get_backend()) runningApi = option.label;
++    }
++
++    Option api{"API GRÁFICA", "Con qué API se dibuja el juego. Automática elige la mejor para tu equipo.", {}};
++    for (size_t i = 0; i < apis.size(); ++i) {
++        api.choices.emplace_back(apis[i].label);
++        if (RuntimeConfigFile::GraphicsApi("auto") == apis[i].configName) api.value = static_cast<int>(i);
++    }
++    Option display{"PANTALLA", "Ventana, ventana sin bordes o pantalla completa.",
++                   {"Ventana", "Sin bordes", "Pantalla completa"}};
++    for (size_t i = 0; i < kDisplayModes.size(); ++i) {
++        if (RuntimeConfigFile::DisplayMode("windowed") == kDisplayModes[i]) display.value = static_cast<int>(i);
++    }
++    Option resolution{"RESOLUCIÓN INTERNA",
++                      "Resolución a la que se dibuja el juego. 1x es la de Wii; más alta es más nítida y más "
++                      "exigente para la GPU.",
++                      {"1x (Wii)", "1.5x", "2x (720p)", "3x (1080p)", "4x (1440p)", "Según la ventana"}};
++    const float currentResolution = RuntimeConfigFile::ResolutionMultiplier(1.0f);
++    for (size_t i = 0; i < kResolutions.size(); ++i) {
++        if (kResolutions[i] == currentResolution) resolution.value = static_cast<int>(i);
++    }
++    Option aspect{"FORZAR 16:9", "Dibuja el juego en panorámico aunque la consola esté en 4:3.", YesNo(),
++                  RuntimeConfigFile::ForceAspect169Enabled() ? 1 : 0};
++    Option fps{"MOSTRAR FPS", "Contador de fotogramas por segundo en una esquina.", YesNo(),
++               RuntimeConfigFile::ShowFps(true) ? 1 : 0};
++    Option volume{"VOLUMEN", "Volumen general del juego.", {}};
++    for (int v = 0; v <= 100; v += 10) volume.choices.push_back(std::to_string(v) + "%");
++    volume.value = std::clamp(static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 10.0f)), 0, 10);
++    Option mute{"SILENCIAR", "Silencia todo el audio del juego.", YesNo(), RuntimeConfigFile::AudioMuted(false) ? 1 : 0};
++    Option wiimote{"WII REMOTE", "Usar Wii Remotes reales por Bluetooth. Déjalo en No si solo usas mando o teclado.",
++                   YesNo(), RuntimeConfigFile::WiiRemotesEnabled(true) ? 1 : 0};
++    Option launcherOption{"MOSTRAR AL INICIAR",
++                          "Muestra esta pantalla al abrir el juego. Se puede volver a activar en F10.", YesNo(), 1,
++                          false};
++
++    std::vector<Tab> tabs{
++        {"VIDEO", {api, display, resolution, aspect, fps}},
++        {"AUDIO", {volume, mute}},
++        {"CONTROLES", {wiimote},
++         "El mando (PS5 con DS4Windows, Xbox...) se usa como mando de GameCube.\n\n"
++         "Teclado:\n  J / K / L / I   A / B / X / Y\n  Enter   Start\n  U   Z\n  Q / E   L / R\n"
++         "  WASD   stick\n  T F G H   stick C\n  Flechas   cruceta\n\nF10 durante la partida para reasignar."},
++        {"INTERFAZ", {launcherOption}},
++    };
++    auto option = [&](int tab, int index) -> Option& { return tabs[static_cast<size_t>(tab)].options[static_cast<size_t>(index)]; };
++
++    bool restart = false;
++    auto apply = [&](int tab, int index) {
++        const Option& o = option(tab, index);
++        const std::string label = o.label;
++        if (label == api.label) RuntimeConfigFile::SetGraphicsApi(apis[static_cast<size_t>(o.value)].configName);
++        if (label == display.label) RuntimeConfigFile::SetDisplayMode(kDisplayModes[static_cast<size_t>(o.value)]);
++        if (label == resolution.label) RuntimeConfigFile::SetResolutionMultiplier(kResolutions[static_cast<size_t>(o.value)]);
++        if (label == aspect.label) RuntimeConfigFile::SetForceAspect169(o.value != 0);
++        if (label == fps.label) RuntimeConfigFile::SetShowFps(o.value != 0);
++        if (label == volume.label) RuntimeConfigFile::SetAudioVolume(static_cast<float>(o.value) / 10.0f);
++        if (label == mute.label) RuntimeConfigFile::SetAudioMuted(o.value != 0);
++        if (label == wiimote.label) RuntimeConfigFile::SetWiiRemotesEnabled(o.value != 0);
++        if (label == launcherOption.label) RuntimeConfigFile::SetLauncherOnStartup(o.value != 0);
++        restart = restart || o.restart;
++    };
++    auto change = [&](int tab, int index, int delta) {
++        Option& o = option(tab, index);
++        const int n = static_cast<int>(o.choices.size());
++        o.value = ((o.value + delta) % n + n) % n;
++        apply(tab, index);
++    };
++
++    bool discReady = false;
++    const std::string gameLine = GameStatusLine(discReady);
++    LoadFonts();
++
++    enum class Choice { None, Play, Quit } choice = Choice::None;
++    // WIICOMPILED_LAUNCHER_SELECT=<api config name>: pick that API and press Play (scripted tests of
++    // the save-and-relaunch path; the relaunched copy skips the launcher).
++    if (const char* select = std::getenv("WIICOMPILED_LAUNCHER_SELECT"); select != nullptr && *select != '\0') {
++        for (size_t i = 0; i < apis.size(); ++i) {
++            if (std::strcmp(apis[i].configName, select) == 0 && option(0, 0).value != static_cast<int>(i)) {
++                option(0, 0).value = static_cast<int>(i);
++                apply(0, 0);
++            }
++        }
++        choice = Choice::Play;
++    }
++    // WIICOMPILED_LAUNCHER_PAGE=settings opens the settings panel (screenshots).
++    const char* page = std::getenv("WIICOMPILED_LAUNCHER_PAGE");
++    bool settingsOpen = page != nullptr && std::strcmp(page, "settings") == 0;
++    const char* unfocused = std::getenv("WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT");
++    const bool unfocusedInput = unfocused != nullptr && std::strcmp(unfocused, "1") == 0;
++
++    constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
++    int menu = 0;
++    int tab = 0;
++    int row = 0;
++    using Clock = std::chrono::steady_clock;
++    const auto start = Clock::now();
++    auto nextFrame = start;
++    while (choice == Choice::None) {
++        UpdateAuroraAndProcessEvents();  // exits the process on window close
++        if (!BeginAuroraFrame()) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(5));
++            continue;
++        }
++        aurora_wait_for_frame_worker();
++        g_padEnabled = SDL_GetKeyboardFocus() != nullptr;
++        g_keyboardEnabled = g_padEnabled || unfocusedInput;
++
++        const ImVec2 size = ImGui::GetMainViewport()->Size;
++        const float w = size.x;
++        const float h = size.y;
++        const float u = std::min(h, w * 0.75f) / 720.0f;  // layout unit: 1 at 720p
++        const float t = std::chrono::duration<float>(Clock::now() - start).count();
++        ImDrawList* dl = ImGui::GetBackgroundDrawList();
++        DrawBackground(dl, w, h, u, t, g_title);
++        const bool click = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
++
++        // Title.
++        const float cx = w * 0.5f;
++        float ty = h * 0.11f;
++        LogoTextCentered(dl, g_title, 34 * u, cx - 150 * u, ty, Rgba(110, 170, 255), Rgba(24, 70, 180), "MLB");
++        ty += 30 * u;
++        const ImVec2 ts = LogoTextCentered(dl, g_title, 84 * u, cx, ty, Rgba(255, 110, 96), Rgba(196, 18, 30),
++                                           "POWER PROS");
++        LogoText(dl, g_title, 46 * u, ImVec2(cx + ts.x * 0.5f - 130 * u, ty + 84 * u), Rgba(255, 96, 70),
++                 Rgba(200, 16, 20), "2008", Rgba(255, 224, 70));
++
++        // Main menu: three glossy pills in a row.
++        struct Item {
++            const char* label;
++            ImU32 top, bottom, rim;
++            const char* line1;
++            const char* line2;
++        };
++        const std::array<Item, 3> items{{
++            {"JUGAR", Rgba(255, 206, 96), Rgba(240, 112, 18), Rgba(150, 50, 0), "¡A jugar! Arranca MLB Power Pros 2008.",
++             nullptr},
++            {"AJUSTES", Rgba(160, 244, 120), Rgba(34, 164, 58), Rgba(10, 90, 30),
++             "Cambia la API gráfica, la pantalla, el audio y los controles.", "Los cambios se guardan al momento."},
++            {"SALIR", Rgba(244, 160, 244), Rgba(168, 64, 200), Rgba(90, 20, 120), "Cierra el juego.", nullptr},
++        }};
++        const float pillW = 250 * u;
++        const float pillH = 88 * u;
++        const float gap = 34 * u;
++        const float rowX = cx - (pillW * 3 + gap * 2) * 0.5f;
++        const float rowY = h * 0.47f;
++        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
++            const Item& item = items[static_cast<size_t>(i)];
++            const bool selected = menu == i && !settingsOpen;
++            const float grow = selected ? 1.10f : 1.0f;
++            const float bob = selected ? std::sin(t * 4.0f) * 3.0f * u : 0.0f;
++            const ImVec2 center(rowX + pillW * 0.5f + static_cast<float>(i) * (pillW + gap), rowY + pillH * 0.5f + bob);
++            const ImVec2 a(center.x - pillW * 0.5f * grow, center.y - pillH * 0.5f * grow);
++            const ImVec2 b(center.x + pillW * 0.5f * grow, center.y + pillH * 0.5f * grow);
++            if (!settingsOpen && MouseMoved() && Hovered(a, b)) menu = i;
++            if (!settingsOpen && click && Hovered(a, b)) {
++                menu = i;
++                if (i == 0) choice = Choice::Play;
++                if (i == 1) settingsOpen = true, row = 0;
++                if (i == 2) choice = Choice::Quit;
++            }
++            if (selected) {
++                const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
++                const float e = (10 + 4 * pulse) * u;
++                dl->AddRectFilled(ImVec2(a.x - e, a.y - e), ImVec2(b.x + e, b.y + e),
++                                  Rgba(255, 244, 140, static_cast<int>(140 + 70 * pulse)), (b.y - a.y) * 0.5f + e);
++            }
++            Pill(dl, a, b, item.top, item.bottom, u, selected ? Rgba(255, 250, 200) : IM_COL32_WHITE);
++            LogoTextCentered(dl, g_title, 38 * u * grow, center.x, center.y - 24 * u * grow, Rgba(255, 255, 255),
++                             Rgba(255, 240, 190), item.label, item.rim, Rgba(255, 255, 255, 0));
++        }
++
++        // Info box.
++        const ImVec2 ia(w * 0.06f, h * 0.68f);
++        const ImVec2 ib(w * 0.94f, h * 0.88f);
++        dl->AddRectFilled(ImVec2(ia.x, ia.y + 6 * u), ImVec2(ib.x, ib.y + 6 * u), Rgba(0, 20, 70, 110), 16 * u);
++        dl->AddRectFilled(ia, ib, IM_COL32_WHITE, 16 * u);
++        const int infoStart = dl->VtxBuffer.Size;
++        dl->AddRectFilled(ImVec2(ia.x + 4 * u, ia.y + 4 * u), ImVec2(ib.x - 4 * u, ib.y - 4 * u), IM_COL32_WHITE,
++                          13 * u);
++        Shade(dl, infoStart, ia.y, ib.y, Rgba(40, 120, 220), Rgba(14, 58, 150));
++        dl->AddRect(ImVec2(ia.x + 9 * u, ia.y + 9 * u), ImVec2(ib.x - 9 * u, ib.y - 9 * u), Rgba(150, 210, 255, 120),
++                    10 * u, 0, 2 * u);
++        const Item& info = items[static_cast<size_t>(menu)];
++        const float ix = ia.x + 32 * u;
++        ShadowedText(dl, g_text, 28 * u, ImVec2(ix, ia.y + 24 * u), IM_COL32_WHITE, info.line1);
++        if (menu == 0) {
++            if (discReady) {
++                DrawCheck(dl, ImVec2(ix, ia.y + 72 * u), 20 * u, Rgba(150, 255, 120));
++                ShadowedText(dl, g_text, 26 * u, ImVec2(ix + 30 * u, ia.y + 66 * u), IM_COL32_WHITE, "Disco listo.");
++                ShadowedText(dl, g_text, 22 * u, ImVec2(ix + 190 * u, ia.y + 69 * u), Rgba(190, 225, 255),
++                             gameLine.c_str());
++            } else {
++                ShadowedText(dl, g_text, 26 * u, ImVec2(ix, ia.y + 66 * u), Rgba(255, 170, 150), gameLine.c_str());
++            }
++        } else if (info.line2 != nullptr) {
++            ShadowedText(dl, g_text, 26 * u, ImVec2(ix, ia.y + 66 * u), IM_COL32_WHITE, info.line2);
++        }
++        const std::string version = std::string("WiiCompiled · ") + runningApi;
++        const ImVec2 vs = TextSize(g_text, 20 * u, version.c_str());
++        ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - vs.x, ib.y - 40 * u), Rgba(190, 225, 255),
++                     version.c_str());
++        if (restart) {
++            const char* note = "Ajustes cambiados: se aplican al pulsar JUGAR.";
++            const ImVec2 ns = TextSize(g_text, 20 * u, note);
++            ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - ns.x, ia.y + 22 * u), Rgba(255, 224, 120), note);
++        }
++
++        // Button hints.
++        float hx = w * 0.06f;
++        const float hy = h - 50 * u;
++        hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), "A", "Aceptar");
++        hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), "B", "Volver");
++        Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
++
++        if (!settingsOpen) {
++            const int n = static_cast<int>(items.size());
++            if (Up() || Left()) menu = (menu + n - 1) % n;
++            if (Down() || Right()) menu = (menu + 1) % n;
++            if (Accept()) {
++                if (menu == 0) choice = Choice::Play;
++                if (menu == 1) settingsOpen = true, row = 0;
++                if (menu == 2) choice = Choice::Quit;
++            }
++        } else {
++            // Settings panel: tab pills on top, options left, help right.
++            ImDrawList* fg = ImGui::GetForegroundDrawList();
++            const float pw = std::min(w * 0.92f, 1120 * u);
++            const float ph = std::min(h * 0.86f, 620 * u);
++            const ImVec2 p0((w - pw) * 0.5f, (h - ph) * 0.5f - 10 * u);
++            const ImVec2 p1(p0.x + pw, p0.y + ph);
++            fg->AddRectFilled(ImVec2(0, 0), size, Rgba(0, 16, 60, 120));
++            fg->AddRectFilled(ImVec2(p0.x, p0.y + 8 * u), ImVec2(p1.x, p1.y + 8 * u), Rgba(0, 16, 60, 140), 18 * u);
++            fg->AddRectFilled(p0, p1, IM_COL32_WHITE, 18 * u);
++            const int panelStart = fg->VtxBuffer.Size;
++            fg->AddRectFilled(ImVec2(p0.x + 5 * u, p0.y + 5 * u), ImVec2(p1.x - 5 * u, p1.y - 5 * u), IM_COL32_WHITE,
++                              14 * u);
++            Shade(fg, panelStart, p0.y, p1.y, Rgba(34, 110, 214, 250), Rgba(12, 50, 140, 250));
++
++            // Tabs.
++            const float tabH = 46 * u;
++            const float tabY = p0.y + 20 * u;
++            float tx = p0.x + 24 * u;
++            for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
++                const float fs = 21 * u;
++                const ImVec2 tz = TextSize(g_bold, fs, tabs[i].name);
++                const ImVec2 a(tx, tabY);
++                const ImVec2 b(tx + tz.x + 44 * u, tabY + tabH);
++                if (click && Hovered(a, b)) tab = i, row = 0;
++                if (tab == i) {
++                    Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
++                } else {
++                    fg->AddRectFilled(a, b, Rgba(8, 40, 120, 200), tabH * 0.5f);
++                    fg->AddRect(a, b, Rgba(140, 200, 255, 120), tabH * 0.5f, 0, 2 * u);
++                }
++                Text(fg, g_bold, fs, ImVec2(a.x + 22 * u, a.y + (tabH - fs) * 0.5f),
++                     tab == i ? IM_COL32_WHITE : Rgba(170, 210, 255), tabs[i].name);
++                tx = b.x + 14 * u;
++            }
++            const ImVec2 xc(p1.x - 44 * u, tabY + tabH * 0.5f);
++            const float xr = 20 * u;
++            const bool xHover = Hovered(ImVec2(xc.x - xr, xc.y - xr), ImVec2(xc.x + xr, xc.y + xr));
++            fg->AddCircleFilled(xc, xr + 3 * u, IM_COL32_WHITE, 32);
++            fg->AddCircleFilled(xc, xr, xHover ? Rgba(250, 80, 80) : Rgba(220, 50, 60), 32);
++            const float xs = 8 * u;
++            fg->AddLine(ImVec2(xc.x - xs, xc.y - xs), ImVec2(xc.x + xs, xc.y + xs), IM_COL32_WHITE, 3.5f * u);
++            fg->AddLine(ImVec2(xc.x - xs, xc.y + xs), ImVec2(xc.x + xs, xc.y - xs), IM_COL32_WHITE, 3.5f * u);
++            const float top = tabY + tabH + 18 * u;
++            fg->AddLine(ImVec2(p0.x + 20 * u, top), ImVec2(p1.x - 20 * u, top), Rgba(160, 215, 255, 120), 2 * u);
++            const float split = p0.x + pw * 0.48f;
++            fg->AddLine(ImVec2(split, top + 14 * u), ImVec2(split, p1.y - 60 * u), Rgba(160, 215, 255, 90), 2 * u);
++
++            // Options.
++            Tab& current = tabs[static_cast<size_t>(tab)];
++            const int count = static_cast<int>(current.options.size());
++            row = std::clamp(row, 0, count - 1);
++            const float rowH = 48 * u;
++            for (int i = 0; i < count; ++i) {
++                Option& o = current.options[static_cast<size_t>(i)];
++                const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i) * (rowH + 12 * u));
++                const ImVec2 b(split - 26 * u, a.y + rowH);
++                if (MouseMoved() && Hovered(a, b)) row = i;
++                if (Hovered(a, b) && click) row = i, change(tab, i, 1);
++                if (Hovered(a, b) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
++                const bool selected = row == i;
++                if (selected) {
++                    Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
++                } else {
++                    fg->AddRectFilled(a, b, Rgba(8, 40, 120, 210), rowH * 0.5f);
++                    fg->AddRect(a, b, Rgba(140, 200, 255, 130), rowH * 0.5f, 0, 2 * u);
++                }
++                const float fs = 20 * u;
++                ShadowedText(fg, g_bold, fs, ImVec2(a.x + 24 * u, a.y + (rowH - fs) * 0.5f), IM_COL32_WHITE, o.label);
++                const std::string& value = o.choices[static_cast<size_t>(o.value)];
++                const float vsz = 21 * u;
++                const float vw = TextSize(g_text, vsz, value.c_str()).x;
++                const float vx = b.x - 34 * u - vw;
++                ShadowedText(fg, g_text, vsz, ImVec2(vx, a.y + (rowH - vsz) * 0.5f), IM_COL32_WHITE, value.c_str());
++                if (selected) {  // left / right arrows
++                    const float cy = a.y + rowH * 0.5f;
++                    const float s = 6 * u;
++                    fg->AddTriangleFilled(ImVec2(vx - 16 * u, cy), ImVec2(vx - 16 * u + s, cy - s),
++                                          ImVec2(vx - 16 * u + s, cy + s), IM_COL32_WHITE);
++                    fg->AddTriangleFilled(ImVec2(b.x - 16 * u, cy), ImVec2(b.x - 16 * u - s, cy - s),
++                                          ImVec2(b.x - 16 * u - s, cy + s), IM_COL32_WHITE);
++                }
++            }
++            // Help.
++            const float hx2 = split + 30 * u;
++            const float wrap = p1.x - 34 * u - hx2;
++            float hy2 = top + 26 * u;
++            const Option& focused = current.options[static_cast<size_t>(row)];
++            ShadowedText(fg, g_text, 23 * u, ImVec2(hx2, hy2), IM_COL32_WHITE, focused.help, wrap);
++            hy2 += g_text->CalcTextSizeA(23 * u, FLT_MAX, wrap, focused.help).y + 20 * u;
++            Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(255, 224, 120),
++                 focused.restart ? "Se aplica al pulsar JUGAR (el juego se reinicia solo)." : "Se aplica al momento.",
++                 wrap);
++            if (current.footer != nullptr) {
++                hy2 += 48 * u;
++                Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(210, 232, 255), current.footer, wrap);
++            }
++            float kx = p0.x + 30 * u;
++            const float ky = p1.y - 48 * u;
++            kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(30, 90, 200), "+", "Elegir / cambiar");
++            kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "Q", "");
++            kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "E", "Pestaña");
++            Hint(fg, g_bold, g_text, kx, ky, u, Rgba(220, 50, 60), "B", "Volver");
++
++            if (Up()) row = (row + count - 1) % count;
++            if (Down()) row = (row + 1) % count;
++            if (Left()) change(tab, row, -1);
++            if (Right() || Accept()) change(tab, row, 1);
++            const int tabCount = static_cast<int>(tabs.size());
++            if (Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1})) tab = (tab + tabCount - 1) % tabCount, row = 0;
++            if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1})) tab = (tab + 1) % tabCount, row = 0;
++            if (Back() || (xHover && click) || (click && !Hovered(p0, p1))) {
++                settingsOpen = false;
++            }
++        }
++
++        aurora_set_present_schedule(0, 0);
++        aurora_end_frame();
++        nextFrame += std::chrono::microseconds(16667);
++        std::this_thread::sleep_until(nextFrame);
++        if (Clock::now() > nextFrame + std::chrono::milliseconds(100)) nextFrame = Clock::now();
++    }
++
++    if (choice == Choice::Quit) {
++        return Result::Quit;
++    }
++    if (!restart) {
++        return Result::Play;
++    }
++    RT_LOG(RT_TAG_RUNTIME) << "launcher: settings changed (graphics_api="
++                           << apis[static_cast<size_t>(option(0, 0).value)].configName << "); relaunching" << std::endl;
++    return Result::Relaunch;
++}
++
++} // namespace launcher
+diff --git a/runtime/src/main.cpp b/runtime/src/main.cpp
+index 1597d20..6707fc9 100644
+--- a/runtime/src/main.cpp
++++ b/runtime/src/main.cpp
+@@ -67,6 +67,7 @@
+ #include "discord_presence.h"
+ #include "fiber_manager.h"
+ #include "hle_stubs.h"
++#include "launcher.h"
+ #include "runtime_config.h"
+ #include "runtime_log.h"
+ #include "runtime_product.h"
+@@ -1444,6 +1445,17 @@ int RuntimeMain(int argc, char** argv) {
+             RT_LOG(RT_TAG_RUNTIME) << "graphics backend: " << backendDisplayName(auroraInfo.backend)
+                       << std::endl;
+         }
++        // Pre-boot launcher (graphics API, display). A relaunch starts only after the renderer and
++        // the transcript are down, so the new process inherits the original standard handles.
++        if (const launcher::Result choice = launcher::Run(argc, argv); choice != launcher::Result::Play) {
++            aurora_shutdown();
++            ShutdownProcessTranscript();
++            if (choice == launcher::Result::Relaunch && !launcher::Relaunch()) {
++                std::cerr << "launcher: relaunch failed" << std::endl;
++                return 1;
++            }
++            return 0;
++        }
+         aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
+         GxGuestWrite::InstallAuroraHooks();
+         UpdateMkwDynamicAspectSurface(auroraInfo.windowSize.native_fb_width,
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index 7ce925f..a609e50 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -1150,6 +1150,10 @@ void DrawGraphicsSettings() {
+     if (ImGui::Checkbox("Show FPS", &g_showFps)) {
+         RuntimeConfigFile::SetShowFps(g_showFps);
+     }
++    static bool launcherOnStartup = RuntimeConfigFile::LauncherOnStartup(true);
++    if (ImGui::Checkbox("Show launcher at startup", &launcherOnStartup)) {
++        RuntimeConfigFile::SetLauncherOnStartup(launcherOnStartup);
++    }
+     ImGui::Separator();
+     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+ }

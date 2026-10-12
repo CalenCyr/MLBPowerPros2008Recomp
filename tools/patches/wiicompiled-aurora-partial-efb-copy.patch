@@ -1,0 +1,31 @@
+diff --git a/aurora-main/lib/gx/gx.cpp b/aurora-main/lib/gx/gx.cpp
+index 15952a6..56e8dd7 100644
+--- a/aurora-main/lib/gx/gx.cpp
++++ b/aurora-main/lib/gx/gx.cpp
+@@ -1256,6 +1256,15 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
+     mark_copy_texture_sampled(obj.data, exact->second);
+     return &exact->second;
+   }
++  // Hardware has no texture size check: a texobj taller than the EFB copy at the same address
++  // (MLB copies 512x480 and samples it as 512x512) reads the copy's rows first. Same width and
++  // format keep the tiled row layout identical, so the copy covers the texobj's top rows.
++  if (exact != g_gxState.copyTextures.end() && exact->second && exact->second.width == obj.width() &&
++      exact->second.height < obj.height() &&
++      copy_texture_format_compatible(exact->second.format, obj.format())) {
++    mark_copy_texture_sampled(obj.data, exact->second);
++    return &exact->second;
++  }
+   // A guest allocation can be recycled while an old GPU-only EFB copy still exists.
+   return nullptr;
+ }
+@@ -1340,6 +1349,10 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
+       }
+     } else if (copyRef != nullptr) {
+       handle = copyRef->handle;
++      // Normalize sampling to the copy's real height so texel row n stays row n of the copy.
++      if (copyRef->height < obj.height()) {
++        obj.mHeight = copyRef->height;
++      }
+     } else if (obj.data != nullptr) {
+       handle = resolve_static_texture(obj);
+     }

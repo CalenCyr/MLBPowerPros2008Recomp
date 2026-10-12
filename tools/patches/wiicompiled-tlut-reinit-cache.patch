@@ -1,0 +1,32 @@
+diff --git a/runtime/src/hle/gx/gx_objects.cpp b/runtime/src/hle/gx/gx_objects.cpp
+index ce4f368..ec98605 100644
+--- a/runtime/src/hle/gx/gx_objects.cpp
++++ b/runtime/src/hle/gx/gx_objects.cpp
+@@ -43,6 +43,18 @@ struct HleTlutObj {
+         }
+     }
+ 
++    // Re-running GXInitTlutObj on the same guest object replaces it without GXDestroyTlutObj:
++    // aurora's TLUT ids are content identities shared by every init of the same palette, so a
++    // destroy would evict the conversions the re-init is about to reuse (MLB re-inits per draw).
++    void Reset() {
++        if (storageLive) {
++            std::destroy_at(HostObj());
++            std::memset(&storage, 0, sizeof(storage));
++            storageLive = false;
++            constructed = false;
++        }
++    }
++
+     void Destroy() {
+         if (storageLive) {
+             GXDestroyTlutObj(PublicPtr());
+@@ -652,7 +664,7 @@ GXTlutObj* CreateHostTlutObj(uint32_t addr) {
+     if (!slot) {
+         slot = std::make_unique<HleTlutObj>();
+     } else {
+-        slot->Destroy();
++        slot->Reset();
+     }
+     slot->EnsureStorageLive();
+     return slot->PublicPtr();
