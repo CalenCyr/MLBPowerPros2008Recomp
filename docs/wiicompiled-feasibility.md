@@ -584,3 +584,22 @@ No está validado píxel a píxel contra Dolphin.
   - un mod local de prueba con la textura de la correa invertida se ve en el juego con el mod activo;
   - la pantalla MODS activa el mod y lo guarda en `Config.toml`.
 - Guía para quien hace mods: `docs/mods.md`.
+
+## Identidad de Discord y mensajes (12 de octubre de 2026)
+
+- **Parche 23, `wiicompiled-mlb-identity`:** Discord, la cabecera de la configuración nueva y los errores de disco, panic, halt y exit usan `RuntimeProduct::Active().displayName`, cuyo proveedor MLB devuelve `MLB Power Pros 2008`.
+- El perfil `RL8E54` no reutiliza el ID de aplicación de Discord de WiiCompiled. Sin un ID propio, la presencia básica no conecta; el ID heredado también se ignora si una configuración antigua lo guardó explícitamente. Los IDs personalizados y `enabled = false` se conservan.
+- El ejemplo de ruta de disco usa `./DATA`. Las referencias técnicas a las direcciones y funciones originales de Mario Kart, así como las licencias y créditos de WiiCompiled, se mantienen.
+- Comprobaciones: los 23 parches se aplican en orden sobre la revisión fijada; una prueba aislada del runtime verifica la configuración nueva, los IDs por defecto/heredado/personalizado, la desactivación y el contenido JSON de la actividad de Discord. No requiere conectarse a la cuenta del usuario ni jugar una partida.
+- Compilación Release completada. El ejecutable ya no contiene los antiguos mensajes visibles de Mario Kart. Actualizados los seis archivos del runtime en el payload local del Setup y en su ZIP; comprobados su contenido, ausencia de entradas duplicadas e integridad CRC. No se publicó una release ni se probó una conexión real a Discord con un ID propio.
+
+## `project.bin` descifrado (12 de octubre de 2026)
+
+- **Formato:** cabecera (versión 2, sector 0x800, 0x1211 ranuras de hash); registros de 0x1C en 0x6000 (desplazamiento del nombre, sectores, alineación 0x800, bytes); tabla de orden en 0x26000 (registro, sector relativo a 0x3D800, ordenada); nombres en 0x2B000; datos en 0x3D800.
+  - Verificado en las 2.424 entradas: tamaños consecutivos, fin exacto en 0x18390000, 2.356 `PACKWII` y 2 `PACKPS2`.
+  - rea no abre el archivo (formato no soportado). El análisis se hizo con Python y con el código traducido: `func_800431E8` monta `/PROJECT.BIN` (0x80155DD0) llamando a `func_80059E7C`.
+- **`tools/projectbin.py`:** list, extract y build.
+  - `build` sin reemplazos reproduce el archivo byte a byte (mismo SHA-256).
+  - Con `PWM_mdl_uniform_MLB_CHC_00.pack` reemplazado por el de NYY y servido como `mods/<x>/disc/project.bin`, el juego lee el archivo del mod (`WIICOMPILED_DEBUG_DVD`) y los Cubs salen con uniforme de los Yankees en la selección de equipo.
+- **`WIICOMPILED_DEBUG_DVD=1` más `projectbin.py list`:** dicen qué pack carga cada pantalla. Por ejemplo `env_title_logo`, `env_mainmenu`, `PWM_mdl_uniform_MLB_<equipo>_<n>` y `env_teamnameNN`.
+- **Pack de texturas de Dolphin del usuario** (logos y uniformes 2023, 206 PNG): funciona como `textures/` de un mod sin cambios; 32 de sus texturas se usan en la demo.

@@ -13,6 +13,20 @@ Recompilación nativa no oficial de MLB Power Pros 2008 para Wii (USA, `RL8E54`)
 
 Para quien empaqueta una release: `tools/setup/Make-Payload.ps1` arma el paquete (ver su cabecera) y comprueba que no contenga nada del juego; `tools/setup/LocalBuild.ps1` es lo que ejecuta el Setup en la PC del jugador.
 
+## Discord
+
+La presencia usa el nombre **MLB Power Pros 2008**. Hace falta un ID de aplicación de Discord propio para este juego; no se incluye uno y se ignora el ID heredado de WiiCompiled para evitar anunciar otra aplicación. Hasta configurar ese ID, Rich Presence queda inactivo.
+
+En `UserData/Config.toml`, junto a los demás ajustes de la instalación:
+
+```toml
+[discord]
+enabled = true
+client_id = "" # Sustituir por el ID propio de la aplicación de Discord.
+```
+
+Reinicia el juego después de cambiarlo. Los créditos de WiiCompiled se conservan.
+
 ## Historial de desarrollo
 
 Actualización del 10 de octubre, **31 parches**: el DOL traducido con el **backend LLVM** de DolRecomp (LLVM 20.1.8, `--native-abi off`, parche `dolrecomp-llvm-gekko-single`), enlazado con los mismos 478 objetos REL MSVC, registró **+15,83% y +17,16% de avance** en dos parejas del primer out (32,7 → 38,1 fotogramas/s; ~65% de velocidad normal). La auditoría lockstep, con la nueva alineación por ciclos, encontró y permitió corregir un error real (conversiones `stfs`/`lfs`/`psq_st` no exactas). Ahora deja **1 informe en ~3.060 comparaciones**: un búfer de MEM2 escrito por el HLE de audio (463 de 463 bytes intactos en la repetición). La DLL LLVM sigue siendo **opcional y no validada del todo**. Detalles en `docs/llvm-dol-report.md`.
