@@ -140,6 +140,8 @@ foreach ($name in 'dxcompiler.dll', 'dxil.dll', 'libc++.dll', 'libpng16.dll', 'l
     $file = Join-Path $build $name
     if (Test-Path $file) { Copy-Item $file $game -Force }
 }
+$art = Join-Path $workspace 'launcher'  # MoonInning launcher backdrops (optional)
+if (Test-Path $art) { Copy-Item $art $game -Recurse -Force }
 foreach ($name in 'config', 'wii_bootstrap') {
     $dir = Join-Path $build $name
     if (Test-Path $dir) { Copy-Item $dir $game -Recurse -Force }

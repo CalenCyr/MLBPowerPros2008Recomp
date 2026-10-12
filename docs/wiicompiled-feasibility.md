@@ -543,3 +543,24 @@ No está validado píxel a píxel contra Dolphin.
 - Publicar la release (zip de unos 400 MB comprimido; tamaño por medir).
 - Generar el paquete desde un clon limpio en un solo paso. Hoy `-Source` apunta a un árbol ya parcheado, reasignado y con los artefactos de Wiicompiled.
 - Linux y Switch.
+
+## Launcher con el arte de MoonInning (12 de octubre de 2026)
+
+- **Origen del arte:** el UI pack de MoonInning, aportado por el usuario. Es arte original, no contenido del juego. Trae dos mockups planos de 1672x941 con textos y estados de ejemplo ya dibujados.
+- **Preparación:** `tools/launcher/prepare_mooninning_art.py` borra esas partes y genera `assets/launcher/main.png` y `settings.png`:
+  - en el menú, las chispas de "seleccionado" junto a JUGAR, con una difusión limitada a sus píxeles amarillos, y el texto de la caja de info;
+  - en ajustes, las pestañas, las filas y la ayuda, interpolando desde los bordes suavizados.
+- **Lo que dibuja `launcher.cpp` encima:** si encuentra `launcher/*.png` junto al exe, ajusta el arte a la ventana y rellena las barras con el mismo arte ampliado y oscurecido.
+  - **Botón elegido:** se redibuja ampliado y con brillo que pulsa, con las chispas a su lado.
+  - **Resto de botones:** atenuados. MODS queda deshabilitado y su línea dice "Próximamente".
+  - **Caja de info:** muestra el estado real (disco, ID, API en uso, aviso de reinicio).
+  - **Ajustes:** pestañas, filas, valores y ayuda se dibujan con los colores del mockup; el botón de cerrar es el del arte.
+  - **Sin las PNG:** se mantiene el estilo procedural de antes (por ejemplo en Switch).
+- **Instalación de las PNG:**
+  - `wiicompiled-build.ps1` las copia a `build/launcher`;
+  - `Make-Payload.ps1` las mete en el paquete y `LocalBuild.ps1` las instala en `Game/launcher`.
+  - `check_no_game_data.py` solo admite binarios en `assets/launcher/*.png`, de hasta 4 MiB.
+- **Verificado con teclas enviadas solo a la ventana:**
+  - las chispas siguen a la selección y MODS muestra "Próximamente";
+  - la entrada a ajustes y el cambio de pestaña funcionan;
+  - las barras quedan rellenas en una ventana de 1920x1009.

@@ -75,6 +75,7 @@ Write-Host 'Workspace...'
 Copy-Item "$root\tools\setup\LocalBuild.ps1" $workspace
 Copy-Item "$Source\Launcher\NativeBuildFlags.ps1" $workspace
 Copy-Item "$root\config\wiicompiled\rl8e54.yml", "$root\config\wiicompiled\rl8e54-functions.map" "$workspace\config"
+Copy-Tree "$root\assets\launcher" "$workspace\launcher"
 Copy-Tree "$Source\runtime" "$workspace\src\runtime" @('build', 'out', '.git')
 Copy-Tree "$Source\aurora-main" "$workspace\src\aurora-main" @('build', 'out', '.git')
 Copy-Tree $dependencies "$workspace\Dependencies"

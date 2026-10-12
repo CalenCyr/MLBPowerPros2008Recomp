@@ -269,10 +269,10 @@ index 2204f70..8eed306 100644
  }
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
 new file mode 100644
-index 0000000..6921e9a
+index 0000000..f774c53
 --- /dev/null
 +++ b/runtime/src/launcher.cpp
-@@ -0,0 +1,568 @@
+@@ -0,0 +1,781 @@
 +// Pre-boot launcher in the style of the game's own menus: picks the graphics API and other settings
 +// before the game starts. Drawn entirely with ImGui draw lists (procedural backdrop, glossy pills,
 +// system fonts); no game assets are used. Everything it changes is read once at start-up, so a
@@ -289,7 +289,10 @@ index 0000000..6921e9a
 +#include <aurora/aurora.h>
 +#include <imgui.h>
 +#include <imgui_internal.h>
++#include <SDL3/SDL_filesystem.h>
 +#include <SDL3/SDL_keyboard.h>
++#include <SDL3/SDL_surface.h>
++#include <aurora/imgui.h>
 +
 +#include <algorithm>
 +#include <array>
@@ -403,6 +406,59 @@ index 0000000..6921e9a
 +bool MouseMoved() {
 +    const ImVec2 d = ImGui::GetIO().MouseDelta;
 +    return d.x != 0.0f || d.y != 0.0f;
++}
++
++// ---- MoonInning art ---------------------------------------------------------------------------
++// Optional backdrops next to the executable: launcher/main.png and launcher/settings.png, made from
++// the MoonInning UI pack by tools/launcher/prepare_mooninning_art.py (original art, not game
++// content). Without them the launcher keeps its procedural look. Rectangles are image pixels.
++constexpr float kArtW = 1672.0f;
++constexpr float kArtH = 941.0f;
++struct ArtRect {
++    float x0, y0, x1, y1;
++};
++constexpr std::array<ArtRect, 4> kArtButtons{{
++    {97, 335, 632, 421}, {98, 437, 626, 515}, {98, 535, 626, 612}, {98, 633, 626, 711}}};  // JUGAR AJUSTES MODS SALIR
++constexpr std::array<ArtRect, 4> kArtTabs{{
++    {120, 125, 300, 195}, {312, 125, 490, 195}, {503, 125, 727, 195}, {740, 125, 940, 195}}};
++constexpr ArtRect kArtClose{1466, 120, 1548, 200};
++constexpr ArtRect kArtPanel{95, 95, 1580, 865};
++// The mockup's three "selected" sparks, relative to the selected button's top-left corner.
++constexpr std::array<std::array<float, 4>, 3> kArtSparks{{{-27, -30, -12, -9}, {-60, -13, -31, 3}, {-67, 27, -36, 29}}};
++
++struct Art {
++    ImTextureID main = 0;
++    ImTextureID settings = 0;
++    bool ok = false;
++};
++
++ImTextureID LoadTexture(const std::filesystem::path& path) {
++    const std::u8string name = path.u8string();
++    SDL_Surface* loaded = SDL_LoadPNG(reinterpret_cast<const char*>(name.c_str()));
++    if (loaded == nullptr) return 0;
++    SDL_Surface* rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
++    SDL_DestroySurface(loaded);
++    if (rgba == nullptr) return 0;
++    std::vector<unsigned char> pixels(static_cast<size_t>(rgba->w) * static_cast<size_t>(rgba->h) * 4);
++    for (int y = 0; y < rgba->h; ++y) {
++        std::memcpy(pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(rgba->w) * 4,
++                    static_cast<const unsigned char*>(rgba->pixels) + static_cast<size_t>(y) * static_cast<size_t>(rgba->pitch),
++                    static_cast<size_t>(rgba->w) * 4);
++    }
++    const ImTextureID texture = aurora_imgui_add_texture(static_cast<uint32_t>(rgba->w), static_cast<uint32_t>(rgba->h), pixels.data());
++    SDL_DestroySurface(rgba);
++    return texture;
++}
++
++Art LoadArt() {
++    Art art;
++    const char* base = SDL_GetBasePath();
++    if (base == nullptr) return art;
++    const std::filesystem::path dir = std::filesystem::path(reinterpret_cast<const char8_t*>(base)) / "launcher";
++    art.main = LoadTexture(dir / "main.png");
++    art.settings = LoadTexture(dir / "settings.png");
++    art.ok = art.main != 0 && art.settings != 0;
++    return art;
 +}
 +
 +// ---- Settings model ----------------------------------------------------------------------------
@@ -554,6 +610,7 @@ index 0000000..6921e9a
 +    bool discReady = false;
 +    const std::string gameLine = GameStatusLine(discReady);
 +    LoadFonts();
++    const Art art = LoadArt();
 +
 +    enum class Choice { None, Play, Quit } choice = Choice::None;
 +    // WIICOMPILED_LAUNCHER_SELECT=<api config name>: pick that API and press Play (scripted tests of
@@ -577,6 +634,17 @@ index 0000000..6921e9a
 +    int menu = 0;
 +    int tab = 0;
 +    int row = 0;
++    auto settingsKeys = [&] {
++        const int count = static_cast<int>(tabs[static_cast<size_t>(tab)].options.size());
++        if (Up()) row = (row + count - 1) % count;
++        if (Down()) row = (row + 1) % count;
++        if (Left()) change(tab, row, -1);
++        if (Right() || Accept()) change(tab, row, 1);
++        const int tabCount = static_cast<int>(tabs.size());
++        if (Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1})) tab = (tab + tabCount - 1) % tabCount, row = 0;
++        if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1})) tab = (tab + 1) % tabCount, row = 0;
++        return Back();
++    };
 +    using Clock = std::chrono::steady_clock;
 +    const auto start = Clock::now();
 +    auto nextFrame = start;
@@ -596,229 +664,374 @@ index 0000000..6921e9a
 +        const float u = std::min(h, w * 0.75f) / 720.0f;  // layout unit: 1 at 720p
 +        const float t = std::chrono::duration<float>(Clock::now() - start).count();
 +        ImDrawList* dl = ImGui::GetBackgroundDrawList();
-+        DrawBackground(dl, w, h, u, t, g_title);
 +        const bool click = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-+
-+        // Title.
-+        const float cx = w * 0.5f;
-+        float ty = h * 0.11f;
-+        LogoTextCentered(dl, g_title, 34 * u, cx - 150 * u, ty, Rgba(110, 170, 255), Rgba(24, 70, 180), "MLB");
-+        ty += 30 * u;
-+        const ImVec2 ts = LogoTextCentered(dl, g_title, 84 * u, cx, ty, Rgba(255, 110, 96), Rgba(196, 18, 30),
-+                                           "POWER PROS");
-+        LogoText(dl, g_title, 46 * u, ImVec2(cx + ts.x * 0.5f - 130 * u, ty + 84 * u), Rgba(255, 96, 70),
-+                 Rgba(200, 16, 20), "2008", Rgba(255, 224, 70));
-+
-+        // Main menu: three glossy pills in a row.
-+        struct Item {
-+            const char* label;
-+            ImU32 top, bottom, rim;
-+            const char* line1;
-+            const char* line2;
-+        };
-+        const std::array<Item, 3> items{{
-+            {"JUGAR", Rgba(255, 206, 96), Rgba(240, 112, 18), Rgba(150, 50, 0), "¡A jugar! Arranca MLB Power Pros 2008.",
-+             nullptr},
-+            {"AJUSTES", Rgba(160, 244, 120), Rgba(34, 164, 58), Rgba(10, 90, 30),
-+             "Cambia la API gráfica, la pantalla, el audio y los controles.", "Los cambios se guardan al momento."},
-+            {"SALIR", Rgba(244, 160, 244), Rgba(168, 64, 200), Rgba(90, 20, 120), "Cierra el juego.", nullptr},
-+        }};
-+        const float pillW = 250 * u;
-+        const float pillH = 88 * u;
-+        const float gap = 34 * u;
-+        const float rowX = cx - (pillW * 3 + gap * 2) * 0.5f;
-+        const float rowY = h * 0.47f;
-+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
-+            const Item& item = items[static_cast<size_t>(i)];
-+            const bool selected = menu == i && !settingsOpen;
-+            const float grow = selected ? 1.10f : 1.0f;
-+            const float bob = selected ? std::sin(t * 4.0f) * 3.0f * u : 0.0f;
-+            const ImVec2 center(rowX + pillW * 0.5f + static_cast<float>(i) * (pillW + gap), rowY + pillH * 0.5f + bob);
-+            const ImVec2 a(center.x - pillW * 0.5f * grow, center.y - pillH * 0.5f * grow);
-+            const ImVec2 b(center.x + pillW * 0.5f * grow, center.y + pillH * 0.5f * grow);
-+            if (!settingsOpen && MouseMoved() && Hovered(a, b)) menu = i;
-+            if (!settingsOpen && click && Hovered(a, b)) {
-+                menu = i;
-+                if (i == 0) choice = Choice::Play;
-+                if (i == 1) settingsOpen = true, row = 0;
-+                if (i == 2) choice = Choice::Quit;
-+            }
-+            if (selected) {
-+                const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
-+                const float e = (10 + 4 * pulse) * u;
-+                dl->AddRectFilled(ImVec2(a.x - e, a.y - e), ImVec2(b.x + e, b.y + e),
-+                                  Rgba(255, 244, 140, static_cast<int>(140 + 70 * pulse)), (b.y - a.y) * 0.5f + e);
-+            }
-+            Pill(dl, a, b, item.top, item.bottom, u, selected ? Rgba(255, 250, 200) : IM_COL32_WHITE);
-+            LogoTextCentered(dl, g_title, 38 * u * grow, center.x, center.y - 24 * u * grow, Rgba(255, 255, 255),
-+                             Rgba(255, 240, 190), item.label, item.rim, Rgba(255, 255, 255, 0));
-+        }
-+
-+        // Info box.
-+        const ImVec2 ia(w * 0.06f, h * 0.68f);
-+        const ImVec2 ib(w * 0.94f, h * 0.88f);
-+        dl->AddRectFilled(ImVec2(ia.x, ia.y + 6 * u), ImVec2(ib.x, ib.y + 6 * u), Rgba(0, 20, 70, 110), 16 * u);
-+        dl->AddRectFilled(ia, ib, IM_COL32_WHITE, 16 * u);
-+        const int infoStart = dl->VtxBuffer.Size;
-+        dl->AddRectFilled(ImVec2(ia.x + 4 * u, ia.y + 4 * u), ImVec2(ib.x - 4 * u, ib.y - 4 * u), IM_COL32_WHITE,
-+                          13 * u);
-+        Shade(dl, infoStart, ia.y, ib.y, Rgba(40, 120, 220), Rgba(14, 58, 150));
-+        dl->AddRect(ImVec2(ia.x + 9 * u, ia.y + 9 * u), ImVec2(ib.x - 9 * u, ib.y - 9 * u), Rgba(150, 210, 255, 120),
-+                    10 * u, 0, 2 * u);
-+        const Item& info = items[static_cast<size_t>(menu)];
-+        const float ix = ia.x + 32 * u;
-+        ShadowedText(dl, g_text, 28 * u, ImVec2(ix, ia.y + 24 * u), IM_COL32_WHITE, info.line1);
-+        if (menu == 0) {
-+            if (discReady) {
-+                DrawCheck(dl, ImVec2(ix, ia.y + 72 * u), 20 * u, Rgba(150, 255, 120));
-+                ShadowedText(dl, g_text, 26 * u, ImVec2(ix + 30 * u, ia.y + 66 * u), IM_COL32_WHITE, "Disco listo.");
-+                ShadowedText(dl, g_text, 22 * u, ImVec2(ix + 190 * u, ia.y + 69 * u), Rgba(190, 225, 255),
-+                             gameLine.c_str());
++        if (art.ok) {
++            // MoonInning art: the backdrops come from launcher/*.png (image pixels, 1672x941, fitted
++            // to the window); everything that changes is drawn on top in the art's own colours.
++            const float s = std::min(w / kArtW, h / kArtH);
++            const ImVec2 o((w - kArtW * s) * 0.5f, (h - kArtH * s) * 0.5f);
++            auto at = [&](float x, float y) { return ImVec2(o.x + x * s, o.y + y * s); };
++            auto hit = [&](const ArtRect& r) { return Hovered(at(r.x0, r.y0), at(r.x1, r.y1)); };
++            // Other window shapes: the same art, scaled to cover the window and darkened, fills the bars.
++            const ImTextureID backdrop = settingsOpen ? art.settings : art.main;
++            const float cover = std::max(w / kArtW, h / kArtH);
++            const ImVec2 co((w - kArtW * cover) * 0.5f, (h - kArtH * cover) * 0.5f);
++            dl->AddImage(backdrop, co, ImVec2(co.x + kArtW * cover, co.y + kArtH * cover), ImVec2(0, 0), ImVec2(1, 1),
++                         Rgba(120, 135, 170));
++            dl->AddImage(backdrop, at(0, 0), at(kArtW, kArtH));
++            if (!settingsOpen) {
++                // Buttons: the selected one is redrawn enlarged with a pulsing glow and sparks; the
++                // others are dimmed. MODS has nothing behind it yet.
++                for (int i = 0; i < static_cast<int>(kArtButtons.size()); ++i) {
++                    const ArtRect& r = kArtButtons[static_cast<size_t>(i)];
++                    if (MouseMoved() && hit(r)) menu = i;
++                    if (click && hit(r)) {
++                        menu = i;
++                        if (i == 0) choice = Choice::Play;
++                        if (i == 1) settingsOpen = true, row = 0;
++                        if (i == 3) choice = Choice::Quit;
++                    }
++                }
++                for (int i = 0; i < static_cast<int>(kArtButtons.size()); ++i) {
++                    const ArtRect& r = kArtButtons[static_cast<size_t>(i)];
++                    const float radius = (r.y1 - r.y0) * 0.5f * s;
++                    if (i != menu) {
++                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(6, 24, 80, i == 2 ? 110 : 45), radius);
++                        continue;
++                    }
++                    const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
++                    const float grow = 1.04f + 0.01f * pulse;
++                    const float bob = std::sin(t * 4.0f) * 2.0f;
++                    const ImVec2 c((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f + bob);
++                    const float hw = (r.x1 - r.x0) * 0.5f * grow;
++                    const float hh = (r.y1 - r.y0) * 0.5f * grow;
++                    const float e = 8.0f + 5.0f * pulse;
++                    dl->AddRectFilled(at(c.x - hw - e, c.y - hh - e), at(c.x + hw + e, c.y + hh + e),
++                                      Rgba(255, 246, 150, static_cast<int>(110 + 80 * pulse)), (hh + e) * s);
++                    dl->AddImageRounded(art.main, at(c.x - hw, c.y - hh),
++                                        at(c.x + hw, c.y + hh), ImVec2(r.x0 / kArtW, r.y0 / kArtH),
++                                        ImVec2(r.x1 / kArtW, r.y1 / kArtH), IM_COL32_WHITE, hh * s);
++                    // The art's yellow "selected" sparks, beside whichever button is selected.
++                    const float k = 1.0f + 0.12f * pulse;
++                    for (const auto& seg : kArtSparks) {
++                        const ImVec2 a = at(r.x0 + seg[0] * k, r.y0 + seg[1] * k + bob);
++                        const ImVec2 b = at(r.x0 + seg[2] * k, r.y0 + seg[3] * k + bob);
++                        dl->AddLine(a, b, IM_COL32_WHITE, 14.0f * s);
++                        dl->AddLine(a, b, Rgba(255, 222, 40), 9.0f * s);
++                    }
++                }
++                // Info box (its baked example text was erased from main.png).
++                const char* lines[] = {"¡A jugar! Arranca MLB Power Pros 2008.",
++                                       "API gráfica, pantalla, resolución, audio y controles.",
++                                       "Próximamente: soporte para mods.", "Cierra el juego."};
++                ShadowedText(dl, g_text, 31 * s, at(100, 777), IM_COL32_WHITE, lines[menu]);
++                if (discReady) {
++                    DrawCheck(dl, at(100, 822), 22 * s, Rgba(120, 230, 110));
++                    const std::string disc = "Disco listo.   |   " + gameLine;
++                    ShadowedText(dl, g_text, 25 * s, at(134, 818), IM_COL32_WHITE, disc.c_str());
++                } else {
++                    ShadowedText(dl, g_text, 25 * s, at(100, 818), Rgba(255, 170, 150), gameLine.c_str());
++                }
++                const std::string version = std::string("WiiCompiled · ") + runningApi;
++                const float vw = TextSize(g_text, 22 * s, version.c_str()).x;
++                ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - vw, at(0, 822).y), Rgba(200, 225, 255),
++                             version.c_str());
++                if (restart) {
++                    const char* note = "Ajustes cambiados: se aplican al pulsar JUGAR.";
++                    const float nw = TextSize(g_text, 22 * s, note).x;
++                    ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - nw, at(0, 782).y), Rgba(255, 224, 110), note);
++                }
++                const int n = static_cast<int>(kArtButtons.size());
++                if (Up() || Left()) menu = (menu + n - 1) % n;
++                if (Down() || Right()) menu = (menu + 1) % n;
++                if (Accept()) {
++                    if (menu == 0) choice = Choice::Play;
++                    if (menu == 1) settingsOpen = true, row = 0;
++                    if (menu == 3) choice = Choice::Quit;
++                }
 +            } else {
-+                ShadowedText(dl, g_text, 26 * u, ImVec2(ix, ia.y + 66 * u), Rgba(255, 170, 150), gameLine.c_str());
-+            }
-+        } else if (info.line2 != nullptr) {
-+            ShadowedText(dl, g_text, 26 * u, ImVec2(ix, ia.y + 66 * u), IM_COL32_WHITE, info.line2);
-+        }
-+        const std::string version = std::string("WiiCompiled · ") + runningApi;
-+        const ImVec2 vs = TextSize(g_text, 20 * u, version.c_str());
-+        ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - vs.x, ib.y - 40 * u), Rgba(190, 225, 255),
-+                     version.c_str());
-+        if (restart) {
-+            const char* note = "Ajustes cambiados: se aplican al pulsar JUGAR.";
-+            const ImVec2 ns = TextSize(g_text, 20 * u, note);
-+            ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - ns.x, ia.y + 22 * u), Rgba(255, 224, 120), note);
-+        }
-+
-+        // Button hints.
-+        float hx = w * 0.06f;
-+        const float hy = h - 50 * u;
-+        hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), "A", "Aceptar");
-+        hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), "B", "Volver");
-+        Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
-+
-+        if (!settingsOpen) {
-+            const int n = static_cast<int>(items.size());
-+            if (Up() || Left()) menu = (menu + n - 1) % n;
-+            if (Down() || Right()) menu = (menu + 1) % n;
-+            if (Accept()) {
-+                if (menu == 0) choice = Choice::Play;
-+                if (menu == 1) settingsOpen = true, row = 0;
-+                if (menu == 2) choice = Choice::Quit;
++                // Settings: tabs, rows and help text are drawn on the erased panel of settings.png.
++                for (int i = 0; i < static_cast<int>(tabs.size()) && i < static_cast<int>(kArtTabs.size()); ++i) {
++                    const ArtRect& r = kArtTabs[static_cast<size_t>(i)];
++                    if (click && hit(r)) tab = i, row = 0;
++                    const float radius = (r.y1 - r.y0) * 0.5f * s;
++                    if (tab == i) {
++                        Pill(dl, at(r.x0, r.y0), at(r.x1, r.y1), Rgba(255, 200, 90), Rgba(242, 118, 18), s);
++                    } else {
++                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(12, 44, 140, 235), radius);
++                        dl->AddRect(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(110, 175, 255, 200), radius, 0, 3.0f * s);
++                    }
++                    const float fs = 30 * s;
++                    const ImVec2 tz = TextSize(g_bold, fs, tabs[i].name);
++                    const ImVec2 c = at((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f);
++                    ShadowedText(dl, g_bold, fs, ImVec2(c.x - tz.x * 0.5f, c.y - tz.y * 0.5f),
++                                 tab == i ? IM_COL32_WHITE : Rgba(190, 220, 255), tabs[i].name);
++                }
++                Tab& current = tabs[static_cast<size_t>(tab)];
++                const int count = static_cast<int>(current.options.size());
++                row = std::clamp(row, 0, count - 1);
++                for (int i = 0; i < count; ++i) {
++                    Option& opt = current.options[static_cast<size_t>(i)];
++                    const ArtRect r{130, 240 + 90.0f * static_cast<float>(i), 820, 312 + 90.0f * static_cast<float>(i)};
++                    if (MouseMoved() && hit(r)) row = i;
++                    if (hit(r) && click) row = i, change(tab, i, 1);
++                    if (hit(r) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
++                    const float radius = (r.y1 - r.y0) * 0.5f * s;
++                    const bool selected = row == i;
++                    if (selected) {
++                        Pill(dl, at(r.x0, r.y0), at(r.x1, r.y1), Rgba(255, 200, 90), Rgba(242, 118, 18), s);
++                    } else {
++                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(10, 36, 120, 235), radius);
++                        dl->AddRect(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(100, 170, 255, 210), radius, 0, 3.0f * s);
++                    }
++                    const float mid = at(0, (r.y0 + r.y1) * 0.5f).y;
++                    const float ls = 27 * s;
++                    ShadowedText(dl, g_bold, ls, ImVec2(at(r.x0 + 42, 0).x, mid - ls * 0.6f), IM_COL32_WHITE, opt.label);
++                    const std::string& value = opt.choices[static_cast<size_t>(opt.value)];
++                    const float vs = 30 * s;
++                    const float vw = TextSize(g_text, vs, value.c_str()).x;
++                    const float vx = at(r.x1 - 50, 0).x - vw;
++                    ShadowedText(dl, g_text, vs, ImVec2(vx, mid - vs * 0.6f), IM_COL32_WHITE, value.c_str());
++                    if (selected) {
++                        const float a = 9 * s;
++                        dl->AddTriangleFilled(ImVec2(vx - 24 * s, mid), ImVec2(vx - 24 * s + a, mid - a * 1.2f),
++                                              ImVec2(vx - 24 * s + a, mid + a * 1.2f), IM_COL32_WHITE);
++                        const float rx = at(r.x1 - 22, 0).x;
++                        dl->AddTriangleFilled(ImVec2(rx, mid), ImVec2(rx - a, mid - a * 1.2f),
++                                              ImVec2(rx - a, mid + a * 1.2f), IM_COL32_WHITE);
++                    }
++                }
++                const Option& focused = current.options[static_cast<size_t>(row)];
++                const float wrap = (1535 - 888) * s;
++                float hy = at(0, 258).y;
++                ShadowedText(dl, g_text, 31 * s, ImVec2(at(888, 0).x, hy), IM_COL32_WHITE, focused.help, wrap);
++                hy += g_text->CalcTextSizeA(31 * s, FLT_MAX, wrap, focused.help).y + 22 * s;
++                ShadowedText(dl, g_text, 28 * s, ImVec2(at(888, 0).x, hy), Rgba(255, 228, 80),
++                             focused.restart ? "El cambio se aplicará al iniciar el juego." : "Se aplica al momento.", wrap);
++                if (current.footer != nullptr) {
++                    hy += 60 * s;
++                    ShadowedText(dl, g_text, 23 * s, ImVec2(at(888, 0).x, hy), Rgba(215, 232, 255), current.footer, wrap);
++                }
++                const bool closeClicked = click && (hit(kArtClose) || !hit(kArtPanel));
++                if (settingsKeys() || closeClicked) settingsOpen = false;
 +            }
 +        } else {
-+            // Settings panel: tab pills on top, options left, help right.
-+            ImDrawList* fg = ImGui::GetForegroundDrawList();
-+            const float pw = std::min(w * 0.92f, 1120 * u);
-+            const float ph = std::min(h * 0.86f, 620 * u);
-+            const ImVec2 p0((w - pw) * 0.5f, (h - ph) * 0.5f - 10 * u);
-+            const ImVec2 p1(p0.x + pw, p0.y + ph);
-+            fg->AddRectFilled(ImVec2(0, 0), size, Rgba(0, 16, 60, 120));
-+            fg->AddRectFilled(ImVec2(p0.x, p0.y + 8 * u), ImVec2(p1.x, p1.y + 8 * u), Rgba(0, 16, 60, 140), 18 * u);
-+            fg->AddRectFilled(p0, p1, IM_COL32_WHITE, 18 * u);
-+            const int panelStart = fg->VtxBuffer.Size;
-+            fg->AddRectFilled(ImVec2(p0.x + 5 * u, p0.y + 5 * u), ImVec2(p1.x - 5 * u, p1.y - 5 * u), IM_COL32_WHITE,
-+                              14 * u);
-+            Shade(fg, panelStart, p0.y, p1.y, Rgba(34, 110, 214, 250), Rgba(12, 50, 140, 250));
++            DrawBackground(dl, w, h, u, t, g_title);
 +
-+            // Tabs.
-+            const float tabH = 46 * u;
-+            const float tabY = p0.y + 20 * u;
-+            float tx = p0.x + 24 * u;
-+            for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
-+                const float fs = 21 * u;
-+                const ImVec2 tz = TextSize(g_bold, fs, tabs[i].name);
-+                const ImVec2 a(tx, tabY);
-+                const ImVec2 b(tx + tz.x + 44 * u, tabY + tabH);
-+                if (click && Hovered(a, b)) tab = i, row = 0;
-+                if (tab == i) {
-+                    Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
-+                } else {
-+                    fg->AddRectFilled(a, b, Rgba(8, 40, 120, 200), tabH * 0.5f);
-+                    fg->AddRect(a, b, Rgba(140, 200, 255, 120), tabH * 0.5f, 0, 2 * u);
++            // Title.
++            const float cx = w * 0.5f;
++            float ty = h * 0.11f;
++            LogoTextCentered(dl, g_title, 34 * u, cx - 150 * u, ty, Rgba(110, 170, 255), Rgba(24, 70, 180), "MLB");
++            ty += 30 * u;
++            const ImVec2 ts = LogoTextCentered(dl, g_title, 84 * u, cx, ty, Rgba(255, 110, 96), Rgba(196, 18, 30),
++                                               "POWER PROS");
++            LogoText(dl, g_title, 46 * u, ImVec2(cx + ts.x * 0.5f - 130 * u, ty + 84 * u), Rgba(255, 96, 70),
++                     Rgba(200, 16, 20), "2008", Rgba(255, 224, 70));
++
++            // Main menu: three glossy pills in a row.
++            struct Item {
++                const char* label;
++                ImU32 top, bottom, rim;
++                const char* line1;
++                const char* line2;
++            };
++            const std::array<Item, 3> items{{
++                {"JUGAR", Rgba(255, 206, 96), Rgba(240, 112, 18), Rgba(150, 50, 0), "¡A jugar! Arranca MLB Power Pros 2008.",
++                 nullptr},
++                {"AJUSTES", Rgba(160, 244, 120), Rgba(34, 164, 58), Rgba(10, 90, 30),
++                 "Cambia la API gráfica, la pantalla, el audio y los controles.", "Los cambios se guardan al momento."},
++                {"SALIR", Rgba(244, 160, 244), Rgba(168, 64, 200), Rgba(90, 20, 120), "Cierra el juego.", nullptr},
++            }};
++            const float pillW = 250 * u;
++            const float pillH = 88 * u;
++            const float gap = 34 * u;
++            const float rowX = cx - (pillW * 3 + gap * 2) * 0.5f;
++            const float rowY = h * 0.47f;
++            for (int i = 0; i < static_cast<int>(items.size()); ++i) {
++                const Item& item = items[static_cast<size_t>(i)];
++                const bool selected = menu == i && !settingsOpen;
++                const float grow = selected ? 1.10f : 1.0f;
++                const float bob = selected ? std::sin(t * 4.0f) * 3.0f * u : 0.0f;
++                const ImVec2 center(rowX + pillW * 0.5f + static_cast<float>(i) * (pillW + gap), rowY + pillH * 0.5f + bob);
++                const ImVec2 a(center.x - pillW * 0.5f * grow, center.y - pillH * 0.5f * grow);
++                const ImVec2 b(center.x + pillW * 0.5f * grow, center.y + pillH * 0.5f * grow);
++                if (!settingsOpen && MouseMoved() && Hovered(a, b)) menu = i;
++                if (!settingsOpen && click && Hovered(a, b)) {
++                    menu = i;
++                    if (i == 0) choice = Choice::Play;
++                    if (i == 1) settingsOpen = true, row = 0;
++                    if (i == 2) choice = Choice::Quit;
 +                }
-+                Text(fg, g_bold, fs, ImVec2(a.x + 22 * u, a.y + (tabH - fs) * 0.5f),
-+                     tab == i ? IM_COL32_WHITE : Rgba(170, 210, 255), tabs[i].name);
-+                tx = b.x + 14 * u;
-+            }
-+            const ImVec2 xc(p1.x - 44 * u, tabY + tabH * 0.5f);
-+            const float xr = 20 * u;
-+            const bool xHover = Hovered(ImVec2(xc.x - xr, xc.y - xr), ImVec2(xc.x + xr, xc.y + xr));
-+            fg->AddCircleFilled(xc, xr + 3 * u, IM_COL32_WHITE, 32);
-+            fg->AddCircleFilled(xc, xr, xHover ? Rgba(250, 80, 80) : Rgba(220, 50, 60), 32);
-+            const float xs = 8 * u;
-+            fg->AddLine(ImVec2(xc.x - xs, xc.y - xs), ImVec2(xc.x + xs, xc.y + xs), IM_COL32_WHITE, 3.5f * u);
-+            fg->AddLine(ImVec2(xc.x - xs, xc.y + xs), ImVec2(xc.x + xs, xc.y - xs), IM_COL32_WHITE, 3.5f * u);
-+            const float top = tabY + tabH + 18 * u;
-+            fg->AddLine(ImVec2(p0.x + 20 * u, top), ImVec2(p1.x - 20 * u, top), Rgba(160, 215, 255, 120), 2 * u);
-+            const float split = p0.x + pw * 0.48f;
-+            fg->AddLine(ImVec2(split, top + 14 * u), ImVec2(split, p1.y - 60 * u), Rgba(160, 215, 255, 90), 2 * u);
-+
-+            // Options.
-+            Tab& current = tabs[static_cast<size_t>(tab)];
-+            const int count = static_cast<int>(current.options.size());
-+            row = std::clamp(row, 0, count - 1);
-+            const float rowH = 48 * u;
-+            for (int i = 0; i < count; ++i) {
-+                Option& o = current.options[static_cast<size_t>(i)];
-+                const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i) * (rowH + 12 * u));
-+                const ImVec2 b(split - 26 * u, a.y + rowH);
-+                if (MouseMoved() && Hovered(a, b)) row = i;
-+                if (Hovered(a, b) && click) row = i, change(tab, i, 1);
-+                if (Hovered(a, b) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
-+                const bool selected = row == i;
 +                if (selected) {
-+                    Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
-+                } else {
-+                    fg->AddRectFilled(a, b, Rgba(8, 40, 120, 210), rowH * 0.5f);
-+                    fg->AddRect(a, b, Rgba(140, 200, 255, 130), rowH * 0.5f, 0, 2 * u);
++                    const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
++                    const float e = (10 + 4 * pulse) * u;
++                    dl->AddRectFilled(ImVec2(a.x - e, a.y - e), ImVec2(b.x + e, b.y + e),
++                                      Rgba(255, 244, 140, static_cast<int>(140 + 70 * pulse)), (b.y - a.y) * 0.5f + e);
 +                }
-+                const float fs = 20 * u;
-+                ShadowedText(fg, g_bold, fs, ImVec2(a.x + 24 * u, a.y + (rowH - fs) * 0.5f), IM_COL32_WHITE, o.label);
-+                const std::string& value = o.choices[static_cast<size_t>(o.value)];
-+                const float vsz = 21 * u;
-+                const float vw = TextSize(g_text, vsz, value.c_str()).x;
-+                const float vx = b.x - 34 * u - vw;
-+                ShadowedText(fg, g_text, vsz, ImVec2(vx, a.y + (rowH - vsz) * 0.5f), IM_COL32_WHITE, value.c_str());
-+                if (selected) {  // left / right arrows
-+                    const float cy = a.y + rowH * 0.5f;
-+                    const float s = 6 * u;
-+                    fg->AddTriangleFilled(ImVec2(vx - 16 * u, cy), ImVec2(vx - 16 * u + s, cy - s),
-+                                          ImVec2(vx - 16 * u + s, cy + s), IM_COL32_WHITE);
-+                    fg->AddTriangleFilled(ImVec2(b.x - 16 * u, cy), ImVec2(b.x - 16 * u - s, cy - s),
-+                                          ImVec2(b.x - 16 * u - s, cy + s), IM_COL32_WHITE);
-+                }
++                Pill(dl, a, b, item.top, item.bottom, u, selected ? Rgba(255, 250, 200) : IM_COL32_WHITE);
++                LogoTextCentered(dl, g_title, 38 * u * grow, center.x, center.y - 24 * u * grow, Rgba(255, 255, 255),
++                                 Rgba(255, 240, 190), item.label, item.rim, Rgba(255, 255, 255, 0));
 +            }
-+            // Help.
-+            const float hx2 = split + 30 * u;
-+            const float wrap = p1.x - 34 * u - hx2;
-+            float hy2 = top + 26 * u;
-+            const Option& focused = current.options[static_cast<size_t>(row)];
-+            ShadowedText(fg, g_text, 23 * u, ImVec2(hx2, hy2), IM_COL32_WHITE, focused.help, wrap);
-+            hy2 += g_text->CalcTextSizeA(23 * u, FLT_MAX, wrap, focused.help).y + 20 * u;
-+            Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(255, 224, 120),
-+                 focused.restart ? "Se aplica al pulsar JUGAR (el juego se reinicia solo)." : "Se aplica al momento.",
-+                 wrap);
-+            if (current.footer != nullptr) {
-+                hy2 += 48 * u;
-+                Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(210, 232, 255), current.footer, wrap);
-+            }
-+            float kx = p0.x + 30 * u;
-+            const float ky = p1.y - 48 * u;
-+            kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(30, 90, 200), "+", "Elegir / cambiar");
-+            kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "Q", "");
-+            kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "E", "Pestaña");
-+            Hint(fg, g_bold, g_text, kx, ky, u, Rgba(220, 50, 60), "B", "Volver");
 +
-+            if (Up()) row = (row + count - 1) % count;
-+            if (Down()) row = (row + 1) % count;
-+            if (Left()) change(tab, row, -1);
-+            if (Right() || Accept()) change(tab, row, 1);
-+            const int tabCount = static_cast<int>(tabs.size());
-+            if (Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1})) tab = (tab + tabCount - 1) % tabCount, row = 0;
-+            if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1})) tab = (tab + 1) % tabCount, row = 0;
-+            if (Back() || (xHover && click) || (click && !Hovered(p0, p1))) {
-+                settingsOpen = false;
++            // Info box.
++            const ImVec2 ia(w * 0.06f, h * 0.68f);
++            const ImVec2 ib(w * 0.94f, h * 0.88f);
++            dl->AddRectFilled(ImVec2(ia.x, ia.y + 6 * u), ImVec2(ib.x, ib.y + 6 * u), Rgba(0, 20, 70, 110), 16 * u);
++            dl->AddRectFilled(ia, ib, IM_COL32_WHITE, 16 * u);
++            const int infoStart = dl->VtxBuffer.Size;
++            dl->AddRectFilled(ImVec2(ia.x + 4 * u, ia.y + 4 * u), ImVec2(ib.x - 4 * u, ib.y - 4 * u), IM_COL32_WHITE,
++                              13 * u);
++            Shade(dl, infoStart, ia.y, ib.y, Rgba(40, 120, 220), Rgba(14, 58, 150));
++            dl->AddRect(ImVec2(ia.x + 9 * u, ia.y + 9 * u), ImVec2(ib.x - 9 * u, ib.y - 9 * u), Rgba(150, 210, 255, 120),
++                        10 * u, 0, 2 * u);
++            const Item& info = items[static_cast<size_t>(menu)];
++            const float ix = ia.x + 32 * u;
++            ShadowedText(dl, g_text, 28 * u, ImVec2(ix, ia.y + 24 * u), IM_COL32_WHITE, info.line1);
++            if (menu == 0) {
++                if (discReady) {
++                    DrawCheck(dl, ImVec2(ix, ia.y + 72 * u), 20 * u, Rgba(150, 255, 120));
++                    ShadowedText(dl, g_text, 26 * u, ImVec2(ix + 30 * u, ia.y + 66 * u), IM_COL32_WHITE, "Disco listo.");
++                    ShadowedText(dl, g_text, 22 * u, ImVec2(ix + 190 * u, ia.y + 69 * u), Rgba(190, 225, 255),
++                                 gameLine.c_str());
++                } else {
++                    ShadowedText(dl, g_text, 26 * u, ImVec2(ix, ia.y + 66 * u), Rgba(255, 170, 150), gameLine.c_str());
++                }
++            } else if (info.line2 != nullptr) {
++                ShadowedText(dl, g_text, 26 * u, ImVec2(ix, ia.y + 66 * u), IM_COL32_WHITE, info.line2);
++            }
++            const std::string version = std::string("WiiCompiled · ") + runningApi;
++            const ImVec2 vs = TextSize(g_text, 20 * u, version.c_str());
++            ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - vs.x, ib.y - 40 * u), Rgba(190, 225, 255),
++                         version.c_str());
++            if (restart) {
++                const char* note = "Ajustes cambiados: se aplican al pulsar JUGAR.";
++                const ImVec2 ns = TextSize(g_text, 20 * u, note);
++                ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - ns.x, ia.y + 22 * u), Rgba(255, 224, 120), note);
++            }
++
++            // Button hints.
++            float hx = w * 0.06f;
++            const float hy = h - 50 * u;
++            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), "A", "Aceptar");
++            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), "B", "Volver");
++            Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
++
++            if (!settingsOpen) {
++                const int n = static_cast<int>(items.size());
++                if (Up() || Left()) menu = (menu + n - 1) % n;
++                if (Down() || Right()) menu = (menu + 1) % n;
++                if (Accept()) {
++                    if (menu == 0) choice = Choice::Play;
++                    if (menu == 1) settingsOpen = true, row = 0;
++                    if (menu == 2) choice = Choice::Quit;
++                }
++            } else {
++                // Settings panel: tab pills on top, options left, help right.
++                ImDrawList* fg = ImGui::GetForegroundDrawList();
++                const float pw = std::min(w * 0.92f, 1120 * u);
++                const float ph = std::min(h * 0.86f, 620 * u);
++                const ImVec2 p0((w - pw) * 0.5f, (h - ph) * 0.5f - 10 * u);
++                const ImVec2 p1(p0.x + pw, p0.y + ph);
++                fg->AddRectFilled(ImVec2(0, 0), size, Rgba(0, 16, 60, 120));
++                fg->AddRectFilled(ImVec2(p0.x, p0.y + 8 * u), ImVec2(p1.x, p1.y + 8 * u), Rgba(0, 16, 60, 140), 18 * u);
++                fg->AddRectFilled(p0, p1, IM_COL32_WHITE, 18 * u);
++                const int panelStart = fg->VtxBuffer.Size;
++                fg->AddRectFilled(ImVec2(p0.x + 5 * u, p0.y + 5 * u), ImVec2(p1.x - 5 * u, p1.y - 5 * u), IM_COL32_WHITE,
++                                  14 * u);
++                Shade(fg, panelStart, p0.y, p1.y, Rgba(34, 110, 214, 250), Rgba(12, 50, 140, 250));
++
++                // Tabs.
++                const float tabH = 46 * u;
++                const float tabY = p0.y + 20 * u;
++                float tx = p0.x + 24 * u;
++                for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
++                    const float fs = 21 * u;
++                    const ImVec2 tz = TextSize(g_bold, fs, tabs[i].name);
++                    const ImVec2 a(tx, tabY);
++                    const ImVec2 b(tx + tz.x + 44 * u, tabY + tabH);
++                    if (click && Hovered(a, b)) tab = i, row = 0;
++                    if (tab == i) {
++                        Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
++                    } else {
++                        fg->AddRectFilled(a, b, Rgba(8, 40, 120, 200), tabH * 0.5f);
++                        fg->AddRect(a, b, Rgba(140, 200, 255, 120), tabH * 0.5f, 0, 2 * u);
++                    }
++                    Text(fg, g_bold, fs, ImVec2(a.x + 22 * u, a.y + (tabH - fs) * 0.5f),
++                         tab == i ? IM_COL32_WHITE : Rgba(170, 210, 255), tabs[i].name);
++                    tx = b.x + 14 * u;
++                }
++                const ImVec2 xc(p1.x - 44 * u, tabY + tabH * 0.5f);
++                const float xr = 20 * u;
++                const bool xHover = Hovered(ImVec2(xc.x - xr, xc.y - xr), ImVec2(xc.x + xr, xc.y + xr));
++                fg->AddCircleFilled(xc, xr + 3 * u, IM_COL32_WHITE, 32);
++                fg->AddCircleFilled(xc, xr, xHover ? Rgba(250, 80, 80) : Rgba(220, 50, 60), 32);
++                const float xs = 8 * u;
++                fg->AddLine(ImVec2(xc.x - xs, xc.y - xs), ImVec2(xc.x + xs, xc.y + xs), IM_COL32_WHITE, 3.5f * u);
++                fg->AddLine(ImVec2(xc.x - xs, xc.y + xs), ImVec2(xc.x + xs, xc.y - xs), IM_COL32_WHITE, 3.5f * u);
++                const float top = tabY + tabH + 18 * u;
++                fg->AddLine(ImVec2(p0.x + 20 * u, top), ImVec2(p1.x - 20 * u, top), Rgba(160, 215, 255, 120), 2 * u);
++                const float split = p0.x + pw * 0.48f;
++                fg->AddLine(ImVec2(split, top + 14 * u), ImVec2(split, p1.y - 60 * u), Rgba(160, 215, 255, 90), 2 * u);
++
++                // Options.
++                Tab& current = tabs[static_cast<size_t>(tab)];
++                const int count = static_cast<int>(current.options.size());
++                row = std::clamp(row, 0, count - 1);
++                const float rowH = 48 * u;
++                for (int i = 0; i < count; ++i) {
++                    Option& o = current.options[static_cast<size_t>(i)];
++                    const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i) * (rowH + 12 * u));
++                    const ImVec2 b(split - 26 * u, a.y + rowH);
++                    if (MouseMoved() && Hovered(a, b)) row = i;
++                    if (Hovered(a, b) && click) row = i, change(tab, i, 1);
++                    if (Hovered(a, b) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
++                    const bool selected = row == i;
++                    if (selected) {
++                        Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
++                    } else {
++                        fg->AddRectFilled(a, b, Rgba(8, 40, 120, 210), rowH * 0.5f);
++                        fg->AddRect(a, b, Rgba(140, 200, 255, 130), rowH * 0.5f, 0, 2 * u);
++                    }
++                    const float fs = 20 * u;
++                    ShadowedText(fg, g_bold, fs, ImVec2(a.x + 24 * u, a.y + (rowH - fs) * 0.5f), IM_COL32_WHITE, o.label);
++                    const std::string& value = o.choices[static_cast<size_t>(o.value)];
++                    const float vsz = 21 * u;
++                    const float vw = TextSize(g_text, vsz, value.c_str()).x;
++                    const float vx = b.x - 34 * u - vw;
++                    ShadowedText(fg, g_text, vsz, ImVec2(vx, a.y + (rowH - vsz) * 0.5f), IM_COL32_WHITE, value.c_str());
++                    if (selected) {  // left / right arrows
++                        const float cy = a.y + rowH * 0.5f;
++                        const float s = 6 * u;
++                        fg->AddTriangleFilled(ImVec2(vx - 16 * u, cy), ImVec2(vx - 16 * u + s, cy - s),
++                                              ImVec2(vx - 16 * u + s, cy + s), IM_COL32_WHITE);
++                        fg->AddTriangleFilled(ImVec2(b.x - 16 * u, cy), ImVec2(b.x - 16 * u - s, cy - s),
++                                              ImVec2(b.x - 16 * u - s, cy + s), IM_COL32_WHITE);
++                    }
++                }
++                // Help.
++                const float hx2 = split + 30 * u;
++                const float wrap = p1.x - 34 * u - hx2;
++                float hy2 = top + 26 * u;
++                const Option& focused = current.options[static_cast<size_t>(row)];
++                ShadowedText(fg, g_text, 23 * u, ImVec2(hx2, hy2), IM_COL32_WHITE, focused.help, wrap);
++                hy2 += g_text->CalcTextSizeA(23 * u, FLT_MAX, wrap, focused.help).y + 20 * u;
++                Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(255, 224, 120),
++                     focused.restart ? "Se aplica al pulsar JUGAR (el juego se reinicia solo)." : "Se aplica al momento.",
++                     wrap);
++                if (current.footer != nullptr) {
++                    hy2 += 48 * u;
++                    Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(210, 232, 255), current.footer, wrap);
++                }
++                float kx = p0.x + 30 * u;
++                const float ky = p1.y - 48 * u;
++                kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(30, 90, 200), "+", "Elegir / cambiar");
++                kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "Q", "");
++                kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "E", "Pestaña");
++                Hint(fg, g_bold, g_text, kx, ky, u, Rgba(220, 50, 60), "B", "Volver");
++
++                if (settingsKeys() || (xHover && click) || (click && !Hovered(p0, p1))) {
++                    settingsOpen = false;
++                }
 +            }
 +        }
 +

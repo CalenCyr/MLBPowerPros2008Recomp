@@ -47,6 +47,9 @@ def problems(path: str, data: bytes) -> list[str]:
     ext = path.rsplit(".", 1)[-1].lower() if "." in Path(path).name else ""
     if ext in BANNED_EXT:
         found.append(f"game file type .{ext}")
+    # Original launcher art (not game content) is the only binary allowed in the repository.
+    if path.startswith("assets/launcher/") and ext == "png":
+        return [f"{len(data)} bytes (> 4 MiB)"] if len(data) > 4 * 1024 * 1024 else []
     # Symbol maps (address + name per line, like a decomp's symbols.txt) may be larger.
     is_symbol_map = path.startswith("config/") and ext == "map"
     limit = 2 * 1024 * 1024 if is_symbol_map else MAX_BYTES
@@ -87,6 +90,8 @@ def demo() -> None:
     assert problems("x.py", b", ".join([b"0x3C"] * 40))[0].startswith("hex word table")
     assert problems("x.json", b"QUJD" * 60)[0].startswith("base64 blob")
     assert problems("config/a.map", b"80004000 __start\n8000403c main\n") == []
+    assert problems("assets/launcher/main.png", b"\x89PNG\x00") == []
+    assert problems("assets/other.png", b"\x89PNG\x00") == ["binary content"]
     assert problems("config/a.map", b"80004000 __start\n80004010 0x80004010\n") == []
     assert problems("config/a.map", b"80004000 __start\x00")[0] == "binary content"
     assert problems("config/a.map", b"80004000 x\nnot a symbol\n")[0].startswith("symbol map line 2")

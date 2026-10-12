@@ -40,6 +40,9 @@ if ($LASTEXITCODE -ne 0) {
 Invoke-Checked "build (see $buildLog)"
 
 New-Item -ItemType File -Force "$build\portable.txt" | Out-Null
+# Launcher backdrops (MoonInning UI pack art, see tools/launcher/prepare_mooninning_art.py).
+New-Item -ItemType Directory -Force "$build\launcher" | Out-Null
+Copy-Item (Join-Path $root 'assets\launcher\*.png') "$build\launcher" -Force
 New-Item -ItemType Directory -Force "$build\UserData" | Out-Null
 $dvd = Join-Path $root 'local\disc\DATA'
 # Only point paths.dvd_root at the disc; keep every other setting (video, controls) the user saved.
