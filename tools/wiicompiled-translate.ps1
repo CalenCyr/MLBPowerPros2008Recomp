@@ -4,7 +4,8 @@
 # under local/: the working copy, NuGet/.NET caches, temp files and outputs.
 # -Groups lists the runtime/src/hle groups whose native hooks are rebound to MLB (see
 # tools/wiicompiled_rebind.py); -Fresh recreates the working copy from the pinned clone.
-param([switch]$Build, [switch]$Fresh, [int]$Threads = 6,
+# -RegenerateMap rebuilds config/wiicompiled/rl8e54-functions.map from the local dtk/DolRecomp analysis.
+param([switch]$Build, [switch]$Fresh, [switch]$RegenerateMap, [int]$Threads = 6,
       [string[]]$Groups = @('os', 'audio', 'storage', 'vi', 'gx', 'input', 'ios'))
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -59,27 +60,31 @@ if ($Build -or -not (Test-Path $translator)) {
 # Python: $env:PY, else the pyenv 3.12 install (the pyenv shim fails under PowerShell here), else PATH.
 $pyenv = Join-Path $env:USERPROFILE '.pyenv\pyenv-win\versions\3.12.0\python.exe'
 $py = if ($env:PY) { $env:PY } elseif (Test-Path $pyenv) { $pyenv } else { 'python' }
-$dtk = @('local\analysis\dol-functions.csv', 'local\analysis\rel-functions.csv',
-         'local\generated\dolrecomp\rel-linked\layout.json')
-$dol = 'local\disc\DATA\sys\main.dol'
-$linked = 'local\generated\dolrecomp\rel-linked\linked-analysis.dol'
-# SDK names: Dolphin signatures first, then link-order alignment against Wiicompiled's MKW map
-# (which needs the signature names as anchors), then the final map with both.
-& $py tools\identify_sdk_functions.py local\vendor\ModernGekko\vendor\dolphin\Data\Sys\totaldb.dsy `
-    $dol $linked $dtk[0] $dtk[1] $dtk[2] local\analysis\sdk-symbols.csv
-Invoke-Checked 'signature identification'
-& $py tools\dtk_to_wiicompiled_map.py @dtk "$work\MAP.txt" local\analysis\sdk-symbols.csv
-Invoke-Checked 'map conversion'
-& $py tools\align_sdk_by_anchors.py local\vendor\Wiicompiled\projects\mkwii\MAP.txt "$work\MAP.txt" `
-    local\analysis\sdk-symbols-aligned.csv
-Invoke-Checked 'anchor alignment'
-& $py tools\dtk_to_wiicompiled_map.py @dtk "$work\MAP.txt" local\analysis\sdk-symbols.csv `
-    local\analysis\sdk-symbols-aligned.csv
-Invoke-Checked 'map conversion'
+$map = 'config\wiicompiled\rl8e54-functions.map'
+if ($RegenerateMap) {
+    # Needs the dtk inventories, DolRecomp's linked REL layout and Dolphin's signature database.
+    $dtk = @('local\analysis\dol-functions.csv', 'local\analysis\rel-functions.csv',
+             'local\generated\dolrecomp\rel-linked\layout.json')
+    $dol = 'local\disc\DATA\sys\main.dol'
+    $linked = 'local\generated\dolrecomp\rel-linked\linked-analysis.dol'
+    # SDK names: Dolphin signatures first, then link-order alignment against Wiicompiled's MKW map
+    # (which needs the signature names as anchors), then the final map with both.
+    & $py tools\identify_sdk_functions.py local\vendor\ModernGekko\vendor\dolphin\Data\Sys\totaldb.dsy `
+        $dol $linked $dtk[0] $dtk[1] $dtk[2] local\analysis\sdk-symbols.csv
+    Invoke-Checked 'signature identification'
+    & $py tools\dtk_to_wiicompiled_map.py @dtk $map local\analysis\sdk-symbols.csv
+    Invoke-Checked 'map conversion'
+    & $py tools\align_sdk_by_anchors.py local\vendor\Wiicompiled\projects\mkwii\MAP.txt $map `
+        local\analysis\sdk-symbols-aligned.csv
+    Invoke-Checked 'anchor alignment'
+    & $py tools\dtk_to_wiicompiled_map.py @dtk $map local\analysis\sdk-symbols.csv `
+        local\analysis\sdk-symbols-aligned.csv
+    Invoke-Checked 'map conversion'
+}
 
 if ($Fresh -or -not (Test-Path "$src\runtime\include\game_natives_rebound.h")) {
     & $py tools\wiicompiled_rebind.py "$src\runtime" local\vendor\Wiicompiled\projects\mkwii\MAP.txt `
-        "$work\MAP.txt" config\wiicompiled\rl8e54-data.csv @Groups
+        $map config\wiicompiled\rl8e54-data.csv @Groups
     Invoke-Checked 'rebind'
 }
 

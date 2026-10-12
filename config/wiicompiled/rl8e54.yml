@@ -32,7 +32,9 @@ translation:
     - 0x8000403C
     - 0x80AA0718
   function_map:
-    path: local/wiicompiled-mlb/MAP.txt
+    # Function addresses and names only (dtk boundaries + SDK identification); regenerate with
+    # tools/wiicompiled-translate.ps1 -RegenerateMap.
+    path: config/wiicompiled/rl8e54-functions.map
   # Measure instead of aborting on the first unsupported instruction.
   allow_unsupported_instructions: true
 

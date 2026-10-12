@@ -495,3 +495,51 @@ No está validado píxel a píxel contra Dolphin.
   - selección de SALIR;
   - `LAUNCHER_SELECT=vulkan`: relanza y el juego corre a 59 FPS.
 - **Switch (homebrew):** Dawn no tiene backend para Horizon. Opciones: el backend GLES de Dawn sobre la mesa de devkitPro (switch-mesa/EGL), o un backend de aurora propio en deko3d. OpenGL ES aún no se ofrece porque el paquete de Dawn usado viene sin GL; hace falta compilar Dawn desde fuente. En Switch habrá que cargar la fuente del sistema (`plGetSharedFont`).
+
+## Setup para jugadores: compila en la PC del jugador (12 de octubre de 2026)
+
+**Decisión del usuario:** se distribuye como Wiicompiled, no como skate3recomp. La release trae el Setup y las herramientas; el código del juego se traduce y compila en la PC del jugador a partir de su propia ISO. Ni el repositorio ni las releases contienen nada del juego.
+
+**Piezas (`tools/setup/`):**
+- `setup.cpp` + `CMakeLists.txt`: ventana del Setup, con SDL3 y ImGui estáticos (exe de 6 MB sin DLLs).
+  - Usa el mismo estilo que el launcher: `power_pros_ui.h`, que ahora forma parte del parche 21 y comparten ambos.
+  - Pantallas: elegir disco, carpeta de instalación, acceso directo, progreso con barra y log, "¡Listo!" con JUGAR, y error con REINTENTAR y VER REGISTRO.
+  - Arrastrar la ISO sobre el exe la preselecciona.
+  - `MLBPP_SETUP_AUTOINSTALL=1` instala sin interacción (para pruebas).
+- `LocalBuild.ps1`: lo que ejecuta el Setup, en este orden:
+  1. `nodtool info`: comprueba que el disco sea RL8E54.
+  2. `nodtool extract`.
+  3. Compara los SHA256 de `main.dol` y `ovl_main.rel` con los fijados.
+  4. Traduce con `Translator.Cli` autocontenido.
+  5. Configura y compila con las funciones de `NativeBuildFlags.ps1` de Wiicompiled y el precompilado de aurora y dependencias.
+  6. Instala en `<carpeta>\Game` (`MLBPowerPros2008.exe` en modo portable, con `dvd_root` apuntando a `<carpeta>\Data`).
+  7. Borra los temporales.
+  - Comunica el progreso con líneas `@@ <porcentaje> <mensaje>` y los errores con `@@ERROR <mensaje>`.
+  - El archivo va en UTF-8 con BOM, porque PowerShell 5.1 lee como ANSI los scripts sin BOM.
+- `Make-Payload.ps1`: arma el paquete desde un árbol parcheado y reasignado, y rechaza archivos del juego.
+  - Sus `Launcher\artifacts` salen de los scripts de Wiicompiled, reutilizados sin cambios: `Prepare-PortableTools.ps1`, `Prepare-Dependencies.ps1` y `Prepare-NativePrebuilt.ps1` (el último compila aurora y las dependencias con nuestros parches).
+  - Recorta de llvm-mingw los sysroots que no son x86_64, el Python incluido y el runtime de Linux: el paquete pasa de 1.150 MB a 839 MB.
+- `config/wiicompiled/rl8e54-functions.map` (direcciones y nombres) se sube al repo. Así el jugador no necesita dtk, DolRecomp ni la base de firmas de Dolphin. `tools/wiicompiled-translate.ps1 -RegenerateMap` lo vuelve a generar.
+- `check_no_game_data.py` acepta este mapa solo si cada línea es "dirección nombre" y si un nombre en hexadecimal coincide con su propia dirección.
+
+**Medido (12 hilos, ISO NKit del usuario):**
+
+| Paso | Tiempo |
+|---|---|
+| Extracción | 2 s |
+| Traducción | 88 s |
+| Configuración con el precompilado | unos 20 s (sin él: 367 s, por los chequeos de SDL) |
+| Compilación | 117 pasos en lugar de 814 |
+| **Instalación completa** | **285 s** |
+
+- La compilación limpia sin precompilado tardaba 274 s; la mitad de la CPU se iba en dependencias.
+- **Verificado:**
+  - instalación sin ventana y con la ventana del Setup (progreso, pantalla final y temporales borrados);
+  - el juego instalado abre el launcher y llega a la pantalla de la correa a 60 FPS.
+- **Ventana:** el título del juego pasa a "MLB Power Pros 2008", en `base_product.cpp` dentro del parche 21.
+
+**Pendiente:**
+- Probar en una PC limpia, sin las herramientas del proyecto.
+- Publicar la release (zip de unos 400 MB comprimido; tamaño por medir).
+- Generar el paquete desde un clon limpio en un solo paso. Hoy `-Source` apunta a un árbol ya parcheado, reasignado y con los artefactos de Wiicompiled.
+- Linux y Switch.

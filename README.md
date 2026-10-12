@@ -1,5 +1,20 @@
 # MLB Power Pros 2008 Recomp
 
+Recompilación nativa no oficial de MLB Power Pros 2008 para Wii (USA, `RL8E54`) sobre el runtime de [Wiicompiled](https://github.com/patchzyy/Wiicompiled).
+
+## Instalar y jugar (Windows 10/11, 64 bits)
+
+1. Descarga `MLB Power Pros 2008 Setup.zip` desde la página de *Releases* de este repositorio y descomprímelo en una carpeta tuya.
+2. Abre `MLBPowerPros2008-Setup.exe`, pulsa **ELEGIR DISCO** y selecciona tu copia del juego (ISO, NKit, RVZ, WBFS, WIA, GCZ o CISO).
+3. Pulsa **INSTALAR**. El Setup comprueba que sea un volcado limpio de `RL8E54`, lo extrae, traduce el código del juego y lo compila **en tu PC**. La primera vez tarda unos minutos.
+4. Pulsa **JUGAR** (o usa el acceso directo del escritorio). Antes de cada partida aparece el launcher para elegir API gráfica, pantalla, resolución, audio y controles.
+
+**No se incluye ni se descarga nada del juego.** Ni este repositorio ni sus releases contienen la imagen del disco, el ejecutable, assets ni código traducido: el Setup solo trae herramientas (traductor, compilador, código fuente del runtime) y todo lo del juego se genera en tu equipo a partir de tu propia copia. No pidas ni compartas archivos del juego.
+
+Para quien empaqueta una release: `tools/setup/Make-Payload.ps1` arma el paquete (ver su cabecera) y comprueba que no contenga nada del juego; `tools/setup/LocalBuild.ps1` es lo que ejecuta el Setup en la PC del jugador.
+
+## Historial de desarrollo
+
 Actualización del 10 de octubre, **31 parches**: el DOL traducido con el **backend LLVM** de DolRecomp (LLVM 20.1.8, `--native-abi off`, parche `dolrecomp-llvm-gekko-single`), enlazado con los mismos 478 objetos REL MSVC, registró **+15,83% y +17,16% de avance** en dos parejas del primer out (32,7 → 38,1 fotogramas/s; ~65% de velocidad normal). La auditoría lockstep, con la nueva alineación por ciclos, encontró y permitió corregir un error real (conversiones `stfs`/`lfs`/`psq_st` no exactas). Ahora deja **1 informe en ~3.060 comparaciones**: un búfer de MEM2 escrito por el HLE de audio (463 de 463 bytes intactos en la repetición). La DLL LLVM sigue siendo **opcional y no validada del todo**. Detalles en `docs/llvm-dol-report.md`.
 
 Actualización del 9 de octubre, **29 parches**: nueva opción experimental `-DualCore` (hilo GPU separado; el Dolphin fijado usa single core por defecto). Dos parejas con el mismo ejecutable registraron **+3,51% y +8,85%** de avance en el primer out; queda desactivada por defecto porque no es determinista. Con backend `Null` el avance fue 38,01 fotogramas/s: el trabajo gráfico explica a lo sumo ~15% y el límite sigue siendo la CPU. Detalles en `docs/dual-core-report.md`.

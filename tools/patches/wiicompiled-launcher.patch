@@ -19,6 +19,202 @@ index 0000000..116aa0d
 +// Starts this executable again, same arguments, with WIICOMPILED_SKIP_LAUNCHER=1.
 +bool Relaunch();
 +} // namespace launcher
+diff --git a/runtime/include/power_pros_ui.h b/runtime/include/power_pros_ui.h
+new file mode 100644
+index 0000000..0ab5c33
+--- /dev/null
++++ b/runtime/include/power_pros_ui.h
+@@ -0,0 +1,190 @@
++#pragma once
++// Drawing helpers in the style of MLB Power Pros' own menus (blue rays, glossy pills, outlined
++// cartoon lettering), shared by the pre-boot launcher and the Setup. ImGui draw lists only, system
++// fonts only: no game assets.
++#include <imgui.h>
++#include <imgui_internal.h>
++
++#include <algorithm>
++#include <cmath>
++#include <cstring>
++#include <fstream>
++#include <initializer_list>
++#include <iterator>
++#include <vector>
++
++namespace power_pros_ui {
++
++// ---- Fonts -------------------------------------------------------------------------------------
++// System fonts only; ImGui's built-in font is the fallback. Baked large and drawn smaller.
++inline ImFont* g_text = nullptr;
++inline ImFont* g_bold = nullptr;
++inline ImFont* g_title = nullptr;
++
++inline ImFont* LoadFirstFont(std::initializer_list<const char*> paths, float size) {
++    for (const char* path : paths) {
++        std::ifstream file(path, std::ios::binary);
++        if (!file) continue;
++        std::vector<char> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
++        if (data.empty()) continue;
++        ImFontConfig config;
++        config.FontDataOwnedByAtlas = true;
++        void* owned = IM_ALLOC(data.size());
++        std::memcpy(owned, data.data(), data.size());
++        if (ImFont* font = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(data.size()), size,
++                                                                        &config)) {
++            return font;
++        }
++    }
++    return nullptr;
++}
++
++inline void LoadFonts() {
++    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
++    if (atlas->Fonts.empty()) atlas->AddFontDefault();  // the in-game overlay keeps ImGui's font
++#if defined(_WIN32)
++    g_text = LoadFirstFont({"C:/Windows/Fonts/bahnschrift.ttf", "C:/Windows/Fonts/segoeui.ttf",
++                            "C:/Windows/Fonts/arial.ttf"}, 48.0f);
++    g_bold = LoadFirstFont({"C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf"}, 40.0f);
++    g_title = LoadFirstFont({"C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/segoeuib.ttf"}, 112.0f);
++#else
++    g_text = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
++                            "/usr/share/fonts/TTF/DejaVuSans.ttf"}, 48.0f);
++    g_bold = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
++                            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"}, 40.0f);
++#endif
++    ImFont* fallback = atlas->Fonts[0];
++    if (g_text == nullptr) g_text = fallback;
++    if (g_bold == nullptr) g_bold = g_text;
++    if (g_title == nullptr) g_title = g_bold;
++}
++
++// ---- Drawing helpers ---------------------------------------------------------------------------
++inline ImU32 Rgba(int r, int g, int b, int a = 255) { return IM_COL32(r, g, b, a); }
++
++inline ImVec2 TextSize(ImFont* font, float size, const char* text) {
++    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
++}
++
++inline void Text(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
++          float wrap = 0.0f) {
++    dl->AddText(font, size, pos, color, text, nullptr, wrap);
++}
++
++inline void ShadowedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
++                  float wrap = 0.0f) {
++    const float d = std::max(1.0f, size * 0.05f);
++    dl->AddText(font, size, ImVec2(pos.x + d, pos.y + d), Rgba(0, 20, 70, 170), text, nullptr, wrap);
++    dl->AddText(font, size, pos, color, text, nullptr, wrap);
++}
++
++// Fills the vertices added since `start` with a vertical gradient between y0 and y1.
++inline void Shade(ImDrawList* dl, int start, float y0, float y1, ImU32 top, ImU32 bottom) {
++    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, start, dl->VtxBuffer.Size, ImVec2(0, y0), ImVec2(0, y1), top,
++                                                  bottom);
++}
++
++// Chunky cartoon lettering: dark outer rim (dropped a little), light inner rim, gradient fill.
++inline void LogoText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 top, ImU32 bottom, const char* text,
++              ImU32 rim = IM_COL32_WHITE, ImU32 outer = IM_COL32(12, 36, 104, 255)) {
++    const float r = std::max(1.5f, size * 0.055f);
++    for (int pass = 0; pass < 2; ++pass) {
++        const float radius = pass == 0 ? r * 2.0f : r;
++        const float drop = pass == 0 ? r * 0.9f : 0.0f;
++        for (int i = 0; i < 16; ++i) {
++            const float a = 6.2831853f * static_cast<float>(i) / 16.0f;
++            dl->AddText(font, size, ImVec2(pos.x + std::cos(a) * radius, pos.y + std::sin(a) * radius + drop),
++                        pass == 0 ? outer : rim, text);
++        }
++    }
++    const int start = dl->VtxBuffer.Size;
++    dl->AddText(font, size, pos, IM_COL32_WHITE, text);
++    Shade(dl, start, pos.y + size * 0.2f, pos.y + size * 0.9f, top, bottom);
++}
++
++inline ImVec2 LogoTextCentered(ImDrawList* dl, ImFont* font, float size, float cx, float y, ImU32 top, ImU32 bottom,
++                        const char* text, ImU32 rim = IM_COL32_WHITE, ImU32 outer = IM_COL32(12, 36, 104, 255)) {
++    const ImVec2 s = TextSize(font, size, text);
++    LogoText(dl, font, size, ImVec2(cx - s.x * 0.5f, y), top, bottom, text, rim, outer);
++    return s;
++}
++
++// Glossy pill: drop shadow, white rim, vertical gradient body and a soft highlight on the top half.
++inline void Pill(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, float u, ImU32 rim = IM_COL32_WHITE) {
++    const float r = (b.y - a.y) * 0.5f;
++    const float e = 4.0f * u;
++    dl->AddRectFilled(ImVec2(a.x - e, a.y - e + 6 * u), ImVec2(b.x + e, b.y + e + 6 * u), Rgba(0, 20, 70, 110), r + e);
++    dl->AddRectFilled(ImVec2(a.x - e, a.y - e), ImVec2(b.x + e, b.y + e), rim, r + e);
++    const int start = dl->VtxBuffer.Size;
++    dl->AddRectFilled(a, b, IM_COL32_WHITE, r);
++    Shade(dl, start, a.y, b.y, top, bottom);
++    const float gh = (b.y - a.y) * 0.42f;
++    const int gloss = dl->VtxBuffer.Size;
++    dl->AddRectFilled(ImVec2(a.x + r * 0.45f, a.y + 3 * u), ImVec2(b.x - r * 0.45f, a.y + 3 * u + gh),
++                      Rgba(255, 255, 255, 110), gh * 0.5f);
++    Shade(dl, gloss, a.y, a.y + gh, IM_COL32_WHITE, top);  // keeps the vertex alpha: fades into the body
++}
++
++inline float Hash(int i) {
++    const float s = std::sin(static_cast<float>(i) * 12.9898f) * 43758.5453f;
++    return s - std::floor(s);
++}
++
++// Power Pros menu backdrop: bright blue with a radial glow, slowly turning rays, a big emblem ring,
++// fine scanlines and a scrolling marquee band at the top.
++inline void DrawBackground(ImDrawList* dl, float w, float h, float u, float t, ImFont* font) {
++    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h), Rgba(28, 112, 214), Rgba(28, 112, 214),
++                                Rgba(8, 56, 158), Rgba(8, 56, 158));
++    const ImVec2 c(w * 0.5f, h * 0.47f);
++    const float big = std::max(w, h);
++    for (int i = 14; i >= 1; --i) {
++        dl->AddCircleFilled(c, big * 0.05f * static_cast<float>(i), Rgba(120, 200, 255, 9), 96);
++    }
++    for (int i = 0; i < 24; ++i) {  // rays
++        const float a0 = t * 0.04f + 6.2831853f * static_cast<float>(i) / 24.0f;
++        const float a1 = a0 + 6.2831853f / 48.0f;
++        dl->AddTriangleFilled(c, ImVec2(c.x + std::cos(a0) * big, c.y + std::sin(a0) * big),
++                              ImVec2(c.x + std::cos(a1) * big, c.y + std::sin(a1) * big), Rgba(255, 255, 255, 10));
++    }
++    dl->AddCircle(c, h * 0.40f, Rgba(255, 255, 255, 38), 128, 16 * u);
++    dl->AddCircle(c, h * 0.33f, Rgba(255, 255, 255, 26), 128, 5 * u);
++    dl->AddCircleFilled(c, h * 0.31f, Rgba(160, 220, 255, 18), 128);
++    for (float y = 0; y < h; y += 4 * u) {  // scanlines
++        dl->AddLine(ImVec2(0, y), ImVec2(w, y), Rgba(255, 255, 255, 7), 1.0f);
++    }
++
++    // Top band with a faint scrolling marquee.
++    const float band = 44 * u;
++    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, band), Rgba(6, 40, 120, 230), Rgba(6, 40, 120, 230),
++                                Rgba(10, 60, 160, 200), Rgba(10, 60, 160, 200));
++    dl->AddLine(ImVec2(0, band), ImVec2(w, band), Rgba(255, 255, 255, 140), 3 * u);
++    dl->AddLine(ImVec2(0, band + 5 * u), ImVec2(w, band + 5 * u), Rgba(230, 40, 50, 200), 3 * u);
++    const char* marquee = "MLB POWER PROS 2008   \xC2\xB7   ";
++    const float ms = 24 * u;
++    const float mw = TextSize(font, ms, marquee).x;
++    for (float x = -std::fmod(t * 40 * u, mw); x < w; x += mw) {
++        dl->AddText(font, ms, ImVec2(x, (band - ms) * 0.5f), Rgba(255, 255, 255, 60), marquee);
++    }
++}
++
++inline void DrawCheck(ImDrawList* dl, ImVec2 p, float s, ImU32 color) {
++    dl->AddLine(ImVec2(p.x, p.y + s * 0.55f), ImVec2(p.x + s * 0.35f, p.y + s * 0.9f), color, s * 0.16f);
++    dl->AddLine(ImVec2(p.x + s * 0.35f, p.y + s * 0.9f), ImVec2(p.x + s, p.y + s * 0.15f), color, s * 0.16f);
++}
++
++// Button hint: a round badge with a letter, then a label. Returns the x after it.
++inline float Hint(ImDrawList* dl, ImFont* bold, ImFont* text, float x, float y, float u, ImU32 badge, const char* key,
++           const char* label) {
++    const float r = 13 * u;
++    dl->AddCircleFilled(ImVec2(x + r, y + r), r + 2 * u, IM_COL32_WHITE, 24);
++    dl->AddCircleFilled(ImVec2(x + r, y + r), r, badge, 24);
++    const float ks = 16 * u;
++    const ImVec2 kz = TextSize(bold, ks, key);
++    dl->AddText(bold, ks, ImVec2(x + r - kz.x * 0.5f, y + r - kz.y * 0.5f), IM_COL32_WHITE, key);
++    if (*label == '\0') return x + 2 * r + 6 * u;
++    const float ls = 22 * u;
++    ShadowedText(dl, text, ls, ImVec2(x + 2 * r + 8 * u, y + r - ls * 0.55f), IM_COL32_WHITE, label);
++    return x + 2 * r + 8 * u + TextSize(text, ls, label).x + 30 * u;
++}
++
++} // namespace power_pros_ui
 diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
 index 2204f70..8eed306 100644
 --- a/runtime/include/runtime_config.h
@@ -73,10 +269,10 @@ index 2204f70..8eed306 100644
  }
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
 new file mode 100644
-index 0000000..f939bd1
+index 0000000..6921e9a
 --- /dev/null
 +++ b/runtime/src/launcher.cpp
-@@ -0,0 +1,738 @@
+@@ -0,0 +1,568 @@
 +// Pre-boot launcher in the style of the game's own menus: picks the graphics API and other settings
 +// before the game starts. Drawn entirely with ImGui draw lists (procedural backdrop, glossy pills,
 +// system fonts); no game assets are used. Everything it changes is read once at start-up, so a
@@ -84,6 +280,7 @@ index 0000000..f939bd1
 +// WIICOMPILED_SKIP_LAUNCHER=1; the guest has not started yet, so that costs only the renderer
 +// start-up.
 +#include "launcher.h"
++#include "power_pros_ui.h"
 +
 +#include "aurora_events.h"
 +#include "runtime_config.h"
@@ -116,6 +313,7 @@ index 0000000..f939bd1
 +
 +namespace launcher {
 +namespace {
++using namespace power_pros_ui;
 +
 +struct ApiOption {
 +    AuroraBackend backend;
@@ -146,178 +344,6 @@ index 0000000..f939bd1
 +
 +int g_argc = 0;
 +char** g_argv = nullptr;
-+
-+// ---- Fonts -------------------------------------------------------------------------------------
-+// System fonts only; ImGui's built-in font is the fallback. Baked large and drawn smaller.
-+ImFont* g_text = nullptr;
-+ImFont* g_bold = nullptr;
-+ImFont* g_title = nullptr;
-+
-+ImFont* LoadFirstFont(std::initializer_list<const char*> paths, float size) {
-+    for (const char* path : paths) {
-+        std::ifstream file(path, std::ios::binary);
-+        if (!file) continue;
-+        std::vector<char> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-+        if (data.empty()) continue;
-+        ImFontConfig config;
-+        config.FontDataOwnedByAtlas = true;
-+        void* owned = IM_ALLOC(data.size());
-+        std::memcpy(owned, data.data(), data.size());
-+        if (ImFont* font = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(owned, static_cast<int>(data.size()), size,
-+                                                                        &config)) {
-+            return font;
-+        }
-+    }
-+    return nullptr;
-+}
-+
-+void LoadFonts() {
-+    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
-+    if (atlas->Fonts.empty()) atlas->AddFontDefault();  // the in-game overlay keeps ImGui's font
-+#if defined(_WIN32)
-+    g_text = LoadFirstFont({"C:/Windows/Fonts/bahnschrift.ttf", "C:/Windows/Fonts/segoeui.ttf",
-+                            "C:/Windows/Fonts/arial.ttf"}, 48.0f);
-+    g_bold = LoadFirstFont({"C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf"}, 40.0f);
-+    g_title = LoadFirstFont({"C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/segoeuib.ttf"}, 112.0f);
-+#else
-+    g_text = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-+                            "/usr/share/fonts/TTF/DejaVuSans.ttf"}, 48.0f);
-+    g_bold = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-+                            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"}, 40.0f);
-+#endif
-+    ImFont* fallback = atlas->Fonts[0];
-+    if (g_text == nullptr) g_text = fallback;
-+    if (g_bold == nullptr) g_bold = g_text;
-+    if (g_title == nullptr) g_title = g_bold;
-+}
-+
-+// ---- Drawing helpers ---------------------------------------------------------------------------
-+ImU32 Rgba(int r, int g, int b, int a = 255) { return IM_COL32(r, g, b, a); }
-+
-+ImVec2 TextSize(ImFont* font, float size, const char* text) {
-+    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
-+}
-+
-+void Text(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
-+          float wrap = 0.0f) {
-+    dl->AddText(font, size, pos, color, text, nullptr, wrap);
-+}
-+
-+void ShadowedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 color, const char* text,
-+                  float wrap = 0.0f) {
-+    const float d = std::max(1.0f, size * 0.05f);
-+    dl->AddText(font, size, ImVec2(pos.x + d, pos.y + d), Rgba(0, 20, 70, 170), text, nullptr, wrap);
-+    dl->AddText(font, size, pos, color, text, nullptr, wrap);
-+}
-+
-+// Fills the vertices added since `start` with a vertical gradient between y0 and y1.
-+void Shade(ImDrawList* dl, int start, float y0, float y1, ImU32 top, ImU32 bottom) {
-+    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, start, dl->VtxBuffer.Size, ImVec2(0, y0), ImVec2(0, y1), top,
-+                                                  bottom);
-+}
-+
-+// Chunky cartoon lettering: dark outer rim (dropped a little), light inner rim, gradient fill.
-+void LogoText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 top, ImU32 bottom, const char* text,
-+              ImU32 rim = IM_COL32_WHITE, ImU32 outer = IM_COL32(12, 36, 104, 255)) {
-+    const float r = std::max(1.5f, size * 0.055f);
-+    for (int pass = 0; pass < 2; ++pass) {
-+        const float radius = pass == 0 ? r * 2.0f : r;
-+        const float drop = pass == 0 ? r * 0.9f : 0.0f;
-+        for (int i = 0; i < 16; ++i) {
-+            const float a = 6.2831853f * static_cast<float>(i) / 16.0f;
-+            dl->AddText(font, size, ImVec2(pos.x + std::cos(a) * radius, pos.y + std::sin(a) * radius + drop),
-+                        pass == 0 ? outer : rim, text);
-+        }
-+    }
-+    const int start = dl->VtxBuffer.Size;
-+    dl->AddText(font, size, pos, IM_COL32_WHITE, text);
-+    Shade(dl, start, pos.y + size * 0.2f, pos.y + size * 0.9f, top, bottom);
-+}
-+
-+ImVec2 LogoTextCentered(ImDrawList* dl, ImFont* font, float size, float cx, float y, ImU32 top, ImU32 bottom,
-+                        const char* text, ImU32 rim = IM_COL32_WHITE, ImU32 outer = IM_COL32(12, 36, 104, 255)) {
-+    const ImVec2 s = TextSize(font, size, text);
-+    LogoText(dl, font, size, ImVec2(cx - s.x * 0.5f, y), top, bottom, text, rim, outer);
-+    return s;
-+}
-+
-+// Glossy pill: drop shadow, white rim, vertical gradient body and a soft highlight on the top half.
-+void Pill(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom, float u, ImU32 rim = IM_COL32_WHITE) {
-+    const float r = (b.y - a.y) * 0.5f;
-+    const float e = 4.0f * u;
-+    dl->AddRectFilled(ImVec2(a.x - e, a.y - e + 6 * u), ImVec2(b.x + e, b.y + e + 6 * u), Rgba(0, 20, 70, 110), r + e);
-+    dl->AddRectFilled(ImVec2(a.x - e, a.y - e), ImVec2(b.x + e, b.y + e), rim, r + e);
-+    const int start = dl->VtxBuffer.Size;
-+    dl->AddRectFilled(a, b, IM_COL32_WHITE, r);
-+    Shade(dl, start, a.y, b.y, top, bottom);
-+    const float gh = (b.y - a.y) * 0.42f;
-+    const int gloss = dl->VtxBuffer.Size;
-+    dl->AddRectFilled(ImVec2(a.x + r * 0.45f, a.y + 3 * u), ImVec2(b.x - r * 0.45f, a.y + 3 * u + gh),
-+                      Rgba(255, 255, 255, 110), gh * 0.5f);
-+    Shade(dl, gloss, a.y, a.y + gh, IM_COL32_WHITE, top);  // keeps the vertex alpha: fades into the body
-+}
-+
-+float Hash(int i) {
-+    const float s = std::sin(static_cast<float>(i) * 12.9898f) * 43758.5453f;
-+    return s - std::floor(s);
-+}
-+
-+// Power Pros menu backdrop: bright blue with a radial glow, slowly turning rays, a big emblem ring,
-+// fine scanlines and a scrolling marquee band at the top.
-+void DrawBackground(ImDrawList* dl, float w, float h, float u, float t, ImFont* font) {
-+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h), Rgba(28, 112, 214), Rgba(28, 112, 214),
-+                                Rgba(8, 56, 158), Rgba(8, 56, 158));
-+    const ImVec2 c(w * 0.5f, h * 0.47f);
-+    const float big = std::max(w, h);
-+    for (int i = 14; i >= 1; --i) {
-+        dl->AddCircleFilled(c, big * 0.05f * static_cast<float>(i), Rgba(120, 200, 255, 9), 96);
-+    }
-+    for (int i = 0; i < 24; ++i) {  // rays
-+        const float a0 = t * 0.04f + 6.2831853f * static_cast<float>(i) / 24.0f;
-+        const float a1 = a0 + 6.2831853f / 48.0f;
-+        dl->AddTriangleFilled(c, ImVec2(c.x + std::cos(a0) * big, c.y + std::sin(a0) * big),
-+                              ImVec2(c.x + std::cos(a1) * big, c.y + std::sin(a1) * big), Rgba(255, 255, 255, 10));
-+    }
-+    dl->AddCircle(c, h * 0.40f, Rgba(255, 255, 255, 38), 128, 16 * u);
-+    dl->AddCircle(c, h * 0.33f, Rgba(255, 255, 255, 26), 128, 5 * u);
-+    dl->AddCircleFilled(c, h * 0.31f, Rgba(160, 220, 255, 18), 128);
-+    for (float y = 0; y < h; y += 4 * u) {  // scanlines
-+        dl->AddLine(ImVec2(0, y), ImVec2(w, y), Rgba(255, 255, 255, 7), 1.0f);
-+    }
-+
-+    // Top band with a faint scrolling marquee.
-+    const float band = 44 * u;
-+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, band), Rgba(6, 40, 120, 230), Rgba(6, 40, 120, 230),
-+                                Rgba(10, 60, 160, 200), Rgba(10, 60, 160, 200));
-+    dl->AddLine(ImVec2(0, band), ImVec2(w, band), Rgba(255, 255, 255, 140), 3 * u);
-+    dl->AddLine(ImVec2(0, band + 5 * u), ImVec2(w, band + 5 * u), Rgba(230, 40, 50, 200), 3 * u);
-+    const char* marquee = "MLB POWER PROS 2008   \xC2\xB7   ";
-+    const float ms = 24 * u;
-+    const float mw = TextSize(font, ms, marquee).x;
-+    for (float x = -std::fmod(t * 40 * u, mw); x < w; x += mw) {
-+        dl->AddText(font, ms, ImVec2(x, (band - ms) * 0.5f), Rgba(255, 255, 255, 60), marquee);
-+    }
-+}
-+
-+void DrawCheck(ImDrawList* dl, ImVec2 p, float s, ImU32 color) {
-+    dl->AddLine(ImVec2(p.x, p.y + s * 0.55f), ImVec2(p.x + s * 0.35f, p.y + s * 0.9f), color, s * 0.16f);
-+    dl->AddLine(ImVec2(p.x + s * 0.35f, p.y + s * 0.9f), ImVec2(p.x + s, p.y + s * 0.15f), color, s * 0.16f);
-+}
-+
-+// Button hint: a round badge with a letter, then a label. Returns the x after it.
-+float Hint(ImDrawList* dl, ImFont* bold, ImFont* text, float x, float y, float u, ImU32 badge, const char* key,
-+           const char* label) {
-+    const float r = 13 * u;
-+    dl->AddCircleFilled(ImVec2(x + r, y + r), r + 2 * u, IM_COL32_WHITE, 24);
-+    dl->AddCircleFilled(ImVec2(x + r, y + r), r, badge, 24);
-+    const float ks = 16 * u;
-+    const ImVec2 kz = TextSize(bold, ks, key);
-+    dl->AddText(bold, ks, ImVec2(x + r - kz.x * 0.5f, y + r - kz.y * 0.5f), IM_COL32_WHITE, key);
-+    if (*label == '\0') return x + 2 * r + 6 * u;
-+    const float ls = 22 * u;
-+    ShadowedText(dl, text, ls, ImVec2(x + 2 * r + 8 * u, y + r - ls * 0.55f), IM_COL32_WHITE, label);
-+    return x + 2 * r + 8 * u + TextSize(text, ls, label).x + 30 * u;
-+}
 +
 +// ---- Input -------------------------------------------------------------------------------------
 +// Keyboard comes from SDL's key state, like the in-game keyboard pad; gamepads come through ImGui.
@@ -845,6 +871,19 @@ index 1597d20..6707fc9 100644
          aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
          GxGuestWrite::InstallAuroraHooks();
          UpdateMkwDynamicAspectSurface(auroraInfo.windowSize.native_fb_width,
+diff --git a/runtime/src/product/base_product.cpp b/runtime/src/product/base_product.cpp
+index 926372f..4c62e46 100644
+--- a/runtime/src/product/base_product.cpp
++++ b/runtime/src/product/base_product.cpp
+@@ -5,7 +5,7 @@ namespace RuntimeProduct {
+ const Descriptor& Active() noexcept {
+     static constexpr Descriptor descriptor{
+         Kind::BaseGame,
+-        "WiiCompiled",
++        "MLB Power Pros 2008",
+     };
+     return descriptor;
+ }
 diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
 index 7ce925f..a609e50 100644
 --- a/runtime/src/settings_overlay.cpp
