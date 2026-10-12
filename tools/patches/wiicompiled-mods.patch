@@ -100,10 +100,10 @@ index 6791381..7a9d91d 100644
  const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {
 diff --git a/runtime/include/mods.h b/runtime/include/mods.h
 new file mode 100644
-index 0000000..d4311d5
+index 0000000..42a4c98
 --- /dev/null
 +++ b/runtime/include/mods.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,42 @@
 +#pragma once
 +
 +#include <aurora/aurora.h>
@@ -116,7 +116,9 @@ index 0000000..d4311d5
 +// (name, author, version, description) and any of
 +//   textures/      Dolphin-style texture replacements (tex1_<W>x<H>_<hash>...png/dds),
 +//   disc/          files laid out like the disc's files/ tree, replacing the originals,
-+//   riivolution/   Riivolution XMLs (the mod folder is then the virtual SD root).
++//   riivolution/   Riivolution XMLs (the mod folder is then the virtual SD root),
++//   project/       PROJECT.BIN entries by name (e.g. PWM_mdl_uniform_MLB_BOS_00.pack); Apply builds a
++//                  per-user PROJECT.BIN with them and serves it instead of the disc's.
 +// Enabled folders are listed in Config.toml under [mods] enabled. Everything is read once at
 +// start-up, so toggling a mod needs a restart (the launcher relaunches).
 +namespace mods {
@@ -131,6 +133,7 @@ index 0000000..d4311d5
 +    bool textures = false;
 +    bool disc = false;
 +    bool riivolution = false;
++    bool project = false;
 +    bool enabled = false;
 +};
 +
@@ -193,7 +196,7 @@ index 8eed306..8135d12 100644
      return Get().graphicsApi.value_or(std::move(fallback));
  }
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
-index f774c53..4aa9896 100644
+index f774c53..e59a12c 100644
 --- a/runtime/src/launcher.cpp
 +++ b/runtime/src/launcher.cpp
 @@ -5,6 +5,7 @@
@@ -212,7 +215,7 @@ index f774c53..4aa9896 100644
  #else
  #include <unistd.h>
  #endif
-@@ -193,8 +195,42 @@ struct Option {
+@@ -193,8 +195,44 @@ struct Option {
      std::vector<std::string> choices;
      int value = 0;
      bool restart = true;
@@ -227,7 +230,8 @@ index f774c53..4aa9896 100644
 +    "(name, author, version, description) y alguna de estas carpetas:\n\n"
 +    "  textures   texturas al estilo Dolphin\n"
 +    "  disc   archivos que reemplazan los del disco\n"
-+    "  riivolution   parches Riivolution (.xml)\n\n"
++    "  riivolution   parches Riivolution (.xml)\n"
++    "  project   paquetes .pack de project.bin\n\n"
 +    "Un mod solo debe traer sus propios archivos, nunca copias del juego.";
 +
 +constexpr const char* kModsReadme =
@@ -237,7 +241,8 @@ index f774c53..4aa9896 100644
 +    "  mod.toml      name = \"...\", author = \"...\", version = \"...\", description = \"...\"\r\n"
 +    "  textures\\     texturas de reemplazo al estilo Dolphin (tex1_<ancho>x<alto>_<hash>..._<formato>.png o .dds)\r\n"
 +    "  disc\\         archivos con la misma ruta que en el disco (la carpeta files del disco)\r\n"
-+    "  riivolution\\  parches Riivolution (.xml); la carpeta del mod hace de raiz de la SD\r\n\r\n"
++    "  riivolution\\  parches Riivolution (.xml); la carpeta del mod hace de raiz de la SD\r\n"
++    "  project\\      paquetes de project.bin con su nombre (p. ej. PWM_mdl_uniform_MLB_BOS_00.pack)\r\n\r\n"
 +    "Los mods se activan en el launcher (MODS). Un mod solo debe incluir sus propios archivos,\r\n"
 +    "nunca copias del juego.\r\n";
 +
@@ -255,7 +260,7 @@ index f774c53..4aa9896 100644
  struct Tab {
      const char* name;
      std::vector<Option> options;
-@@ -299,6 +335,31 @@ Result Run(int argc, char** argv) {
+@@ -299,6 +337,32 @@ Result Run(int argc, char** argv) {
                            "Muestra esta pantalla al abrir el juego. Se puede volver a activar en F10.", YesNo(), 1,
                            false};
  
@@ -278,6 +283,7 @@ index f774c53..4aa9896 100644
 +        if (m.textures) contents += "texturas";
 +        if (m.disc) contents += std::string(contents.empty() ? "" : ", ") + "archivos del disco";
 +        if (m.riivolution) contents += std::string(contents.empty() ? "" : ", ") + "Riivolution";
++        if (m.project) contents += std::string(contents.empty() ? "" : ", ") + "paquetes de project.bin";
 +        help += "\n\nIncluye: " + (contents.empty() ? std::string("nada reconocible (textures, disc o riivolution)") : contents);
 +        modHelp.push_back(std::move(help));
 +        modsTab.options.push_back({m.name.c_str(), modHelp.back().c_str(), YesNo(), m.enabled ? 1 : 0, true,
@@ -287,7 +293,7 @@ index f774c53..4aa9896 100644
      std::vector<Tab> tabs{
          {"VIDEO", {api, display, resolution, aspect, fps}},
          {"AUDIO", {volume, mute}},
-@@ -308,11 +369,21 @@ Result Run(int argc, char** argv) {
+@@ -308,11 +372,21 @@ Result Run(int argc, char** argv) {
           "  WASD   stick\n  T F G H   stick C\n  Flechas   cruceta\n\nF10 durante la partida para reasignar."},
          {"INTERFAZ", {launcherOption}},
      };
@@ -309,7 +315,7 @@ index f774c53..4aa9896 100644
          const std::string label = o.label;
          if (label == api.label) RuntimeConfigFile::SetGraphicsApi(apis[static_cast<size_t>(o.value)].configName);
          if (label == display.label) RuntimeConfigFile::SetDisplayMode(kDisplayModes[static_cast<size_t>(o.value)]);
-@@ -351,23 +422,37 @@ Result Run(int argc, char** argv) {
+@@ -351,23 +425,37 @@ Result Run(int argc, char** argv) {
      }
      // WIICOMPILED_LAUNCHER_PAGE=settings opens the settings panel (screenshots).
      const char* page = std::getenv("WIICOMPILED_LAUNCHER_PAGE");
@@ -352,7 +358,7 @@ index f774c53..4aa9896 100644
          return Back();
      };
      using Clock = std::chrono::steady_clock;
-@@ -413,7 +498,8 @@ Result Run(int argc, char** argv) {
+@@ -413,7 +501,8 @@ Result Run(int argc, char** argv) {
                      if (click && hit(r)) {
                          menu = i;
                          if (i == 0) choice = Choice::Play;
@@ -362,7 +368,7 @@ index f774c53..4aa9896 100644
                          if (i == 3) choice = Choice::Quit;
                      }
                  }
-@@ -421,7 +507,7 @@ Result Run(int argc, char** argv) {
+@@ -421,7 +510,7 @@ Result Run(int argc, char** argv) {
                      const ArtRect& r = kArtButtons[static_cast<size_t>(i)];
                      const float radius = (r.y1 - r.y0) * 0.5f * s;
                      if (i != menu) {
@@ -371,7 +377,7 @@ index f774c53..4aa9896 100644
                          continue;
                      }
                      const float pulse = 0.5f + 0.5f * std::sin(t * 5.0f);
-@@ -448,7 +534,7 @@ Result Run(int argc, char** argv) {
+@@ -448,7 +537,7 @@ Result Run(int argc, char** argv) {
                  // Info box (its baked example text was erased from main.png).
                  const char* lines[] = {"¡A jugar! Arranca MLB Power Pros 2008.",
                                         "API gráfica, pantalla, resolución, audio y controles.",
@@ -380,7 +386,7 @@ index f774c53..4aa9896 100644
                  ShadowedText(dl, g_text, 31 * s, at(100, 777), IM_COL32_WHITE, lines[menu]);
                  if (discReady) {
                      DrawCheck(dl, at(100, 822), 22 * s, Rgba(120, 230, 110));
-@@ -471,13 +557,17 @@ Result Run(int argc, char** argv) {
+@@ -471,13 +560,17 @@ Result Run(int argc, char** argv) {
                  if (Down() || Right()) menu = (menu + 1) % n;
                  if (Accept()) {
                      if (menu == 0) choice = Choice::Play;
@@ -424,10 +430,10 @@ index 6707fc9..fde15ce 100644
          const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
 new file mode 100644
-index 0000000..ebd3b88
+index 0000000..75890b5
 --- /dev/null
 +++ b/runtime/src/mods.cpp
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,246 @@
 +#include "mods.h"
 +
 +#include "recomp_mod_loader.h"
@@ -438,7 +444,11 @@ index 0000000..ebd3b88
 +
 +#include <algorithm>
 +#include <cctype>
++#include <chrono>
++#include <cstdint>
 +#include <fstream>
++#include <map>
++#include <sstream>
 +
 +namespace mods {
 +namespace {
@@ -457,6 +467,86 @@ index 0000000..ebd3b88
 +bool IsDirectory(const std::filesystem::path& path) {
 +    std::error_code ec;
 +    return std::filesystem::is_directory(path, ec);
++}
++
++uint32_t Be32(const std::vector<char>& data, size_t at) {
++    const auto* b = reinterpret_cast<const unsigned char*>(data.data() + at);
++    return (uint32_t{b[0]} << 24) | (uint32_t{b[1]} << 16) | (uint32_t{b[2]} << 8) | uint32_t{b[3]};
++}
++
++void PutBe32(std::vector<char>& data, size_t at, uint32_t value) {
++    for (int i = 0; i < 4; ++i) data[at + i] = static_cast<char>(value >> (24 - 8 * i));
++}
++
++// Writes `out` as a copy of PROJECT.BIN with the entries named in `replacements` (lower-case path
++// without the leading slash, e.g. "pwm_mdl_uniform_mlb_chc_00.pack") swapped in. Same layout as
++// tools/projectbin.py: 0x1C-byte records at [0x14] (name offset, sectors, alignment, bytes), an
++// order table at [0x28] of (record, start sector) pairs, names at [0x2C], data from [0x34] in
++// 0x800-byte sectors. Only record sizes and start sectors change.
++bool BuildProjectBin(const std::filesystem::path& original, const std::map<std::string, std::filesystem::path>& replacements,
++                     const std::filesystem::path& out, std::string& error) {
++    constexpr uint32_t kSector = 0x800;
++    std::ifstream src(original, std::ios::binary);
++    std::vector<char> head(0x40);
++    if (!src.read(head.data(), static_cast<std::streamsize>(head.size()))) {
++        error = "cannot read " + Utf8(original);
++        return false;
++    }
++    const uint32_t recordsOff = Be32(head, 0x14), orderOff = Be32(head, 0x28), namesOff = Be32(head, 0x2C),
++                   dataOff = Be32(head, 0x34);
++    if (Be32(head, 4) != kSector || !(recordsOff < orderOff && orderOff < namesOff && namesOff < dataOff)) {
++        error = "unexpected PROJECT.BIN header";
++        return false;
++    }
++    std::vector<char> header(dataOff);
++    src.seekg(0);
++    src.read(header.data(), static_cast<std::streamsize>(header.size()));
++    std::ofstream dst(out, std::ios::binary | std::ios::trunc);
++    if (!dst) {
++        error = "cannot write " + Utf8(out);
++        return false;
++    }
++    dst.write(header.data(), static_cast<std::streamsize>(header.size()));
++    std::vector<char> data;
++    uint32_t sector = 0;
++    size_t used = 0;
++    for (uint32_t slot = 1; orderOff + slot * 8 + 8 <= namesOff; ++slot) {
++        const uint32_t index = Be32(header, orderOff + slot * 8);
++        const uint32_t start = Be32(header, orderOff + slot * 8 + 4);
++        if (index == 0 && start == 0) break;
++        const size_t record = recordsOff + static_cast<size_t>(index) * 0x1C;
++        const size_t nameAt = namesOff + Be32(header, record + 4);
++        std::string name(header.data() + nameAt);
++        name = Lower(name.substr(name.rfind('/') == 0 ? 1 : 0));
++        if (const auto it = replacements.find(name); it != replacements.end()) {
++            std::ifstream file(it->second, std::ios::binary);
++            data.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
++            ++used;
++        } else {
++            data.resize(Be32(header, record + 0x18));
++            src.seekg(static_cast<std::streamoff>(dataOff) + static_cast<std::streamoff>(start) * kSector);
++            src.read(data.data(), static_cast<std::streamsize>(data.size()));
++        }
++        const uint32_t bytes = static_cast<uint32_t>(data.size());
++        const uint32_t sectors = (bytes + kSector - 1) / kSector;
++        data.resize(static_cast<size_t>(sectors) * kSector, '\0');
++        dst.write(data.data(), static_cast<std::streamsize>(data.size()));
++        PutBe32(header, record + 8, sectors);
++        PutBe32(header, record + 0x18, bytes);
++        PutBe32(header, orderOff + slot * 8 + 4, sector);
++        sector += sectors;
++    }
++    if (used != replacements.size()) {
++        RT_LOG(RT_TAG_RUNTIME) << "mods: " << replacements.size() - used
++                               << " project/ file(s) match no PROJECT.BIN entry and were ignored" << std::endl;
++    }
++    dst.seekp(0);
++    dst.write(header.data(), static_cast<std::streamsize>(header.size()));
++    if (!dst) {
++        error = "write failed for " + Utf8(out);
++        return false;
++    }
++    return true;
 +}
 +
 +} // namespace
@@ -499,6 +589,7 @@ index 0000000..ebd3b88
 +        mod.textures = IsDirectory(mod.root / "textures");
 +        mod.disc = IsDirectory(mod.root / "disc");
 +        mod.riivolution = IsDirectory(mod.root / "riivolution");
++        mod.project = IsDirectory(mod.root / "project");
 +        mod.enabled = std::find(enabled.begin(), enabled.end(), mod.id) != enabled.end();
 +        found.push_back(std::move(mod));
 +    }
@@ -513,16 +604,74 @@ index 0000000..ebd3b88
 +    return RuntimeConfigFile::SetEnabledMods(list);
 +}
 +
++namespace {
++
++// project/ packs of the enabled mods, merged into a per-user copy of PROJECT.BIN that is served as a
++// disc overlay. The copy is rebuilt only when the original or any pack changes (size and time).
++// ponytail: a full 406 MB copy; a virtual file in the DVD layer would avoid it if disk space matters.
++void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs, const char* cachePath) {
++    namespace fs = std::filesystem;
++    const fs::path original = RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin";
++    const fs::path disc = (cachePath != nullptr ? fs::path(reinterpret_cast<const char8_t*>(cachePath))
++                                                : Directory().parent_path()) / "mods" / "disc";
++    const fs::path merged = disc / "project.bin";
++    const fs::path stamp = disc / "project.bin.sources";
++    std::error_code ec;
++    auto describe = [&](const fs::path& path) {
++        const auto time = fs::last_write_time(path, ec).time_since_epoch().count();
++        return Utf8(path) + " " + std::to_string(static_cast<unsigned long long>(fs::file_size(path, ec))) + " " +
++               std::to_string(static_cast<long long>(time)) + "\n";
++    };
++    std::string sources = describe(original);
++    for (const auto& [name, path] : packs) sources += name + " = " + describe(path);
++    std::string previous;
++    if (std::ifstream in(stamp, std::ios::binary); in) previous.assign(std::istreambuf_iterator<char>(in), {});
++    if (previous != sources || !fs::is_regular_file(merged, ec)) {
++        fs::create_directories(disc, ec);
++        const fs::path partial = disc / "project.bin.partial";
++        const auto started = std::chrono::steady_clock::now();
++        std::string error;
++        if (!BuildProjectBin(original, packs, partial, error)) {
++            RT_LOG(RT_TAG_RUNTIME) << "mods: cannot build the modded PROJECT.BIN: " << error << std::endl;
++            fs::remove(partial, ec);
++            return;
++        }
++        fs::rename(partial, merged, ec);
++        if (ec) {
++            RT_LOG(RT_TAG_RUNTIME) << "mods: cannot replace " << Utf8(merged) << ": " << ec.message() << std::endl;
++            return;
++        }
++        std::ofstream(stamp, std::ios::binary) << sources;
++        RT_LOG(RT_TAG_RUNTIME) << "mods: built PROJECT.BIN with " << packs.size() << " replaced pack(s) in "
++                               << std::chrono::duration_cast<std::chrono::milliseconds>(
++                                      std::chrono::steady_clock::now() - started).count()
++                               << " ms" << std::endl;
++    } else {
++        RT_LOG(RT_TAG_RUNTIME) << "mods: reusing PROJECT.BIN with " << packs.size() << " replaced pack(s)" << std::endl;
++    }
++    RecompMod::RegisterDvdOverlayRoot(Utf8(disc));
++}
++
++} // namespace
++
 +void Apply(AuroraConfig& config) {
 +    static std::vector<std::string> textureRoots;
 +    static std::vector<const char*> texturePointers;
++    std::map<std::string, std::filesystem::path> packs;  // first enabled mod (by name) wins
 +    for (const Mod& mod : Discover()) {
 +        if (!mod.enabled) continue;
 +        RT_LOG(RT_TAG_RUNTIME) << "mods: enabled \"" << mod.name << "\" (" << Utf8(mod.root) << ")" << std::endl;
 +        if (mod.riivolution) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root));
 +        if (mod.disc) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root / "disc"));
 +        if (mod.textures) textureRoots.push_back(Utf8(mod.root / "textures"));
++        if (mod.project) {
++            std::error_code ec;
++            for (const auto& file : std::filesystem::directory_iterator(mod.root / "project", ec)) {
++                if (file.is_regular_file(ec)) packs.try_emplace(Lower(Utf8(file.path().filename())), file.path());
++            }
++        }
 +    }
++    if (!packs.empty()) ApplyProjectPacks(packs, config.cachePath);
 +    if (textureRoots.empty()) return;
 +    for (const std::string& root : textureRoots) texturePointers.push_back(root.c_str());
 +    config.textureReplacementRoots = texturePointers.data();

@@ -603,3 +603,7 @@ No está validado píxel a píxel contra Dolphin.
   - Con `PWM_mdl_uniform_MLB_CHC_00.pack` reemplazado por el de NYY y servido como `mods/<x>/disc/project.bin`, el juego lee el archivo del mod (`WIICOMPILED_DEBUG_DVD`) y los Cubs salen con uniforme de los Yankees en la selección de equipo.
 - **`WIICOMPILED_DEBUG_DVD=1` más `projectbin.py list`:** dicen qué pack carga cada pantalla. Por ejemplo `env_title_logo`, `env_mainmenu`, `PWM_mdl_uniform_MLB_<equipo>_<n>` y `env_teamnameNN`.
 - **Pack de texturas de Dolphin del usuario** (logos y uniformes 2023, 206 PNG): funciona como `textures/` de un mod sin cambios; 32 de sus texturas se usan en la demo.
+- **Paquetes de `project.bin` en mods (parche 22):** la carpeta `project/` de cada mod activo trae `.pack` por nombre.
+  - `mods::Apply` genera `UserData/Cache/mods/disc/project.bin` con un port en C++ de `projectbin.py build` y lo registra como overlay del disco.
+  - Se reconstruye solo si cambian el original o algún pack (tamaño y fecha en `project.bin.sources`).
+  - **Medido:** 656 ms la primera vez y reutilizado después. El SHA-256 es idéntico al de la herramienta de Python, y los Cubs aparecen con el uniforme de los Yankees.

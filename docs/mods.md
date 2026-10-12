@@ -13,6 +13,7 @@ mods\
     textures\      texturas de reemplazo
     disc\          archivos que reemplazan los del disco
     riivolution\   parches Riivolution (.xml)
+    project\       paquetes de project.bin (.pack/.dat/.arc) con su nombre
 ```
 
 `mod.toml` es opcional; sin él se usa el nombre de la carpeta:
@@ -31,6 +32,11 @@ description = "Uniformes redibujados a 4x."
   - Edita la que quieras y guárdala en el `textures/` de tu mod con el mismo nombre.
   - Muchas texturas son atlas, es decir, una imagen con varias piezas; solo se ven las zonas que el juego usa.
 - **`disc/`**: archivos con la misma ruta que dentro de la carpeta `files` del disco. Por ejemplo, `disc/sound/SeData.bin` reemplaza `files/sound/SeData.bin` y `disc/project.bin` reemplaza el archivo de contenido (ver abajo).
+- **`project/`**: entradas de `project.bin` con su nombre exacto, por ejemplo `project/PWM_mdl_uniform_MLB_BOS_00.pack`.
+  - Al arrancar, el juego genera una copia de `project.bin` con esos archivos en `UserData\Cache\mods\disc\project.bin` y la usa en lugar de la del disco.
+  - La copia se reutiliza mientras no cambien los mods ni el disco. Generarla tarda menos de un segundo en un SSD y ocupa 406 MB.
+  - Si dos mods traen el mismo archivo, gana el primero en orden alfabético.
+  - Es la forma correcta de repartir cambios de `project.bin`: el mod solo lleva sus `.pack`, nunca el archivo completo.
 - **`riivolution/`**: XML de Riivolution (`<wiidisc>`) válidos para `RL8E54`. La carpeta del mod hace de raíz de la SD.
   - Los parches de archivos funcionan.
   - Los parches de **memoria** solo sirven para datos: el código del juego ya está traducido a nativo, así que cambiar instrucciones PowerPC en memoria no tiene efecto. Lo mismo pasa con los códigos Gecko/Action Replay que modifican código.
@@ -47,13 +53,13 @@ python tools/projectbin.py extract <project.bin> <carpeta> [filtro]   # p. ej. f
 python tools/projectbin.py build   <project.bin> <reemplazos> <salida>
 ```
 
-`build` copia el original y sustituye las entradas cuyo nombre (p. ej. `PWM_mdl_uniform_MLB_CHC_00.pack`) esté en la carpeta de reemplazos, recalculando tamaños y posiciones. Sin reemplazos reproduce el archivo byte a byte. El resultado va en `mods/<mod>/disc/project.bin`.
+`build` copia el original y sustituye las entradas cuyo nombre (p. ej. `PWM_mdl_uniform_MLB_CHC_00.pack`) esté en la carpeta de reemplazos, recalculando tamaños y posiciones. Sin reemplazos reproduce el archivo byte a byte. Para jugar no hace falta: basta con poner los `.pack` en `project/` del mod, y el juego hace lo mismo al arrancar (con resultado idéntico al de `build`). `extract` sirve para sacar el original y editarlo.
 
 Para saber qué entrada usa cada pantalla, ejecuta el juego con `WIICOMPILED_DEBUG_DVD=1`: el registro muestra cada lectura de `project.bin` con su posición, que `projectbin.py list` traduce a nombre.
 
 Formato (verificado en las 2.424 entradas): cabecera con versión 2 y sector 0x800; registros de 0x1C bytes en 0x6000 (nombre, sectores, alineación, tamaño); tabla de orden en 0x26000 (registro, sector de inicio); nombres en 0x2B000; datos desde 0x3D800. Los `.pack` empiezan por `PACKWII` (dos por `PACKPS2`) y por dentro son bloques con etiquetas (`SURF`, `SURG`...) y punteros relativos; ese formato interno todavía no está documentado.
 
-Un mod no debe distribuir un `project.bin` completo (es contenido del juego). Lo correcto es repartir solo los `.pack` propios y que cada jugador genere su `project.bin` con `build` a partir de su disco; el siguiente paso es que el runtime lo haga solo al activar el mod.
+Un mod no debe distribuir un `project.bin` completo (es contenido del juego): solo sus `.pack` en `project/`.
 
 ## Reglas
 
@@ -66,10 +72,9 @@ Un mod solo debe traer sus propios archivos o diferencias, **nunca copias del ju
   - un mod con `textures/` reemplaza la pantalla de la correa del Wii Remote (`tex1_512x512_fdbf0c48ec7ed2b1_25db17d8ad4d988a_9`);
   - el registro muestra `mods: enabled ...` e `Indexed N texture replacements from 2 folder(s)`.
   - un pack de texturas de Dolphin real (logos y uniformes 2023, 206 texturas) funciona sin cambios como `textures/`;
-  - `disc/project.bin` reconstruido con el uniforme de los Yankees en el lugar de los Cubs: en la selección de equipo los Cubs salen con la gorra "NY".
+  - un mod con solo `project/PWM_mdl_uniform_MLB_CHC_00.pack` (el de los Yankees, 6,9 KB) hace que los Cubs salgan con la gorra "NY" en la selección de equipo. El juego genera la copia en 656 ms, la reutiliza en el siguiente arranque y queda idéntica a la de `projectbin.py build` (mismo SHA-256).
 - **Sin probar todavía:** `riivolution/` en MLB. Usa el mismo código de Wiicompiled que ya funciona con Mario Kart Wii.
 - **Pendiente:**
-  - que el runtime genere el `project.bin` con los `.pack` de los mods (hoy hay que hacerlo con `projectbin.py build`);
   - formato interno de `PACKWII` (texturas y modelos);
   - opción en el launcher para volcar texturas sin editar `Config.toml`;
   - mods de código en C++ compilados por el Setup.
