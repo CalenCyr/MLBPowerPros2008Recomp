@@ -1,0 +1,160 @@
+diff --git a/aurora-main/include/aurora/gfx.h b/aurora-main/include/aurora/gfx.h
+index 642ae80..0550ae3 100644
+--- a/aurora-main/include/aurora/gfx.h
++++ b/aurora-main/include/aurora/gfx.h
+@@ -73,6 +73,8 @@ typedef struct {
+   uint32_t supported;
+ } AuroraGpuTiming;
+ void aurora_get_gpu_timing(AuroraGpuTiming* timing);
++// Graphics adapter name reported by the driver; empty before initialization.
++const char* aurora_get_adapter_name();
+ 
+ const AuroraStats* aurora_get_stats();
+ void aurora_get_present_timing(AuroraPresentTiming* timing);
+diff --git a/aurora-main/lib/aurora.cpp b/aurora-main/lib/aurora.cpp
+index 445a695..4c194b7 100644
+--- a/aurora-main/lib/aurora.cpp
++++ b/aurora-main/lib/aurora.cpp
+@@ -2101,6 +2101,11 @@ AuroraBackend aurora_get_backend() { return aurora::g_config.desiredBackend; }
+ void aurora_get_gpu_timing(AuroraGpuTiming* timing) {
+   if (timing) *timing = aurora::webgpu::timing::get();
+ }
++const char* aurora_get_adapter_name() {
++  static std::string name;
++  name = aurora::webgpu::adapter_name();
++  return name.c_str();
++}
+ const AuroraBackend* aurora_get_available_backends(size_t* count) {
+   if (count != nullptr) {
+     *count = aurora::PreferredBackendOrder.size();
+diff --git a/aurora-main/lib/webgpu/gpu.cpp b/aurora-main/lib/webgpu/gpu.cpp
+index ce02c57..b211986 100644
+--- a/aurora-main/lib/webgpu/gpu.cpp
++++ b/aurora-main/lib/webgpu/gpu.cpp
+@@ -1008,4 +1008,6 @@ void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, ui
+   g_depthBuffer = create_depth_texture(render_width, render_height);
+   g_CopyBindGroup = create_copy_bind_group(present_source());
+ }
++
++std::string_view adapter_name() { return g_adapterInfo.device.IsUndefined() ? std::string_view{} : std::string_view(g_adapterInfo.device); }
+ } // namespace aurora::webgpu
+diff --git a/aurora-main/lib/webgpu/gpu.hpp b/aurora-main/lib/webgpu/gpu.hpp
+index 7b96e95..aae07f9 100644
+--- a/aurora-main/lib/webgpu/gpu.hpp
++++ b/aurora-main/lib/webgpu/gpu.hpp
+@@ -61,6 +61,7 @@ extern bool g_bcTexturesSupported;
+ 
+ bool initialize(AuroraBackend backend);
+ void shutdown();
++std::string_view adapter_name();
+ // Device-loss callbacks may run on a Dawn-managed thread and only publish loss state; frame
+ // threads call this at ordered boundaries to turn it into the one user-visible fatal error.
+ void fail_if_device_lost() noexcept;
+diff --git a/runtime/src/match_benchmark_overlay.inc b/runtime/src/match_benchmark_overlay.inc
+index bd94b05..ff8a285 100644
+--- a/runtime/src/match_benchmark_overlay.inc
++++ b/runtime/src/match_benchmark_overlay.inc
+@@ -1,4 +1,26 @@
+ // Included inside settings_overlay's private namespace: reuse its live graphics setters.
++// CPU, threads, RAM, GPU and OS, one per line, for the panel and the saved report.
++std::string BenchmarkDeviceInfo() {
++    char cpu[49] = {};
++#if defined(__x86_64__) || defined(__i386__)
++    unsigned r[4];
++    if (__get_cpuid(0x80000000u, &r[0], &r[1], &r[2], &r[3]) && r[0] >= 0x80000004u) {
++        for (unsigned i = 0; i < 3; ++i) {
++            __get_cpuid(0x80000002u + i, &r[0], &r[1], &r[2], &r[3]);
++            std::memcpy(cpu + i * 16, r, 16);
++        }
++    }
++#endif
++    std::string name = cpu;
++    name.erase(name.find_last_not_of(' ') + 1);
++    name.erase(0, name.find_first_not_of(' '));
++    const std::string gpu = aurora_get_adapter_name();
++    char ram[32];
++    std::snprintf(ram, sizeof(ram), "%.1f GB", SDL_GetSystemRAM() / 1024.0);
++    return "CPU: " + (name.empty() ? std::string("desconocida") : name) + " (" + std::to_string(SDL_GetNumLogicalCPUCores()) +
++           " hilos)\nRAM: " + ram + "\nGPU: " + (gpu.empty() ? std::string("desconocida") : gpu) + "\nSistema: " + SDL_GetPlatform();
++}
++
+ void DrawMatchBenchmark() {
+     if (!match_benchmark::Enabled()) return;
+     using BenchClock = std::chrono::steady_clock;
+@@ -15,6 +37,7 @@ void DrawMatchBenchmark() {
+     static std::ofstream csv;
+     static std::filesystem::path report;
+     static std::string message;
++    static const std::string device = BenchmarkDeviceInfo();
+     static AuroraFrameWaits base{}, previous{};
+     static AuroraGpuTiming gpuBase{}, gpuPrevious{};
+     const auto now = BenchClock::now();
+@@ -59,6 +82,7 @@ void DrawMatchBenchmark() {
+         const auto percentile = [&](double p) { return sorted.empty() ? 0.0 : sorted[std::min(sorted.size()-1, static_cast<size_t>(p * sorted.size()))]; };
+         std::ofstream summary(report.string() + ".txt");
+         summary << "Yankees vs Colorado; CPU vs CPU; Coors Field; seeded start\n"
++                << device << '\n'
+                 << "scale=" << g_resolutionScale << " force_16_9=" << g_forceAspect169 << " backend=" << GraphicsApiDisplayName() << '\n'
+                 << "seconds=" << elapsed << " presented_frames=" << frames << " fps=" << (elapsed > 0 ? frames/elapsed : 0) << '\n'
+                 << "host_frame_p50_ms=" << percentile(.50) << " p95_ms=" << percentile(.95) << " p99_ms=" << percentile(.99) << '\n';
+@@ -87,9 +111,9 @@ void DrawMatchBenchmark() {
+             << waits.efbSnapshotCopies - previous.efbSnapshotCopies << ',' << waits.efbReadbacks - previous.efbReadbacks << ','
+             << double(waits.efbReadbackWaitNs - previous.efbReadbackWaitNs)/1e6 << ',' << waits.presents - previous.presents << '\n';
+         previous = waits; gpuPrevious = gpu; last = now;
+-        if (now - start >= std::chrono::seconds(autoSeconds ? autoSeconds : 30)) {
++        if (autoSeconds && now - start >= std::chrono::seconds(autoSeconds)) {
+             finish();
+-            if (autoSeconds) std::_Exit(0);
++            std::_Exit(0);
+         }
+     }
+     if (autoSeconds && !completed && now - launched > std::chrono::seconds(120 + autoSeconds)) {
+@@ -119,13 +143,15 @@ void DrawMatchBenchmark() {
+         else ImGui::TextUnformatted("Tiempo GPU: no disponible");
+         if (!recording) {
+             ImGui::BeginDisabled(!ready);
+-            if (ImGui::Button("Medir 30 segundos")) begin();
++            if (ImGui::Button("Empezar a medir")) begin();
+             ImGui::EndDisabled();
+         } else {
+             ImGui::Text("Midiendo: %.1f s", std::chrono::duration<double>(now-start).count());
+             if (ImGui::Button("Detener y guardar")) finish();
+         }
+         if (!message.empty()) ImGui::TextUnformatted(message.c_str());
++        ImGui::Separator();
++        ImGui::TextUnformatted(device.c_str());
+         ImGui::TextDisabled("Ajustes temporales. Informes: UserData/Benchmarks");
+     }
+     ImGui::End();
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index 1c91abc..7878d4e 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -12,7 +12,9 @@
+ #include "wii_remote_input.h"
+ 
+ #include <imgui.h>
++#include <SDL3/SDL_cpuinfo.h>
+ #include <SDL3/SDL_events.h>
++#include <SDL3/SDL_platform.h>
+ #include <SDL3/SDL_gamepad.h>
+ #include <SDL3/SDL_keyboard.h>
+ #include <SDL3/SDL_mouse.h>
+@@ -29,6 +31,7 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
+ #include <limits>
+ #include <iostream>
+ #include <string>
+@@ -36,6 +39,9 @@
+ #include <string_view>
+ #include <utility>
+ 
++#if defined(__x86_64__) || defined(__i386__)
++#include <cpuid.h>
++#endif
+ #if defined(_WIN32)
+ #define WIN32_LEAN_AND_MEAN
+ #include <Windows.h>
