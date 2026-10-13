@@ -4,7 +4,8 @@
 # under local/: the working copy, NuGet/.NET caches, temp files and outputs.
 # -Groups lists the runtime/src/hle groups whose native hooks are rebound to MLB (see
 # tools/wiicompiled_rebind.py); -Fresh recreates the working copy from the pinned clone.
-# -RegenerateMap rebuilds config/wiicompiled/rl8e54-functions.map from the local dtk/DolRecomp analysis.
+# -RegenerateMap rebuilds config/wiicompiled/rl8e54-functions.map from the local dtk/DolRecomp analysis
+# (its rel-linked inputs came from tools/prepare_linked_rel.py, kept at git tag moderngekko-era).
 param([switch]$Build, [switch]$Fresh, [switch]$RegenerateMap, [int]$Threads = 6,
       [string[]]$Groups = @('os', 'audio', 'storage', 'vi', 'gx', 'input', 'ios'))
 $ErrorActionPreference = 'Stop'
@@ -36,6 +37,8 @@ if ($Fresh -and (Test-Path $src)) {
 }
 if (-not (Test-Path "$src\.git")) {
     git clone -q (Join-Path $root 'local\vendor\Wiicompiled') $src; Invoke-Checked 'git clone'
+    $pin = (Get-Content -LiteralPath config\tools.lock.json -Raw | ConvertFrom-Json).wiicompiled.commit
+    git -C $src checkout -q $pin; Invoke-Checked "checkout $pin"
     foreach ($patch in 'wiicompiled-rel-bss-address', 'wiicompiled-mlb-bringup', 'wiicompiled-masked-jump-tables', 'wiicompiled-aurora-partial-efb-copy',
              'wiicompiled-dvd-low-completion', 'wiicompiled-scripted-kpad', 'wiicompiled-mlb-overlay-loader',
              'wiicompiled-debug-tools', 'wiicompiled-mlb-nand-es',

@@ -10,11 +10,10 @@
     "url": "https://github.com/Nanook/NKit/releases/download/v3.1.0/NKit_win-x64_CLI_3.1.0.zip",
     "sha256": "7b194152cd916d90abb6b1c5e98f16a9402bd94abd96b12dd658103f208d70b2"
   },
-  "llvm": {
-    "version": "20.1.8",
-    "purpose": "DolRecomp LLVM backend development libraries (requires LLVM 19 or 20)",
-    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
-    "sha256": "f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f",
-    "install_dir": "local/tools/llvm-20.1.8"
+  "wiicompiled": {
+    "repository": "https://github.com/patchzyy/Wiicompiled.git",
+    "commit": "6fa24737d3362b6cba8162671745262751f457b8",
+    "license": "GPL-3.0",
+    "clone_dir": "local/vendor/Wiicompiled"
   }
 }
