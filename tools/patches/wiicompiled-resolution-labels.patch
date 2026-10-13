@@ -1,0 +1,19 @@
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index eccc445..37e80ca 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -451,10 +451,12 @@ Result Run(int argc, char** argv) {
+     for (size_t i = 0; i < kDisplayModes.size(); ++i) {
+         if (RuntimeConfigFile::DisplayMode("windowed") == kDisplayModes[i]) display.value = static_cast<int>(i);
+     }
++    // The EFB is 528 lines (wider in 16:9), so each step is 528 lines times the multiplier.
+     Option resolution{"RESOLUCIÓN INTERNA",
+                       "Resolución a la que se dibuja el juego. 1x es la de Wii; más alta es más nítida y más "
+-                      "exigente para la GPU.",
+-                      {"1x (Wii)", "1.5x", "2x (720p)", "3x (1080p)", "4x (1440p)", "Según la ventana"}};
++                      "exigente para la GPU. 4x dibuja a casi 4K aunque la ventana sea más pequeña.\n\n"
++                      "Según la ventana dibuja a la resolución de tu ventana o pantalla: la opción más eficiente.",
++                      {"1x (Wii)", "1.5x (~800p)", "2x (~1080p)", "3x (~1600p)", "4x (~4K)", "Según la ventana"}};
+     const float currentResolution = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+     for (size_t i = 0; i < kResolutions.size(); ++i) {
+         if (kResolutions[i] == currentResolution) resolution.value = static_cast<int>(i);

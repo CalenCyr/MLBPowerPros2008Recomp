@@ -668,3 +668,23 @@ No está validado píxel a píxel contra Dolphin.
   - El juego no dibuja fotogramas de más: va a 60 por segundo. A x4 la GPU trabaja el 70 % de cada fotograma. Unas 35 copias del EFB por fotograma escalan con la resolución, 16 veces más píxeles a x4.
   - Las dos sesiones llegaron solas al campo, con los mismos equipos y estadio, y los dibujos variaron entre 208 y 1.012 (el partido se mueve). Es juego automático de la CPU, no una repetición exacta fotograma a fotograma.
 - **Pendiente:** saber qué parte de los 11,7 ms son esas copias y cuál el dibujado en sí.
+
+## Por qué x4 carga tanto la GPU (13 de octubre de 2026)
+
+- **Desglose por pase** (`WIICOMPILED_GPU_BREAKDOWN=1`, parte de `wiicompiled-match-benchmark`): marca de tiempo al inicio y al final de cada pase de render. El tiempo dentro del pase es dibujado; el hueco hasta el siguiente es la copia o conversión del EFB que los separa. Cada 300 fotogramas escribe en el registro la media por fotograma y los pases más caros.
+- **Resultado en el partido, RX 5500, D3D12, 16:9:**
+
+  | | x1 | Según la ventana (1920×1009) | x4 |
+  |---|---|---|---|
+  | Resolución interna | 939×528 | 1794×1009 | 3755×2112 |
+  | GPU por fotograma | 4,0 ms | 8,8 ms | 12,3 ms |
+  | Dibujado | 2,7 ms | 8,0 ms | 11,1 ms |
+  | Copias y conversiones EFB (~32) | 0,9 ms | 1,0 ms | 1,1 ms |
+  | Utilización 3D (Windows) | 35 % | 60 % | 78 % |
+
+- **Causa:** x4 no es 1440p. El EFB tiene 528 líneas y en 16:9 se ensancha a 939, así que x4 dibuja 3755×2112: 7,9 millones de píxeles, casi 4K y 2,1 veces 1440p. Después se reduce a la ventana. El 90 % del tiempo es dibujado; las copias del EFB pesan poco.
+- En las pantallas de carga, tres pases con efectos a pantalla completa (15, 7 y 3 dibujos) cuestan 9-10 ms a x4 y 0,75 ms a x1: 13 veces más para 15 veces más píxeles. Escala con los píxeles.
+- Los formatos del EFB son normales (color de 8 bits, profundidad de 32 bits) y MSAA está desactivado.
+- El porcentaje de Windows y los milisegundos no son proporcionales al trabajo: la GPU baja reloj cuando le sobra tiempo (por eso "Según la ventana" no baja tanto el porcentaje). La temperatura depende de la potencia, no del porcentaje.
+- **Arreglo, parche `wiicompiled-resolution-labels`:** el launcher decía "2x (720p)", "3x (1080p)" y "4x (1440p)". Ahora dice "2x (~1080p)", "3x (~1600p)" y "4x (~4K)", y la ayuda recomienda "Según la ventana", que dibuja a la resolución de la ventana.
+- `tools/benchmark-match.ps1 -Scale 0` mide el modo "Según la ventana".

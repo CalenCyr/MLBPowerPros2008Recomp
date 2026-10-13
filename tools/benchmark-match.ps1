@@ -1,6 +1,6 @@
 param(
     [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\local\wiicompiled-mlb\build'),
-    [ValidateSet(1, 2, 3, 4)][int[]]$Scale = @(4),
+    [ValidateSet(0, 1, 2, 3, 4)][int[]]$Scale = @(4),  # 0: window size ("Según la ventana")
     [ValidateSet('on', 'off')][string[]]$Force169 = @('on'),
     [ValidateSet('auto', 'd3d12', 'vulkan')][string]$GraphicsApi = 'auto',
     [ValidateRange(5, 600)][int]$Seconds = 30,

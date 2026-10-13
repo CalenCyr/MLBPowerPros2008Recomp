@@ -70,10 +70,52 @@ index bb5f34c..445a695 100644
    if (count != nullptr) {
      *count = aurora::PreferredBackendOrder.size();
 diff --git a/aurora-main/lib/gfx/common.cpp b/aurora-main/lib/gfx/common.cpp
-index d13d823..2a99c1e 100644
+index d13d823..88b755f 100644
 --- a/aurora-main/lib/gfx/common.cpp
 +++ b/aurora-main/lib/gfx/common.cpp
-@@ -1424,6 +1424,10 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
+@@ -12,6 +12,7 @@
+ #include "pipeline_cache.hpp"
+ #include "tex_copy_conv.hpp"
+ #include "tex_palette_conv.hpp"
++#include "pass_timing.hpp"
+ #include "texture_replacement.hpp"
+ #include "texture.hpp"
+ #include "../window.hpp"
+@@ -1332,6 +1333,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
+   // Palette conversions, MSAA resolves and EFB copies depend on sealed frame state, not on the
+   // interpolation weight, so encode them on the native render and let replay slots sample them.
+   const bool encodeTextureBakes = interpolatedFrame < 0;
++  if (encodeTextureBakes) pass_timing::begin_frame();
+   for (u32 i = 0; i < renderPasses.size(); ++i) {
+     const auto& passInfo = renderPasses[i];
+     if (encodeTextureBakes) {
+@@ -1369,11 +1371,25 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
+         .depthStoreOp = wgpu::StoreOp::Store,
+         .depthClearValue = passInfo.clearDepthValue,
+     };
++    wgpu::PassTimestampWrites timestampWrites{};
++    const pass_timing::PassInfo timingInfo{
++        .draws = static_cast<uint32_t>(passInfo.commands.size()),
++        .w = passInfo.targetSize.width,
++        .h = passInfo.targetSize.height,
++        .copyPixels = passInfo.resolveTarget
++                          ? static_cast<uint64_t>(passInfo.resolveRect.width) * passInfo.resolveRect.height
++                          : 0,
++        .kind = !passInfo.resolveTarget              ? pass_timing::None
++                : passInfo.resolveNeedsConversion     ? pass_timing::Conv
++                : passInfo.resolveNeedsShaderSampling ? pass_timing::Blit
++                                                      : pass_timing::Copy,
++    };
+     const wgpu::RenderPassDescriptor renderPassDescriptor{
+         .label = render_pass_label(i),
+         .colorAttachmentCount = attachments.size(),
+         .colorAttachments = attachments.data(),
+         .depthStencilAttachment = &depthStencilAttachment,
++        .timestampWrites = encodeTextureBakes ? pass_timing::pass_writes(timestampWrites, timingInfo) : nullptr,
+     };
+ 
+     auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+@@ -1424,6 +1440,10 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
                                : tex_copy_conv::SampleFilter::Nearest,
            .forceOpaqueAlpha = passInfo.resolveForceOpaqueAlpha,
        };
@@ -84,7 +126,15 @@ index d13d823..2a99c1e 100644
        if (passInfo.resolveNeedsConversion) {
          tex_copy_conv::run(cmd, convReq);
        } else if (passInfo.resolveNeedsShaderSampling) {
-@@ -1800,5 +1804,7 @@ void aurora_get_frame_waits(AuroraFrameWaits* waits) {
+@@ -1453,6 +1473,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
+       }
+     }
+   }
++  if (encodeTextureBakes) pass_timing::end_frame(cmd);
+   if (finalize) {
+     recycle_render_passes(renderPasses);
+   }
+@@ -1800,5 +1821,7 @@ void aurora_get_frame_waits(AuroraFrameWaits* waits) {
        .textureCreates = c.textureCreates.load(),
        .efbSnapshotCopies = c.efbSnapshotCopies.load(),
        .efbSnapshotBytes = c.efbSnapshotBytes.load(),
@@ -105,6 +155,158 @@ index 18bfb31..d26e412 100644
  };
  extern FrameWaitCounters g_frameWaits;
  // Adds the time since construction to a counter (and bumps an optional event count).
+diff --git a/aurora-main/lib/gfx/pass_timing.hpp b/aurora-main/lib/gfx/pass_timing.hpp
+new file mode 100644
+index 0000000..e97bb8e
+--- /dev/null
++++ b/aurora-main/lib/gfx/pass_timing.hpp
+@@ -0,0 +1,146 @@
++#pragma once
++// Local GPU breakdown experiment (WIICOMPILED_GPU_BREAKDOWN=1, needs TimestampQuery): timestamps at
++// the start and end of every render pass of the native render. Pass time = drawing; the gap to the
++// next pass = the EFB copy/conversion between them. Prints per-frame averages every 300 frames.
++#include "../webgpu/gpu.hpp"
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++namespace aurora::gfx::pass_timing {
++constexpr uint32_t kMaxPasses = 128;
++enum Kind : uint8_t { None, Copy, Blit, Conv };
++struct PassInfo {
++  uint32_t draws = 0, w = 0, h = 0;
++  uint64_t copyPixels = 0;
++  Kind kind = None;
++};
++struct Slot {
++  std::atomic<int> state{0}; // 0 free, 1 encoded, 2 mapping
++  wgpu::QuerySet queries;
++  wgpu::Buffer resolve, readback;
++  uint32_t passes = 0;
++  std::array<PassInfo, kMaxPasses> info;
++};
++inline std::array<Slot, 6> slots;
++inline int current = -1;
++struct Totals {
++  uint64_t frames = 0, drawNs = 0, gapNs[4] = {}, gapCount[4] = {}, passes = 0, copyPixels = 0;
++  std::array<uint64_t, kMaxPasses> passNs{};
++  std::array<PassInfo, kMaxPasses> lastInfo{};
++};
++inline Totals totals;
++
++inline bool enabled() {
++  static const bool on = [] {
++    const char* v = std::getenv("WIICOMPILED_GPU_BREAKDOWN");
++    return v && *v == '1';
++  }();
++  return on && webgpu::g_device.HasFeature(wgpu::FeatureName::TimestampQuery);
++}
++
++inline void report() {
++  auto& t = totals;
++  const double f = double(t.frames);
++  std::fprintf(stderr,
++               "[gpu-breakdown] frames=%llu passes/frame=%.1f draw=%.2fms copy=%.2fms(n=%.1f) blit=%.2fms(n=%.1f) "
++               "conv=%.2fms(n=%.1f) nocopy-gap=%.2fms copyMpx=%.2f\n",
++               (unsigned long long)t.frames, t.passes / f, t.drawNs / f / 1e6, t.gapNs[Copy] / f / 1e6,
++               t.gapCount[Copy] / f, t.gapNs[Blit] / f / 1e6, t.gapCount[Blit] / f, t.gapNs[Conv] / f / 1e6,
++               t.gapCount[Conv] / f, t.gapNs[None] / f / 1e6, t.copyPixels / f / 1e6);
++  std::array<uint32_t, kMaxPasses> order{};
++  for (uint32_t i = 0; i < kMaxPasses; ++i) order[i] = i;
++  std::sort(order.begin(), order.end(), [](uint32_t a, uint32_t b) { return totals.passNs[a] > totals.passNs[b]; });
++  for (uint32_t r = 0; r < 6 && t.passNs[order[r]]; ++r) {
++    const auto& p = t.lastInfo[order[r]];
++    std::fprintf(stderr, "[gpu-breakdown]   pass %u: %.2fms target %ux%u draws %u then kind=%u copyPx=%llu\n", order[r],
++                 t.passNs[order[r]] / f / 1e6, p.w, p.h, p.draws, unsigned(p.kind), (unsigned long long)p.copyPixels);
++  }
++  t = {};
++}
++
++inline void harvest(Slot& s) {
++  s.state = 2;
++  const uint32_t n = s.passes * 2;
++  s.readback.MapAsync(wgpu::MapMode::Read, 0, n * 8, wgpu::CallbackMode::AllowSpontaneous,
++                      [&s, n](wgpu::MapAsyncStatus status, wgpu::StringView) {
++                        if (status == wgpu::MapAsyncStatus::Success) {
++                          std::vector<uint64_t> v(n);
++                          std::memcpy(v.data(), s.readback.GetConstMappedRange(0, n * 8), n * 8);
++                          s.readback.Unmap();
++                          auto& t = totals;
++                          for (uint32_t i = 0; i < s.passes; ++i) {
++                            const uint64_t d = v[2 * i + 1] > v[2 * i] ? v[2 * i + 1] - v[2 * i] : 0;
++                            t.drawNs += d;
++                            t.passNs[i] += d;
++                            t.lastInfo[i] = s.info[i];
++                            t.copyPixels += s.info[i].copyPixels;
++                            if (i + 1 < s.passes) {
++                              const uint64_t g = v[2 * i + 2] > v[2 * i + 1] ? v[2 * i + 2] - v[2 * i + 1] : 0;
++                              t.gapNs[s.info[i].kind] += g;
++                              t.gapCount[s.info[i].kind] += s.info[i].kind != None;
++                            }
++                          }
++                          t.passes += s.passes;
++                          if (++t.frames == 300) report();
++                        } else {
++                          s.readback.Unmap();
++                        }
++                        s.state = 0;
++                      });
++}
++
++// Called before the native render's passes; earlier frames were submitted by now, so map them.
++inline void begin_frame() {
++  current = -1;
++  if (!enabled()) return;
++  for (auto& s : slots)
++    if (s.state == 1) harvest(s);
++  for (int i = 0; i < int(slots.size()); ++i) {
++    auto& s = slots[i];
++    int expected = 0;
++    if (!s.state.compare_exchange_strong(expected, 1)) continue;
++    if (!s.queries) {
++      const wgpu::QuerySetDescriptor q{.type = wgpu::QueryType::Timestamp, .count = kMaxPasses * 2};
++      s.queries = webgpu::g_device.CreateQuerySet(&q);
++      const wgpu::BufferDescriptor r{.usage = wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc,
++                                     .size = kMaxPasses * 16};
++      const wgpu::BufferDescriptor b{.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst,
++                                     .size = kMaxPasses * 16};
++      s.resolve = webgpu::g_device.CreateBuffer(&r);
++      s.readback = webgpu::g_device.CreateBuffer(&b);
++    }
++    s.passes = 0;
++    current = i;
++    return;
++  }
++}
++
++// Fills `writes` for the next pass and returns it, or null when not measuring.
++inline const wgpu::PassTimestampWrites* pass_writes(wgpu::PassTimestampWrites& writes, const PassInfo& info) {
++  if (current < 0) return nullptr;
++  auto& s = slots[current];
++  if (s.passes >= kMaxPasses) return nullptr;
++  s.info[s.passes] = info;
++  writes = {.querySet = s.queries, .beginningOfPassWriteIndex = s.passes * 2, .endOfPassWriteIndex = s.passes * 2 + 1};
++  ++s.passes;
++  return &writes;
++}
++
++inline void end_frame(const wgpu::CommandEncoder& cmd) {
++  if (current < 0) return;
++  auto& s = slots[current];
++  if (s.passes == 0) {
++    s.state = 0;
++  } else {
++    cmd.ResolveQuerySet(s.queries, 0, s.passes * 2, s.resolve, 0);
++    cmd.CopyBufferToBuffer(s.resolve, 0, s.readback, 0, s.passes * 16);
++  }
++  current = -1;
++}
++} // namespace aurora::gfx::pass_timing
 diff --git a/aurora-main/lib/webgpu/gpu.cpp b/aurora-main/lib/webgpu/gpu.cpp
 index 1f8c924..ce02c57 100644
 --- a/aurora-main/lib/webgpu/gpu.cpp
@@ -234,7 +436,7 @@ index 0000000..b07d607
 +void OnHostFrame();
 +}
 diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
-index 9025436..f94e6bd 100644
+index 9025436..acd2650 100644
 --- a/runtime/include/runtime_config.h
 +++ b/runtime/include/runtime_config.h
 @@ -6,6 +6,7 @@
@@ -255,7 +457,7 @@ index 9025436..f94e6bd 100644
 +#if defined(WIICOMPILED_GAME_RL8E54)
 +        const char* bench = std::getenv("WIICOMPILED_MATCH_BENCH");
 +        if (bench && std::string_view(bench) == "1") {
-+            if (const char* scale = std::getenv("WIICOMPILED_MATCH_SCALE"); scale && scale[0] >= '1' && scale[0] <= '4' && scale[1] == '\0')
++            if (const char* scale = std::getenv("WIICOMPILED_MATCH_SCALE"); scale && scale[0] >= '0' && scale[0] <= '4' && scale[1] == '\0')  // 0: window size
 +                result.resolutionMultiplier = static_cast<float>(scale[0] - '0');
 +            if (const char* aspect = std::getenv("WIICOMPILED_MATCH_16_9"); aspect && (std::string_view(aspect) == "0" || std::string_view(aspect) == "1"))
 +                result.forceAspect169 = *aspect == '1';
