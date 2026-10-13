@@ -1,0 +1,225 @@
+diff --git a/runtime/include/audio_backend.h b/runtime/include/audio_backend.h
+index ae05827..b13a196 100644
+--- a/runtime/include/audio_backend.h
++++ b/runtime/include/audio_backend.h
+@@ -20,6 +20,10 @@ public:
+     bool PushSamplesLE16(const int16_t* samples, size_t sampleCount);
+ 
+     // Applied to the final host output, covering both AX and direct AI DMA.
++    // Local diagnostics (WIICOMPILED_AUDIO_STATS=1): counters since the last call.
++    struct Stats { uint64_t pushes = 0, drops = 0, starved = 0, bytes = 0; int minQueued = 1 << 30, maxQueued = 0; float ratio = 1.0f; };
++    Stats TakeStats();
++
+     void SetMasterVolume(float volume);
+     void SetMuted(bool muted);
+ 
+@@ -32,6 +36,8 @@ private:
+     bool EnsureInitializedLocked(uint32_t sampleRate, uint32_t channels);
+     bool QueueHasCapacityLocked(int incomingBytes);
+     uint32_t QueueLimitBytesLocked() const;
++    uint32_t BytesForMsLocked(uint32_t ms) const;
++    void RegulateLocked();
+     float EffectiveGainLocked() const;
+     void ApplyGainLocked();
+ 
+@@ -44,5 +50,8 @@ private:
+     float m_masterVolume = 1.0f;
+     bool m_muted = false;
+     bool m_reportedDroppedBlock = false;
++    bool m_playing = false;  // device paused until the queue holds the target latency
++    float m_ratio = 1.0f;
+     std::vector<int16_t> m_convertBuffer;
++    Stats m_stats;
+ };
+diff --git a/runtime/src/audio_backend.cpp b/runtime/src/audio_backend.cpp
+index 7ceda4c..bf2e290 100644
+--- a/runtime/src/audio_backend.cpp
++++ b/runtime/src/audio_backend.cpp
+@@ -3,6 +3,7 @@
+ #include "runtime_log.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <iostream>
+@@ -62,12 +63,6 @@ bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channel
+         return false;
+     }
+ 
+-    if (!SDL_ResumeAudioStreamDevice(stream)) {
+-        RT_LOG(RT_TAG_AUDIO) << "SDL_ResumeAudioStreamDevice failed: " << SDL_GetError() << std::endl;
+-        SDL_DestroyAudioStream(stream);
+-        return false;
+-    }
+-
+     if (!SDL_SetAudioStreamGain(stream, EffectiveGainLocked())) {
+         RT_LOG(RT_TAG_AUDIO) << "SDL_SetAudioStreamGain failed: " << SDL_GetError() << std::endl;
+         SDL_DestroyAudioStream(stream);
+@@ -79,6 +74,8 @@ bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channel
+     m_sampleRate = sampleRate;
+     m_channels = channels;
+     m_initialized = true;
++    m_playing = false;
++    m_ratio = 1.0f;
+     return true;
+ }
+ 
+@@ -100,16 +97,57 @@ void AudioBackend::Shutdown() {
+     m_sampleRate = 0;
+     m_channels = 0;
+     m_reportedDroppedBlock = false;
++    m_playing = false;
++    m_ratio = 1.0f;
+     m_convertBuffer.clear();
+ }
+ 
+-uint32_t AudioBackend::QueueLimitBytesLocked() const {
+-    constexpr uint32_t queueMs = 120;
++// The guest produces audio on its own thread and stalls for up to ~100 ms (loading, busy
++// frames). The queue absorbs that: playback aims at kTargetMs, and the hard limit only
++// guards against runaway growth.
++constexpr uint32_t kTargetMs = 80;
++constexpr uint32_t kQueueLimitMs = 250;
+ 
++uint32_t AudioBackend::BytesForMsLocked(uint32_t ms) const {
+     const uint64_t bytesPerSecond = static_cast<uint64_t>(m_spec.freq) *
+                                     static_cast<uint64_t>(m_spec.channels) *
+                                     sizeof(int16_t);
+-    return static_cast<uint32_t>((bytesPerSecond * queueMs) / 1000u);
++    return static_cast<uint32_t>((bytesPerSecond * ms) / 1000u);
++}
++
++uint32_t AudioBackend::QueueLimitBytesLocked() const {
++    return BytesForMsLocked(kQueueLimitMs);
++}
++
++// Keeps the queue near kTargetMs instead of cutting it: catch-up after a stall used to
++// stack latency until the limit dropped blocks, and a drained queue underran. Playback
++// speed moves by at most 2% (not heard as pitch). An empty queue pauses the device until
++// the target is buffered again, so a long stall is a short silence instead of crackle.
++void AudioBackend::RegulateLocked() {
++    const int queued = SDL_GetAudioStreamQueued(m_stream);
++    if (queued < 0) {
++        return;
++    }
++    const uint32_t target = BytesForMsLocked(kTargetMs);
++    if (!m_playing) {
++        if (static_cast<uint32_t>(queued) >= target && SDL_ResumeAudioStreamDevice(m_stream)) {
++            m_playing = true;
++        }
++        return;
++    }
++    const float error = (static_cast<float>(queued) - static_cast<float>(target)) / static_cast<float>(target);
++    const float ratio = std::clamp(1.0f + 0.02f * error, 0.98f, 1.02f);
++    if (std::fabs(ratio - m_ratio) >= 0.001f && SDL_SetAudioStreamFrequencyRatio(m_stream, ratio)) {
++        m_ratio = ratio;
++    }
++}
++
++AudioBackend::Stats AudioBackend::TakeStats() {
++    std::lock_guard<std::mutex> lock(m_mutex);
++    Stats s = m_stats;
++    s.ratio = m_ratio;
++    m_stats = {};
++    return s;
+ }
+ 
+ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
+@@ -117,6 +155,18 @@ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
+         return false;
+     }
+     const int queued = SDL_GetAudioStreamQueued(m_stream);
++    ++m_stats.pushes;
++    m_stats.bytes += static_cast<uint64_t>(std::max(incomingBytes, 0));
++    if (queued == 0) {
++        ++m_stats.starved;
++        // Underrun: wait for the target again (see RegulateLocked).
++        if (m_playing) {
++            SDL_PauseAudioStreamDevice(m_stream);
++            m_playing = false;
++        }
++    }
++    m_stats.minQueued = std::min(m_stats.minQueued, queued);
++    m_stats.maxQueued = std::max(m_stats.maxQueued, queued);
+     if (queued < 0) {
+         return true;
+     }
+@@ -127,6 +177,7 @@ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
+         // stream creates an audible discontinuity (the severe crackle seen when
+         // VI-batched DMA briefly outran playback).
+         // A drop is audible; report the first one so it is not invisible.
++        ++m_stats.drops;
+         if (!m_reportedDroppedBlock) {
+             m_reportedDroppedBlock = true;
+             RT_LOG(RT_TAG_AUDIO) << "output queue full (" << queued << "/" << maxQueued
+@@ -176,6 +227,7 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
+         RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
+         return false;
+     }
++    RegulateLocked();
+ 
+     return true;
+ }
+@@ -198,6 +250,7 @@ bool AudioBackend::PushSamplesLE16(const int16_t* samples, size_t sampleCount) {
+         RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
+         return false;
+     }
++    RegulateLocked();
+ 
+     return true;
+ }
+diff --git a/runtime/src/hle/audio/audio.cpp b/runtime/src/hle/audio/audio.cpp
+index 337268e..620348c 100644
+--- a/runtime/src/hle/audio/audio.cpp
++++ b/runtime/src/hle/audio/audio.cpp
+@@ -381,6 +381,31 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
+     if (!enabled || startAddr == 0 || length == 0 || sampleRate == 0) {
+         return;
+     }
++    // Local diagnostics: tick cadence, blocks and backlog every 2 s (WIICOMPILED_AUDIO_STATS=1).
++    static const bool stats = [] { const char* v = std::getenv("WIICOMPILED_AUDIO_STATS"); return v && *v == '1'; }();
++    static auto statsStart = std::chrono::steady_clock::now();
++    static auto lastTick = statsStart;
++    static uint64_t statTicks = 0, statBlocks = 0, statCapped = 0;
++    static double statMaxGapMs = 0, statMaxBacklogMs = 0;
++    if (stats) {
++        const auto now = std::chrono::steady_clock::now();
++        statMaxGapMs = std::max(statMaxGapMs, std::chrono::duration<double, std::milli>(now - lastTick).count());
++        lastTick = now;
++        ++statTicks;
++        if (now - statsStart >= std::chrono::seconds(2)) {
++            const auto b = AudioBackend::Instance().TakeStats();
++            RT_LOGF(RT_TAG_AUDIO,
++                    "[audio-stats] rate=%u len=%u ticks=%llu blocks=%llu (%.0f ms audio) capped=%llu maxGap=%.1fms "
++                    "maxBacklog=%.1fms | pushes=%llu drops=%llu starved=%llu queued=%d..%d bytes ratio=%.3f\n",
++                    sampleRate, length, (unsigned long long)statTicks, (unsigned long long)statBlocks,
++                    statBlocks * (length / (sampleRate * 4.0)) * 1000.0, (unsigned long long)statCapped, statMaxGapMs,
++                    statMaxBacklogMs, (unsigned long long)b.pushes, (unsigned long long)b.drops,
++                    (unsigned long long)b.starved, b.minQueued == (1 << 30) ? 0 : b.minQueued, b.maxQueued, b.ratio);
++            statsStart = now;
++            statTicks = statBlocks = statCapped = 0;
++            statMaxGapMs = statMaxBacklogMs = 0;
++        }
++    }
+ 
+     // Resets tickActive on early return; the normal exit path disarms this and clears the
+     // flag itself while already holding the mutex, avoiding a redundant lock acquisition.
+@@ -469,7 +494,9 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
+             g_ai.bytesLeft = g_ai.length;
+         }
+ 
++        ++statBlocks;
+         if (++blocksCompleted >= kMaxBlocksPerTick) {
++            ++statCapped;
+             break;
+         }
+     }
+@@ -482,6 +509,7 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
+                 g_ai.bytesLeft = g_ai.length - static_cast<uint32_t>(bytesRemaining);
+             }
+         }
++        statMaxBacklogMs = std::max(statMaxBacklogMs, g_ai.accumulatorSeconds * 1000.0);
+         g_ai.tickActive = false;
+         activeTickReset.armed = false;
+     }

@@ -688,3 +688,19 @@ No está validado píxel a píxel contra Dolphin.
 - El porcentaje de Windows y los milisegundos no son proporcionales al trabajo: la GPU baja reloj cuando le sobra tiempo (por eso "Según la ventana" no baja tanto el porcentaje). La temperatura depende de la potencia, no del porcentaje.
 - **Arreglo, parche `wiicompiled-resolution-labels`:** el launcher decía "2x (720p)", "3x (1080p)" y "4x (1440p)". Ahora dice "2x (~1080p)", "3x (~1600p)" y "4x (~4K)", y la ayuda recomienda "Según la ventana", que dibuja a la resolución de la ventana.
 - `tools/benchmark-match.ps1 -Scale 0` mide el modo "Según la ventana".
+
+## Audio con chasquidos y cortes (13 de octubre de 2026)
+
+- **Síntomas:** chasquidos, comentaristas que se cortan y audio del menú que a veces arranca tarde.
+- **Medición** (`WIICOMPILED_AUDIO_STATS=1`, cada 2 s: bloques producidos, huecos entre ticks, nivel de la cola de SDL, descartes y vacíos), en el partido directo de 60 s:
+  - El juego produce exactamente el audio que toca (2 s cada 2 s, bloques de 3 ms a 32 kHz).
+  - El hilo del juego se detiene 40-93 ms en cargas y momentos de mucho trabajo. Durante esas pausas la cola se vaciaba casi del todo (28 bytes, 0,2 ms): corte audible.
+  - Después de cada pausa el juego se pone al día de golpe y ese retraso se acumulaba (la cola pasó de ~30 a ~105 ms). Al llegar al límite de 120 ms se descartaban bloques: el aviso "output queue full" aparece en 38 sesiones.
+  - Al arrancar, la cola empezaba casi vacía.
+- **Arreglo, parche `wiicompiled-audio-queue`** (`AudioBackend`):
+  - El dispositivo se abre en pausa y empieza a sonar cuando hay 80 ms en cola.
+  - Para mantener la cola cerca de 80 ms, la velocidad de reproducción se ajusta como mucho ±2 % con `SDL_SetAudioStreamFrequencyRatio`, sin cortar audio. En la prueba se movió entre 0,998 y 1,002.
+  - El límite pasa de 120 a 250 ms: solo frena un crecimiento descontrolado.
+  - Si la cola se vacía, se pausa hasta volver a tener 80 ms: un silencio corto en vez de chasquidos.
+- **Resultado, misma prueba:** la cola se mantiene en 65-80 ms. En las pausas de 40-50 ms del partido no baja de 16-40 ms. No hay descartes. Solo una pausa de 88 ms al cargar el partido la dejó casi vacía.
+- No se comprobó a oído: falta que alguien lo escuche jugando.
