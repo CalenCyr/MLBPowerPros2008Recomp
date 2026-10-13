@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <deque>
@@ -19,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace power_pros_ui;
 namespace fs = std::filesystem;
@@ -165,6 +167,65 @@ void SDLCALL OnDialog(void* userdata, const char* const* files, int) {
 
 } // namespace
 
+// A softened copy of the art for the bars of other window shapes: averaged down 24x, box-blurred
+// twice and scaled back up to a quarter size with bilinear filtering, all on the CPU so the result
+// is smooth whatever filter the renderer uses.
+SDL_Surface* BlurredSurface(SDL_Surface* image) {
+    SDL_Surface* rgba = SDL_ConvertSurface(image, SDL_PIXELFORMAT_RGBA32);
+    if (rgba == nullptr) return nullptr;
+    constexpr int kDown = 24;
+    const int w = rgba->w, h = rgba->h;
+    const int sw = std::max(1, w / kDown), sh = std::max(1, h / kDown);
+    std::vector<float> small(static_cast<size_t>(sw) * sh * 4, 0.0f);
+    for (int y = 0; y < sh * kDown; ++y) {
+        const auto* line = static_cast<const unsigned char*>(rgba->pixels) + static_cast<size_t>(y) * rgba->pitch;
+        for (int x = 0; x < sw * kDown; ++x) {
+            float* d = small.data() + (static_cast<size_t>(y / kDown) * sw + x / kDown) * 4;
+            for (int c = 0; c < 4; ++c) d[c] += line[x * 4 + c];
+        }
+    }
+    SDL_DestroySurface(rgba);
+    for (float& v : small) v /= static_cast<float>(kDown * kDown);
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<float> out(small.size());
+        for (int y = 0; y < sh; ++y) {
+            for (int x = 0; x < sw; ++x) {
+                for (int c = 0; c < 4; ++c) {
+                    float sum = 0.0f;
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            sum += small[(static_cast<size_t>(std::clamp(y + dy, 0, sh - 1)) * sw + std::clamp(x + dx, 0, sw - 1)) * 4 + c];
+                        }
+                    }
+                    out[(static_cast<size_t>(y) * sw + x) * 4 + c] = sum / 9.0f;
+                }
+            }
+        }
+        small.swap(out);
+    }
+    const int ow = std::max(1, w / 4), oh = std::max(1, h / 4);
+    SDL_Surface* soft = SDL_CreateSurface(ow, oh, SDL_PIXELFORMAT_RGBA32);
+    if (soft == nullptr) return nullptr;
+    for (int y = 0; y < oh; ++y) {
+        auto* line = static_cast<unsigned char*>(soft->pixels) + static_cast<size_t>(y) * soft->pitch;
+        const float fy = std::clamp((y + 0.5f) * sh / oh - 0.5f, 0.0f, static_cast<float>(sh - 1));
+        const int y0 = static_cast<int>(fy), y1 = std::min(y0 + 1, sh - 1);
+        const float ty = fy - static_cast<float>(y0);
+        for (int x = 0; x < ow; ++x) {
+            const float fx = std::clamp((x + 0.5f) * sw / ow - 0.5f, 0.0f, static_cast<float>(sw - 1));
+            const int x0 = static_cast<int>(fx), x1 = std::min(x0 + 1, sw - 1);
+            const float tx = fx - static_cast<float>(x0);
+            for (int c = 0; c < 4; ++c) {
+                auto at = [&](int xx, int yy) { return small[(static_cast<size_t>(yy) * sw + xx) * 4 + c]; };
+                const float top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+                const float bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+                line[x * 4 + c] = static_cast<unsigned char>(std::clamp(top + (bottom - top) * ty, 0.0f, 255.0f));
+            }
+        }
+    }
+    return soft;
+}
+
 int main(int, char**) {
     SetProcessDPIAware();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) return 1;
@@ -181,10 +242,16 @@ int main(int, char**) {
     // MoonInning art, shared with the launcher (workspace\launcher\setup.png). Without it the Setup
     // keeps its procedural look.
     SDL_Texture* art = nullptr;
+    SDL_Texture* artBlur = nullptr;  // a tiny copy, stretched (blurred) behind the art in other window shapes
     if (SDL_Surface* image = SDL_LoadPNG(Utf8(fs::path(SDL_GetBasePath()) / "workspace" / "launcher" / "setup.png").c_str())) {
         art = SDL_CreateTextureFromSurface(renderer, image);
-        SDL_DestroySurface(image);
         if (art != nullptr) SDL_SetTextureScaleMode(art, SDL_SCALEMODE_LINEAR);
+        if (SDL_Surface* soft = BlurredSurface(image)) {
+            artBlur = SDL_CreateTextureFromSurface(renderer, soft);
+            if (artBlur != nullptr) SDL_SetTextureScaleMode(artBlur, SDL_SCALEMODE_LINEAR);
+            SDL_DestroySurface(soft);
+        }
+        SDL_DestroySurface(image);
     }
 
     const fs::path base = fs::path(SDL_GetBasePath());
@@ -311,9 +378,23 @@ int main(int, char**) {
                 const ImVec2 b = at(x1, y1);
                 return m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
             };
+            // Other window shapes: the art blurred and darkened covers the window, with a soft shadow
+            // around the art (same as the game's launcher).
             const float cover = std::max(w / kW, h / kH);
             const ImVec2 co((w - kW * cover) * 0.5f, (h - kH * cover) * 0.5f);
-            dl->AddImage(tex, co, ImVec2(co.x + kW * cover, co.y + kH * cover), ImVec2(0, 0), ImVec2(1, 1), Rgba(120, 135, 170));
+            dl->AddImage(artBlur != nullptr ? reinterpret_cast<ImTextureID>(artBlur) : tex, co,
+                         ImVec2(co.x + kW * cover, co.y + kH * cover), ImVec2(0, 0), ImVec2(1, 1), Rgba(70, 80, 105));
+            const float shadow = 28 * s;
+            const ImU32 dark = Rgba(0, 0, 0, 150);
+            const ImU32 clear = Rgba(0, 0, 0, 0);
+            if (o.x > 1.0f) {
+                dl->AddRectFilledMultiColor(ImVec2(o.x - shadow, 0), ImVec2(o.x, h), clear, dark, dark, clear);
+                dl->AddRectFilledMultiColor(ImVec2(w - o.x, 0), ImVec2(w - o.x + shadow, h), dark, clear, clear, dark);
+            }
+            if (o.y > 1.0f) {
+                dl->AddRectFilledMultiColor(ImVec2(0, o.y - shadow), ImVec2(w, o.y), clear, clear, dark, dark);
+                dl->AddRectFilledMultiColor(ImVec2(0, h - o.y), ImVec2(w, h - o.y + shadow), dark, dark, clear, clear);
+            }
             dl->AddImage(tex, at(0, 0), at(kW, kH));
 
             int selectedSlot = actions[static_cast<size_t>(menu)].slot;

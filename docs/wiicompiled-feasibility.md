@@ -616,7 +616,10 @@ No está validado píxel a píxel contra Dolphin.
 ## Editor de rosters en el launcher (12 de octubre de 2026)
 
 - **Parche 25, `wiicompiled-roster-editor`:**
-  - MODS → **EDITAR ROSTER (PowerUp+)** arranca el PowerUp+ instalado en `powerupplus\` en "modo 2008", con el `project.bin` del jugador y la carpeta `mods\`, dentro de un *job object* para que se cierre con el juego. Abre una página local que espera al servidor y luego lo muestra.
-  - Las listas largas del launcher van por páginas de 6 filas, con "Página 1 de 2" y flechas clicables en la cabecera. En la pantalla MODS, Q/E (L/R) cambian de página y la rueda del mouse mueve la selección. Antes, con muchos mods, las filas se salían del panel.
-  - Dos ganchos para pruebas sin teclado: `WIICOMPILED_LAUNCHER_ROW` y `WIICOMPILED_LAUNCHER_ACTION=roster-editor`. Las teclas simuladas con `WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT` también leían el teclado real.
+  - La pantalla MODS tiene dos pestañas: **MODS** (solo los mods, con su interruptor) y **HERRAMIENTAS** (abrir la carpeta de mods y el editor de rosters). Q/E cambian de pestaña.
+  - HERRAMIENTAS → **EDITAR ROSTER (PowerUp+)** arranca el PowerUp+ instalado en `powerupplus\` en "modo 2008", con el `project.bin` del jugador y la carpeta `mods\`, dentro de un *job object* para que se cierre con el juego. Abre una página local que espera al servidor y luego lo muestra.
+  - Las listas largas del launcher van por páginas de 6 filas, con "Página 1 de 2" y flechas clicables en la cabecera. Re Pág / Av Pág cambian de página, y bajar desde la última fila también. La rueda del mouse mueve la selección. Antes, con muchos mods, las filas se salían del panel.
+  - La ayuda larga reduce su letra para no salirse del panel.
+  - En ventanas con otra proporción que el arte, los bordes muestran una copia difuminada y oscurecida, con una sombra suave. Antes se veía un trozo repetido del arte. El Setup hace lo mismo, con el difuminado calculado en la CPU.
+  - Ganchos para pruebas sin teclado: `WIICOMPILED_LAUNCHER_ROW`, `WIICOMPILED_LAUNCHER_PAGE=tools` y `WIICOMPILED_LAUNCHER_ACTION=roster-editor`. Las teclas simuladas con `WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT` también leían el teclado real.
 - **Setup:** `Make-Payload.ps1` incluye PowerUp+ compilado (`tools/powerupplus.ps1 -Publish`, unos 113 MB) con su licencia, el commit y el parche. `LocalBuild.ps1` lo instala en `Game\powerupplus\`. El control de contenido del juego también rechaza `game_data.pack` y los `.dat` de rosters.

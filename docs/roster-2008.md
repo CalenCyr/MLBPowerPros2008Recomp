@@ -98,7 +98,7 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - **Huecos vacíos y orden.** Los huecos sobrantes quedan vacíos, en vez de llevar jugadores de la partida base de 2007. Los equipos mantienen su orden, con los de grandes ligas primero; la exportación de 2007 los reordenaba con un `OrderBy` encadenado.
   - **Valores sin tocar.** El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado". En cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, se escribe el valor original de 2008.
   - **Caras, piel/ojos y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara o piel sin tocar vuelve a su valor exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
-- **Desde el juego (lo normal):** launcher → MODS → **EDITAR ROSTER (PowerUp+)**.
+- **Desde el juego (lo normal):** launcher → MODS → pestaña HERRAMIENTAS → **EDITAR ROSTER (PowerUp+)**.
   - Abre PowerUp+ en el navegador (`http://127.0.0.1:5123`) y se cierra junto con el juego.
   - El Setup lo instala ya compilado en `Game\powerupplus\` (autocontenido, no hace falta instalar .NET). Sus datos (base de datos, librerías) quedan en `UserData\PowerUpPlus\`.
   - Corre en "modo 2008":
