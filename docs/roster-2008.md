@@ -28,19 +28,30 @@ Se obtuvieron comparando los 729 jugadores que están en el roster base de ambos
 | posición principal y capacidades de P y C | +2 bits |
 | 0x60–0x6E (capacidades de defensa, zonas calientes, lado de bateo, ratings) | igual |
 | segundo "contra zurdos" (0x6F.5) | ya no existe |
-| 0x70.0–0x78.1 (habilidades de bateo y defensa) | −3 bits |
-| 0x78.2–0x81 (bloque de pitcher) | −2 bits |
+| 0x70.0–0x77.6 (habilidades de bateo y defensa) | −3 bits |
+| 0x77.7–0x81 (pivot man, pull hitter, bloque de pitcher) | −2 bits; 2008 agrega un bit nuevo en 0x77.4 |
 | fecha de nacimiento | −12 bits; el año se suma +1 porque PowerUp calcula desde el día inaugural de 2007 |
-| estadísticas | AVG en 0x85.7, RBI en 0x88.0, HR en 0x89.2; ERA sigue en 0x8C.0 |
+| años en las mayores y estadísticas | años en 0x85.2, AVG en 0x85.7, RBI en 0x88.0, HR en 0x89.2; ERA sigue en 0x8C.0 |
+| 0x8C–0x93 | igual, salvo la voz (2008 renumeró las voces; queda en 0) |
 | repertorio (0x94–) | igual |
 
-**Sin confirmar todavía**, se escriben donde estaban en 2007: banderas de relevista y cerrador, "table setter", "push", "free swinger" y "pull hitter", y piel/ojos.
+Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como campos de un bit. Por ejemplo, 0x76.0 y 0x76.1, 0x77.7, 0x80.7, 0x8D.6–0x8E.3 y 0x92.0: 2008 los conserva en la posición esperada, con φ ≈ 1.
+
+**Cómo se confirmó:** `align_2007_2008.py --bits` calcula, para cada bit de 2008, la correlación φ con los bits de 2007 desplazados de 0 a 4 posiciones. Así salen claras las banderas raras que el voto por coincidencias no distingue:
+- abridor, relevista y cerrador son campos de 3 bits (0x62.5, 0x63.0 y 0x63.3) y siguen en su sitio (φ 0,82, 0,83 y 0,70);
+- el límite entre −3 y −2 está en 0x77.7, no en 0x78.2 como se creía antes. Con el límite viejo, "pull hitter" caía en 0x77.6, donde 2008 tiene un solo jugador marcado; en 0x77.7 hay 42 (φ 0,37);
+- frente al conversor anterior, los bits que coinciden con el roster real de 2008 suben de 88,9 % a 89,3 %, y los 1 reproducidos, de 61,7 % a 64,5 %.
+
+**Todavía dudosos:**
+- "table setter": en 2008 ese bit vale 0 para los 1.004 jugadores.
+- "push hitter" (φ 0,20) y "free swinger" (φ 0,07): están en medio de la zona −3, así que la posición es coherente, pero 2008 los asignó a otros jugadores.
+- La voz.
 
 ## Usarlo
 
 **Como mod (lo normal):** una carpeta `mods\<nombre>\roster\` con el `.dat` de PowerUp / PowerUp+ (por ejemplo `2025_MLB_Rosters.dat`) y un `mod.toml` opcional.
 - Al activarlo en MODS y pulsar JUGAR, el juego extrae el `game_data.pack` de **tu** disco, lo convierte con el roster del `.dat` y lo sirve dentro de un `project.bin` modificado.
-- La conversión se guarda en `UserData\Cache\mods\roster\<mod>\` y se rehace si cambia el `.dat`.
+- La conversión se guarda en `UserData\Cache\mods\roster\<mod>\`. Se rehace si cambia el `.dat` o la tabla de campos del conversor, porque el nombre del archivo lleva un hash de esa tabla.
 - El mod nunca lleva archivos del juego.
 
 **A mano:** `python tools/roster/powerup_to_2008.py <roster.dat> <game_data.pack original> <carpeta del mod>` genera el mod con `project/game_data.pack`. El resultado es byte a byte igual al del runtime. `tools/projectbin.py extract` saca el `game_data.pack` original.
@@ -49,6 +60,6 @@ La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicomp
 
 ## Pendiente
 
-- Confirmar los campos marcados arriba, usando el modo Edit de 2008 sobre un jugador conocido.
+- Confirmar "table setter", "push hitter", "free swinger" y la tabla de voces, usando el modo Edit de 2008 sobre un jugador conocido.
 - Escribir rosters de 2008 directamente desde PowerUp+ (generador con la MLB Stats API), sin pasar por el formato de 2007.
 - Los jugadores de 2025 usan las caras y formas de 2007 que eligió PowerUp+. Las caras o uniformes nuevos de 2008 no se aprovechan todavía.

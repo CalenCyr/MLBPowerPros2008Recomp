@@ -10,13 +10,14 @@ tools/roster/align_2007_2008.py and docs/roster-2008.md):
     batting side, ratings) are unchanged;
   - batting and pitching forms grew to 9 bits, which moves position and the P/C capabilities by
     2 bits;
-  - the second "hitting versus lefty" field is gone, so 0x70..0x78.1 moves back 3 bits, and from
-    0x78.2 (pitching block) everything moves back 2 bits;
-  - birth date moves back 12 bits; season stats are AVG @0x85.7, RBI @0x88.0, HR @0x89.2 and ERA
-    stays at 0x8C.0;
-  - pitch arsenal (0x94..) is unchanged.
-A few fields are still unconfirmed in 2008 (reliever/closer flags, table setter, push/free/pull
-hitter, skin) and are written where 2007 had them.
+  - the second "hitting versus lefty" field is gone, so 0x70..0x77.6 moves back 3 bits; 2008 adds
+    a bit at 0x77.4, so from 0x77.7 (pivot man, pull hitter, pitching block) it is back 2 bits;
+  - birth date moves back 12 bits; years in the majors and season stats are at 0x85.2 (years),
+    0x85.7 (AVG), 0x88.0 (RBI), 0x89.2 (HR); ERA stays at 0x8C.0;
+  - 0x8C..0x93 and the pitch arsenal (0x94..) are unchanged, except the voice id (2008 renumbered
+    the voices; left at 0).
+Bits PowerUp has no name for travel with their zone, so nothing the game stores is dropped. The
+per-bit evidence is in docs/roster-2008.md.
 
 The output is a mod folder: <out>/mod.toml and <out>/project/game_data.pack, built on the player's
 own game_data.pack (extract it with tools/projectbin.py), so nothing from the game ships.
@@ -46,7 +47,7 @@ MOVED = {
     "BirthYear": (0x414, 11),
     "BirthMonth": (0x420, 4),
     "BirthDay": (0x424, 5),
-    "YearsInMajors": None,
+    "YearsInMajors": (0x42A, 5),
     "BattingAveragePoints": (0x42F, 10),
     "RunsBattedIn": (0x440, 10),
     "HomeRuns": (0x44A, 10),
@@ -60,10 +61,10 @@ def target(name, bit, bits):
         return MOVED[name]
     if bit < 0x37D:
         return bit, bits                 # unchanged through HittingVersusLefty1
-    if 0x380 <= bit < 0x3C2:
-        return bit - 3, bits             # 0x70.0 .. 0x78.1
-    if 0x3C2 <= bit < 0x41B:
-        return bit - 2, bits             # 0x78.2 .. PowerOrBreakingBallPitcher
+    if 0x380 <= bit < 0x3BF:
+        return bit - 3, bits             # 0x70.0 .. 0x77.6
+    if 0x3BF <= bit < 0x41B:
+        return bit - 2, bits             # 0x77.7 .. PowerOrBreakingBallPitcher
     if bit >= 0x460:
         return bit, bits                 # ERA and the pitch arsenal
     return None
@@ -76,6 +77,11 @@ def load_fields(powerup_repo):
                          r"[^\]]*\)\]\s*public [\w?<>]+ (\w+)", src):
         _, off, bits, bit_offset, name = m.groups()
         fields.append((name, int(off, 16) * 8 + int(bit_offset or 0), int(bits or 1)))
+    # Unnamed bits in the zones that move as a whole (hidden abilities, flags) go as 1-bit fields.
+    # 0x5C..0x5F (the 2008 forms grew over it) and the padding after the pitching block are left out.
+    named = {b for _, bit, count in fields for b in range(bit, bit + count)}
+    zones = [*range(0x6F * 8, 0x40B), *range(0x460, 0x94 * 8)]
+    fields += [(f"Bit_{b // 8:X}_{b % 8}", b, 1) for b in zones if b not in named]
     return fields
 
 
