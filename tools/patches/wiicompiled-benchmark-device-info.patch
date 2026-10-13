@@ -51,10 +51,10 @@ index 7b96e95..aae07f9 100644
  // threads call this at ordered boundaries to turn it into the one user-visible fatal error.
  void fail_if_device_lost() noexcept;
 diff --git a/runtime/src/match_benchmark_overlay.inc b/runtime/src/match_benchmark_overlay.inc
-index bd94b05..ff8a285 100644
+index bd94b05..ddea8de 100644
 --- a/runtime/src/match_benchmark_overlay.inc
 +++ b/runtime/src/match_benchmark_overlay.inc
-@@ -1,4 +1,26 @@
+@@ -1,4 +1,96 @@
  // Included inside settings_overlay's private namespace: reuse its live graphics setters.
 +// CPU, threads, RAM, GPU and OS, one per line, for the panel and the saved report.
 +std::string BenchmarkDeviceInfo() {
@@ -78,18 +78,104 @@ index bd94b05..ff8a285 100644
 +           " hilos)\nRAM: " + ram + "\nGPU: " + (gpu.empty() ? std::string("desconocida") : gpu) + "\nSistema: " + SDL_GetPlatform();
 +}
 +
++// Live load, sampled twice a second on its own thread. CPU is this process over all logical
++// cores, as in Task Manager; GPU and VRAM come from the same Windows counters (pdh.dll is loaded
++// at run time so the build needs no extra library). -1 means not available.
++struct BenchUsage {
++    std::atomic<double> cpuPct{-1}, ramMb{-1}, systemUsedGb{-1}, gpuPct{-1}, vramMb{-1};
++};
++BenchUsage& BenchmarkUsage() {
++    static BenchUsage usage;
++#if defined(_WIN32)
++    static std::once_flag started;
++    std::call_once(started, [] {
++        std::thread([] {
++            HMODULE pdh = LoadLibraryW(L"pdh.dll");
++            const auto proc = [&](const char* name) { return pdh ? GetProcAddress(pdh, name) : nullptr; };
++            const auto open = reinterpret_cast<decltype(&PdhOpenQueryW)>(proc("PdhOpenQueryW"));
++            const auto add = reinterpret_cast<decltype(&PdhAddEnglishCounterW)>(proc("PdhAddEnglishCounterW"));
++            const auto collect = reinterpret_cast<decltype(&PdhCollectQueryData)>(proc("PdhCollectQueryData"));
++            const auto values = reinterpret_cast<decltype(&PdhGetFormattedCounterArrayW)>(proc("PdhGetFormattedCounterArrayW"));
++            PDH_HQUERY query = nullptr;
++            PDH_HCOUNTER gpuCounter = nullptr, vramCounter = nullptr;
++            if (open && add && collect && values && open(nullptr, 0, &query) == ERROR_SUCCESS) {
++                const std::wstring pid = std::to_wstring(GetCurrentProcessId());
++                if (add(query, (L"\\GPU Engine(pid_" + pid + L"_*engtype_3D)\\Utilization Percentage").c_str(), 0, &gpuCounter) != ERROR_SUCCESS) gpuCounter = nullptr;
++                if (add(query, (L"\\GPU Process Memory(pid_" + pid + L"_*)\\Dedicated Usage").c_str(), 0, &vramCounter) != ERROR_SUCCESS) vramCounter = nullptr;
++                collect(query);
++            }
++            // Sum over the counter's instances (one per engine or adapter).
++            const auto total = [&](PDH_HCOUNTER counter) {
++                DWORD bytes = 0, count = 0;
++                if (!counter || values(counter, PDH_FMT_DOUBLE, &bytes, &count, nullptr) != static_cast<PDH_STATUS>(PDH_MORE_DATA)) return -1.0;
++                std::vector<unsigned char> buffer(bytes);
++                auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
++                if (values(counter, PDH_FMT_DOUBLE, &bytes, &count, items) != ERROR_SUCCESS) return -1.0;
++                double sum = 0;
++                for (DWORD i = 0; i < count; ++i) {
++                    if (items[i].FmtValue.CStatus == ERROR_SUCCESS) sum += items[i].FmtValue.doubleValue;
++                }
++                return sum;
++            };
++            const auto hundredNs = [](const FILETIME& t) { return (uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
++            const double cores = std::max(1, SDL_GetNumLogicalCPUCores());
++            uint64_t lastCpu = 0;
++            auto lastWall = std::chrono::steady_clock::now();
++            for (bool first = true;; first = false) {
++                FILETIME created, exited, kernel, user;
++                GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
++                const uint64_t cpu = hundredNs(kernel) + hundredNs(user);
++                const auto wall = std::chrono::steady_clock::now();
++                const double wallHundredNs = std::chrono::duration<double, std::ratio<1, 10000000>>(wall - lastWall).count();
++                if (!first && wallHundredNs > 0) usage.cpuPct = 100.0 * double(cpu - lastCpu) / wallHundredNs / cores;
++                lastCpu = cpu;
++                lastWall = wall;
++                PROCESS_MEMORY_COUNTERS memory{};
++                if (K32GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory))) usage.ramMb = memory.WorkingSetSize / 1048576.0;
++                MEMORYSTATUSEX system{};
++                system.dwLength = sizeof(system);
++                if (GlobalMemoryStatusEx(&system)) usage.systemUsedGb = double(system.ullTotalPhys - system.ullAvailPhys) / 1073741824.0;
++                if (query && collect(query) == ERROR_SUCCESS) {
++                    const double gpu = total(gpuCounter), vram = total(vramCounter);
++                    usage.gpuPct = gpu < 0 ? -1.0 : std::min(100.0, gpu);
++                    usage.vramMb = vram < 0 ? -1.0 : vram / 1048576.0;
++                }
++                std::this_thread::sleep_for(std::chrono::milliseconds(500));
++            }
++        }).detach();
++    });
++#endif
++    return usage;
++}
++
  void DrawMatchBenchmark() {
      if (!match_benchmark::Enabled()) return;
      using BenchClock = std::chrono::steady_clock;
-@@ -15,6 +37,7 @@ void DrawMatchBenchmark() {
+@@ -15,6 +107,13 @@ void DrawMatchBenchmark() {
      static std::ofstream csv;
      static std::filesystem::path report;
      static std::string message;
 +    static const std::string device = BenchmarkDeviceInfo();
++    BenchUsage& usage = BenchmarkUsage();
++    const double cpuPct = usage.cpuPct, ramMb = usage.ramMb, systemUsedGb = usage.systemUsedGb;
++    const double gpuPct = usage.gpuPct, vramMb = usage.vramMb;
++    // Per-frame sums and peaks of the sampled load while recording (index: cpu, gpu, ram, vram, system RAM).
++    static std::array<double, 5> loadSum{}, loadPeak{};
++    static std::array<uint64_t, 5> loadCount{};
      static AuroraFrameWaits base{}, previous{};
      static AuroraGpuTiming gpuBase{}, gpuPrevious{};
      const auto now = BenchClock::now();
-@@ -59,6 +82,7 @@ void DrawMatchBenchmark() {
+@@ -39,7 +138,8 @@ void DrawMatchBenchmark() {
+         report = folder / ("match-" + std::to_string(id));
+         csv.open(report.string() + ".csv");
+         if (!csv) { message = "No se pudo crear el informe"; return; }
+-        csv << "elapsed_s,frame_ms,draws,scale,force_16_9,backend,shader_queue,gpu_render_ms,gpu_samples,cpu_encode_ms,efb_copies,efb_source_pixels,efb_snapshots,efb_readbacks,efb_readback_wait_ms,presents\n";
++        csv << "elapsed_s,frame_ms,draws,scale,force_16_9,backend,shader_queue,gpu_render_ms,gpu_samples,cpu_encode_ms,efb_copies,efb_source_pixels,efb_snapshots,efb_readbacks,efb_readback_wait_ms,presents,process_cpu_pct,gpu_3d_pct,process_ram_mb,vram_mb,system_ram_used_gb\n";
++        loadSum = {}; loadPeak = {}; loadCount = {};
+         start = last = now;
+         base = previous = waits;
+         gpuBase = gpuPrevious = gpu;
+@@ -59,6 +159,7 @@ void DrawMatchBenchmark() {
          const auto percentile = [&](double p) { return sorted.empty() ? 0.0 : sorted[std::min(sorted.size()-1, static_cast<size_t>(p * sorted.size()))]; };
          std::ofstream summary(report.string() + ".txt");
          summary << "Yankees vs Colorado; CPU vs CPU; Coors Field; seeded start\n"
@@ -97,9 +183,39 @@ index bd94b05..ff8a285 100644
                  << "scale=" << g_resolutionScale << " force_16_9=" << g_forceAspect169 << " backend=" << GraphicsApiDisplayName() << '\n'
                  << "seconds=" << elapsed << " presented_frames=" << frames << " fps=" << (elapsed > 0 ? frames/elapsed : 0) << '\n'
                  << "host_frame_p50_ms=" << percentile(.50) << " p95_ms=" << percentile(.95) << " p99_ms=" << percentile(.99) << '\n';
-@@ -87,9 +111,9 @@ void DrawMatchBenchmark() {
+@@ -68,7 +169,13 @@ void DrawMatchBenchmark() {
+         const double encoded = std::max(1.0, double(waits.encodedFrames - base.encodedFrames));
+         summary << "cpu_encode_mean_ms=" << double(waits.encodeNs - base.encodeNs)/1e6/encoded << '\n'
+                 << "efb_texture_copies=" << waits.efbTextureCopies - base.efbTextureCopies << " efb_source_pixels=" << waits.efbCopySourcePixels - base.efbCopySourcePixels << '\n'
+-                << "efb_snapshots=" << waits.efbSnapshotCopies - base.efbSnapshotCopies << " efb_readbacks=" << waits.efbReadbacks - base.efbReadbacks << '\n'
++                << "efb_snapshots=" << waits.efbSnapshotCopies - base.efbSnapshotCopies << " efb_readbacks=" << waits.efbReadbacks - base.efbReadbacks << '\n';
++        const char* loadNames[] = {"process_cpu_pct", "gpu_3d_pct", "process_ram_mb", "vram_mb", "system_ram_used_gb"};
++        for (size_t i = 0; i < loadSum.size(); ++i) {
++            if (loadCount[i]) summary << loadNames[i] << "_mean=" << loadSum[i] / loadCount[i] << ' ' << loadNames[i] << "_peak=" << loadPeak[i] << '\n';
++            else summary << loadNames[i] << "=unavailable\n";
++        }
++        summary << "process_cpu_pct is over all logical cores, like Task Manager. GPU/VRAM from Windows GPU counters.\n"
+                 << "GPU markers exclude presenter work and demanded EFB prefixes. CPU autoplay is not a bit-exact replay.\n";
+         summary.close();
+         message = "Informe guardado en UserData/Benchmarks";
+@@ -85,11 +192,23 @@ void DrawMatchBenchmark() {
+         csv << ',' << samples << ',' << double(waits.encodeNs - previous.encodeNs)/1e6 << ','
+             << waits.efbTextureCopies - previous.efbTextureCopies << ',' << waits.efbCopySourcePixels - previous.efbCopySourcePixels << ','
              << waits.efbSnapshotCopies - previous.efbSnapshotCopies << ',' << waits.efbReadbacks - previous.efbReadbacks << ','
-             << double(waits.efbReadbackWaitNs - previous.efbReadbackWaitNs)/1e6 << ',' << waits.presents - previous.presents << '\n';
+-            << double(waits.efbReadbackWaitNs - previous.efbReadbackWaitNs)/1e6 << ',' << waits.presents - previous.presents << '\n';
++            << double(waits.efbReadbackWaitNs - previous.efbReadbackWaitNs)/1e6 << ',' << waits.presents - previous.presents;
++        const double load[] = {cpuPct, gpuPct, ramMb, vramMb, systemUsedGb};
++        for (size_t i = 0; i < loadSum.size(); ++i) {
++            csv << ',';
++            if (load[i] >= 0) csv << load[i];
++        }
++        csv << '\n';
++        for (size_t i = 0; i < loadSum.size(); ++i) {
++            if (load[i] < 0) continue;
++            loadSum[i] += load[i];
++            loadPeak[i] = std::max(loadPeak[i], load[i]);
++            ++loadCount[i];
++        }
          previous = waits; gpuPrevious = gpu; last = now;
 -        if (now - start >= std::chrono::seconds(autoSeconds ? autoSeconds : 30)) {
 +        if (autoSeconds && now - start >= std::chrono::seconds(autoSeconds)) {
@@ -109,8 +225,19 @@ index bd94b05..ff8a285 100644
          }
      }
      if (autoSeconds && !completed && now - launched > std::chrono::seconds(120 + autoSeconds)) {
-@@ -119,13 +143,15 @@ void DrawMatchBenchmark() {
+@@ -117,15 +236,26 @@ void DrawMatchBenchmark() {
+         ImGui::Text("FPS %.1f | %s | x%.0f", present.framesPerSecond, GraphicsApiDisplayName(), g_resolutionScale);
+         if (gpu.supported && gpu.samples) ImGui::Text("GPU render: %.2f ms | dibujos: %u", double(gpu.lastNs)/1e6, stats->drawCallCount);
          else ImGui::TextUnformatted("Tiempo GPU: no disponible");
++        char cpuText[24] = "n/d", ramText[24] = "n/d", gpuText[24] = "n/d", vramText[24] = "n/d", systemText[24] = "n/d";
++        if (cpuPct >= 0) std::snprintf(cpuText, sizeof(cpuText), "%.0f%%", cpuPct);
++        if (ramMb >= 0) std::snprintf(ramText, sizeof(ramText), "%.2f GB", ramMb / 1024);
++        if (gpuPct >= 0) std::snprintf(gpuText, sizeof(gpuText), "%.0f%%", gpuPct);
++        if (vramMb >= 0) std::snprintf(vramText, sizeof(vramText), "%.2f GB", vramMb / 1024);
++        if (systemUsedGb >= 0) std::snprintf(systemText, sizeof(systemText), "%.1f / %.1f GB", systemUsedGb, SDL_GetSystemRAM() / 1024.0);
++        ImGui::Text("Uso del juego: CPU %s | RAM %s", cpuText, ramText);
++        ImGui::Text("GPU 3D %s | VRAM %s", gpuText, vramText);
++        ImGui::Text("RAM del sistema en uso: %s", systemText);
          if (!recording) {
              ImGui::BeginDisabled(!ready);
 -            if (ImGui::Button("Medir 30 segundos")) begin();
@@ -127,7 +254,7 @@ index bd94b05..ff8a285 100644
      }
      ImGui::End();
 diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
-index 1c91abc..7878d4e 100644
+index 1c91abc..fa4cfa2 100644
 --- a/runtime/src/settings_overlay.cpp
 +++ b/runtime/src/settings_overlay.cpp
 @@ -12,7 +12,9 @@
@@ -140,15 +267,17 @@ index 1c91abc..7878d4e 100644
  #include <SDL3/SDL_gamepad.h>
  #include <SDL3/SDL_keyboard.h>
  #include <SDL3/SDL_mouse.h>
-@@ -29,6 +31,7 @@
+@@ -29,17 +31,26 @@
  #include <cstdint>
  #include <cstdio>
  #include <cstdlib>
 +#include <cstring>
  #include <limits>
  #include <iostream>
++#include <mutex>
  #include <string>
-@@ -36,6 +39,9 @@
++#include <thread>
+ #include <vector>
  #include <string_view>
  #include <utility>
  
@@ -158,3 +287,10 @@ index 1c91abc..7878d4e 100644
  #if defined(_WIN32)
  #define WIN32_LEAN_AND_MEAN
  #include <Windows.h>
+ #include <shellapi.h>
++#include <pdh.h>
++#include <pdhmsg.h>
++#include <psapi.h>
+ #endif
+ 
+ #include <dolphin/pad.h>
