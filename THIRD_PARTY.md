@@ -4,7 +4,7 @@ El código propio de esta integración se publica bajo GPLv3; consultar `LICENSE
 
 | Dependencia | Versión o revisión usada | Ubicación de trabajo | Uso |
 |---|---|---|---|
-| [DolRecomp](https://github.com/AH64-dll/DolRecomp) | `71c3122a92bf25a9fbe91fe7c662ad70125fba59`, GPLv3 | `local/vendor/DolRecomp` | Solo `-RegenerateMap` y `tools/disasm_guest.py`: reutilizan su análisis ya generado en `local/` |
+| [DolRecomp](https://github.com/AH64-dll/DolRecomp) | `71c3122a92bf25a9fbe91fe7c662ad70125fba59`, GPLv3 | `local/vendor/DolRecomp` | Solo `-RegenerateMap`: reutiliza su análisis ya generado en `local/` |
 | [decomp-toolkit](https://github.com/encounter/decomp-toolkit) | 1.8.4 | `local/tools` | Análisis y extracción |
 | [NKit](https://github.com/Nanook/NKit) | 3.1.0 | `local/tools/nkit` | Expansión de la imagen |
 | [Dolphin](https://github.com/dolphin-emu/dolphin) | Ejecutable ya instalado, identificado por SHA256 | `D:\Dolphin-x64` | Extracción inicial |

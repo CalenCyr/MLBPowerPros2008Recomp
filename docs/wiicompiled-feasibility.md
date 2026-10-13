@@ -147,7 +147,7 @@ La vuelta completa ronda los 5 min. Un cambio solo en el runtime compila en segu
 - Los nombres de MKW repetidos en varias direcciones no se enlazan.
 - Las direcciones de datos se traducen por **bloques verificados**: en cada objeto del SDK, varias anclas leídas en el código de MLB confirman un mismo desplazamiento. La evidencia de cada fila está en el CSV.
 - Lo que no se pudo verificar se descarta explícitamente. Por ejemplo, cuatro escrituras de estado del HLE de DVD caerían en variables distintas de MLB y se sustituyen por `(void)0`.
-- `tools/function_data_refs.py` y `tools/disasm_guest.py` (desensamblado sacado de la salida C de DolRecomp) son las herramientas de esta decompilación dirigida.
+- `tools/function_data_refs.py` y `tools/disasm_guest.py` (desensamblado sacado de la salida C de DolRecomp; retirado, en el tag `moderngekko-era`) son las herramientas de esta decompilación dirigida.
 
 Con `os,audio,storage,vi,gx,input` activos: **316 ganchos enlazados, 302 sin enlazar, 94 literales traducidos**, ninguno sin resolver.
 
