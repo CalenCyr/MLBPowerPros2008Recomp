@@ -1,0 +1,727 @@
+diff --git a/PowerUp/PowerUp.CommandLine/Commands/GameSave/WriteGameSaveCommand.cs b/PowerUp/PowerUp.CommandLine/Commands/GameSave/WriteGameSaveCommand.cs
+index 4b2cce8..c5a5ea4 100644
+--- a/PowerUp/PowerUp.CommandLine/Commands/GameSave/WriteGameSaveCommand.cs
++++ b/PowerUp/PowerUp.CommandLine/Commands/GameSave/WriteGameSaveCommand.cs
+@@ -23,6 +23,7 @@ namespace PowerUp.CommandLine.Commands.Rosters
+         new Option<string?>("--in-file", "File to use as the source for the game save"),
+         new Option<string?>("--out-file", "File path to export the roster to"),
+         new Option<string?>("--out-dir", "Directory to export the roster to"),
++        new Option<bool>("--mlb2008-mod", "Write an MLB Power Pros 2008 roster mod folder into --out-dir instead"),
+       };
+       command.Handler = GetHandler();
+       return command;
+@@ -34,7 +35,8 @@ namespace PowerUp.CommandLine.Commands.Rosters
+         int? rosterId,
+         string? inFile,
+         string? outFile, 
+-        string? outDir
++        string? outDir,
++        bool mlb2008Mod
+       ) =>
+       {
+         if (!rosterId.HasValue)
+@@ -50,6 +52,15 @@ namespace PowerUp.CommandLine.Commands.Rosters
+           return;
+         }
+ 
++        if (mlb2008Mod)
++        {
++          var modsDirectory = string.IsNullOrEmpty(outDir) ? "." : outDir;
++          using var mod = rosterExportApi.ExportPowerPros2008Mod(roster);
++          System.IO.Compression.ZipFile.ExtractToDirectory(mod, modsDirectory, overwriteFiles: true);
++          logger.LogInformation($"Wrote the MLB Power Pros 2008 roster mod into {modsDirectory}");
++          return;
++        }
++
+         var defaultFileName = $"{DateTime.Now.ToFileTime()}_{roster.Name}_pm2maus.dat";
+         var directory = string.IsNullOrEmpty(outDir)
+           ? ""
+diff --git a/PowerUp/PowerUp.CommandLine/Program.cs b/PowerUp/PowerUp.CommandLine/Program.cs
+index 5b5191a..c76407b 100644
+--- a/PowerUp/PowerUp.CommandLine/Program.cs
++++ b/PowerUp/PowerUp.CommandLine/Program.cs
+@@ -56,7 +56,7 @@ static IHost StartUp()
+   Log.Logger = new LoggerConfiguration()
+       .MinimumLevel.Debug()
+       .WriteTo.Console(Serilog.Events.LogEventLevel.Information)
+-      .WriteTo.File(Path.Combine(Directory.GetDirectoryRoot(Directory.GetCurrentDirectory()), "PowerUp", "logs", $"log-{timestamp}.txt"), rollingInterval: RollingInterval.Infinite)
++      .WriteTo.File(Path.Combine(Directory.GetCurrentDirectory(), "logs", $"log-{timestamp}.txt"), rollingInterval: RollingInterval.Infinite)
+       .CreateLogger();
+ 
+   builder.UseSerilog();
+diff --git a/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs b/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs
+index b24c224..1175f14 100644
+--- a/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs
++++ b/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs
+@@ -18,6 +18,9 @@ namespace PowerUp.ElectronUI.Api.Rosters
+     public Task<FileResponse> Execute(ExportRosterRequest request, IFormFile? file)
+     {
+       var roster = DatabaseConfig.Database.Load<Roster>(request.RosterId);
++      if (request.PowerPros2008Mod)
++        return Task.FromResult(new FileResponse($"{roster!.Name}.zip", _rosterExportApi.ExportPowerPros2008Mod(roster), MediaTypeNames.Application.Zip));
++
+       using var fileStream = file?.OpenReadStream();
+       var parameters = new RosterExportParameters 
+       {
+@@ -33,6 +36,7 @@ namespace PowerUp.ElectronUI.Api.Rosters
+   public class ExportRosterRequest
+   {
+     public int RosterId { get; set; }
++    public bool PowerPros2008Mod { get; set; }
+     public IFormFile? SourceGameSave { get; set; }
+   }
+ }
+diff --git a/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv b/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv
+index 35d04f9..726dea8 100644
+--- a/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv
++++ b/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv
+@@ -31,3 +31,11 @@ Rowland–Smith,3887
+ Quintanilla,3878
+ Billingsley,3881
+ Vanden Hurk,3888
++Van Benschoten,3867
++Pignatiello,3893
++E.Patterson,3895
++Saltalamacchia,3896
++Sonnanstine,3897
++Chamberlain,3899
++S.Rodriguez,3900
++Lillibridge,3901
+diff --git a/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs b/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs
+index db33617..d277d33 100644
+--- a/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs
++++ b/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs
+@@ -35,6 +35,9 @@ namespace PowerUp.ElectronUI
+             });
+       });
+       services.AddControllersWithViews();
++      // MLB Power Pros 2008's PROJECT.BIN (about 400 MB) can be opened as a roster.
++      services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = 1L << 30);
++      services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(options => options.Limits.MaxRequestBodySize = 1L << 30);
+       services.RegisterCommandsForDI();
+ 
+       var dataDirectory = Configuration["DataDirectory"] ?? "";
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx b/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx
+index 3d5fb22..66ef446 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx
+@@ -74,7 +74,7 @@ export function ImportRosterModal(props: ImportRosterModalProps) {
+       <input 
+         id='gameSaveFileSelector'
+         type='file' 
+-        accept={state.importType === 'game-save' ? '.dat' : '.csv'} 
++        accept={state.importType === 'game-save' ? '.dat,.bin,.pack' : '.csv'} 
+         onChange={e => setState(p => ({...p, selectedFile: e.target.files![0]}))} 
+       />
+     </div>
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
+index 966c1eb..a54bd93 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
+@@ -2,6 +2,7 @@ import { CommandFetcher } from "../../utils/commandFetcher";
+ 
+ export interface ExportRosterRequest {
+   rosterId: number;
++  powerPros2008Mod?: boolean;
+ }
+ 
+ export class ExportRosterApiClient {
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx
+index ef7adb8..b72b268 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx
+@@ -32,7 +32,7 @@ interface State {
+   selectedGameSaveFile: File | null; 
+ }
+ 
+-type ExportType = 'game-save' | 'csv';
++type ExportType = 'game-save' | 'mlb-2008-mod' | 'csv';
+ 
+ function RosterExportModal(props: RosterExportModalProps) {
+   const { appContext, rosterId, closeDialog } = props;
+@@ -62,6 +62,15 @@ function RosterExportModal(props: RosterExportModalProps) {
+               onSelect={() => setState(p => ({ ...p, exportType: 'game-save' }))} 
+             />
+           </RadioButtonWrapper>
++          <RadioButtonWrapper>
++            <span>MLB Power Pros 2008 Mod</span>
++            <RadioButton
++              groupName='exportType'
++              value='mlb-2008-mod'
++              checked={state.exportType === 'mlb-2008-mod'}
++              onSelect={() => setState(p => ({ ...p, exportType: 'mlb-2008-mod' }))}
++            />
++          </RadioButtonWrapper>
+           <RadioButtonWrapper>
+             <span>CSV</span>
+             <RadioButton 
+@@ -94,6 +103,10 @@ function RosterExportModal(props: RosterExportModalProps) {
+         onSelection={file => setState(p => ({ ...p, selectedGameSaveFile: file }))}
+         />
+       </>}
++      {state.exportType === 'mlb-2008-mod' && <p style={{ fontSize: FONT_SIZES._14 }}>
++        A zip with a mods folder for the MLB Power Pros 2008 recomp: extract it into its mods folder and
++        turn the roster on in MODS. It applies to every mode, MLB Life included.
++      </p>}
+     </div>
+     <div style={{ display: 'flex', gap: '4px' }}>
+       <Button variant='Outline' size='Small' onClick={closeDialog}>Cancel</Button>
+@@ -104,6 +117,8 @@ function RosterExportModal(props: RosterExportModalProps) {
+   async function exportRoster() {
+     if(state.exportType === 'game-save')
+       exportRosterAsGameSave();
++    else if(state.exportType === 'mlb-2008-mod')
++      exportRosterAsPowerPros2008Mod();
+     else
+       exportRosterAsCsv();
+   }
+@@ -118,6 +133,17 @@ function RosterExportModal(props: RosterExportModalProps) {
+     closeDialog();
+   }
+ 
++  async function exportRosterAsPowerPros2008Mod() {
++    const response = await exportApiClientRef.current.execute({
++      rosterId: rosterId,
++      powerPros2008Mod: true,
++    }, null);
++    if(!response) return;
++
++    downloadFile(response);
++    closeDialog();
++  }
++
+   async function exportRosterAsCsv() {
+     const csvFile = await exportApiClientRef.current.executeCsv({
+       rosterId: rosterId,
+diff --git a/PowerUp/PowerUp/Dependencies.cs b/PowerUp/PowerUp/Dependencies.cs
+index 6ab259b..4cbcf00 100644
+--- a/PowerUp/PowerUp/Dependencies.cs
++++ b/PowerUp/PowerUp/Dependencies.cs
+@@ -24,7 +24,7 @@ namespace PowerUp
+     public static void RegisterDependencies(this IServiceCollection services)
+     {
+       services.AddTransient(p => p.GetRequiredService<ILoggerFactory>().CreateLogger(""));
+-      services.AddTransient<IRosterImportApi>(provider => new RosterImportApi(provider.GetRequiredService<ICharacterLibrary>(), provider.GetRequiredService<IPlayerMapper>()));
++      services.AddTransient<IRosterImportApi>(provider => new RosterImportApi(provider.GetRequiredService<ICharacterLibrary>(), provider.GetRequiredService<IPlayerMapper>(), provider.GetRequiredService<IBaseGameSavePathProvider>()));
+       services.AddTransient<IRosterExportApi, RosterExportApi>();
+       services.AddTransient<IPlayerMapper>(provider => new PlayerMapper(provider.GetRequiredService<ISpecialSavedNameLibrary>()));
+       services.AddTransient<IPlayerApi>(provider => new PlayerApi());
+diff --git a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
+index e06c584..74e7bbb 100644
+--- a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
++++ b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
+@@ -5,6 +5,7 @@ using PowerUp.GameSave.IO;
+ using PowerUp.GameSave.Objects.FreeAgents;
+ using PowerUp.GameSave.Objects.GameSaves;
+ using PowerUp.GameSave.Objects.Players;
++using PowerUp.GameSave.PowerPros2008;
+ using PowerUp.Libraries;
+ using PowerUp.Mappers;
+ using PowerUp.Mappers.Players;
+@@ -12,6 +13,7 @@ using PowerUp.Providers;
+ using System;
+ using System.Collections.Generic;
+ using System.IO;
++using System.IO.Compression;
+ using System.Linq;
+ 
+ namespace PowerUp.GameSave.Api
+@@ -20,6 +22,7 @@ namespace PowerUp.GameSave.Api
+   {
+     Stream ExportRoster(RosterExportParameters parameters);
+     void WriteRosterToFile(Roster roster, string filePath);
++    Stream ExportPowerPros2008Mod(Roster roster);
+   }
+ 
+   public class RosterExportApi : IRosterExportApi
+@@ -72,7 +75,74 @@ namespace PowerUp.GameSave.Api
+       WriteRosterToFile(roster, filePath, 0);
+     }
+ 
+-    private void WriteRosterToFile(Roster roster, string filePath, int gameSaveId)
++    /// <summary>
++    /// The roster as an MLB Power Pros 2008 roster mod for the 2008 recomp: a zip holding
++    /// NAME/mod.toml and NAME/roster/NAME.dat. The .dat is a regular 2007 save; the game converts
++    /// it to 2008 with the player's own disc when the mod loads, so the mod carries no game files.
++    /// After a 2008 import, players the user did not touch keep their exact 2008 values.
++    /// </summary>
++    public Stream ExportPowerPros2008Mod(Roster roster)
++    {
++      var baseSavePath = _baseGameSavePathProvider.GetPath();
++      var tempFilePath = Path.GetTempFileName();
++      File.Copy(baseSavePath, tempFilePath, overwrite: true);
++      WriteRosterToFile(roster, tempFilePath, 0, LoadPowerPros2008Originals(baseSavePath));
++
++      var name = string.Concat((roster.Name ?? "Roster").Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim();
++      var toml = $"name = \"{TomlEscape(roster.Name ?? name)}\"\nauthor = \"PowerUp+\"\nversion = \"1\"\n" +
++        "description = \"Roster de PowerUp+ para MLB Power Pros 2008. Afecta a todos los modos, incluido MLB Life.\"\n";
++      var zip = new MemoryStream();
++      using (var archive = new ZipArchive(zip, ZipArchiveMode.Create, leaveOpen: true))
++      {
++        using (var writer = new StreamWriter(archive.CreateEntry($"{name}/mod.toml").Open()))
++          writer.Write(toml);
++        archive.CreateEntryFromFile(tempFilePath, $"{name}/roster/{name}.dat");
++      }
++      File.Delete(tempFilePath);
++      zip.Position = 0;
++      return zip;
++    }
++
++    private static string TomlEscape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
++
++    /// <summary>The 2008 roster kept by the last 2008 import, as 2007-layout players keyed by name.</summary>
++    private IReadOnlyDictionary<string, GSPlayer>? LoadPowerPros2008Originals(string baseSavePath)
++    {
++      var packPath = PowerPros2008Roster.OriginalPackPath(baseSavePath);
++      if (!File.Exists(packPath))
++        return null;
++      var save = PowerPros2008Roster.ToGameSave(File.ReadAllBytes(packPath), File.ReadAllBytes(baseSavePath));
++      using var reader = new GameSaveReader(_characterLibrary, new MemoryStream(save), ByteOrder.BigEndian);
++      var originals = new Dictionary<string, GSPlayer>();
++      foreach (var player in reader.Read().Players.Where(p => p.PowerProsId is > 0))
++        originals.TryAdd($"{player.LastName}|{player.FirstName}", (GSPlayer)player);
++      return originals;
++    }
++
++    /// <summary>
++    /// PowerUp's player model does not keep every value of the game exactly (face-dependent skin
++    /// and eyes, colors of absent hair, pitch movement, the edited flags...). A field whose exported
++    /// value equals what an untouched round trip of the original gives was not edited, so it takes
++    /// the original value. Team and id stay as exported.
++    /// </summary>
++    private void PreserveUntouched(IGSPlayer exported, IReadOnlyDictionary<string, GSPlayer> originals)
++    {
++      if (!originals.TryGetValue($"{exported.LastName}|{exported.FirstName}", out var original))
++        return;
++      var player = _playerMapper.MapToPlayer(original, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008" });
++      var untouched = _playerMapper.MapToGSPlayer(player, (MLBPPTeam)exported.PowerProsTeamId!.Value, exported.PowerProsId!.Value);
++      foreach (var property in typeof(GSPlayer).GetProperties())
++      {
++        var attribute = property.GetGSAttribute();
++        if (attribute is null || attribute is GSStringAttribute
++          || property.Name is nameof(GSPlayer.PowerProsId) or nameof(GSPlayer.PowerProsTeamId) or nameof(GSPlayer.SpecialSavedNameId))
++          continue;
++        if (Equals(property.GetValue(exported), property.GetValue(untouched)))
++          property.SetValue(exported, property.GetValue(original));
++      }
++    }
++
++    private void WriteRosterToFile(Roster roster, string filePath, int gameSaveId, IReadOnlyDictionary<string, GSPlayer>? originals = null)
+     {
+       // CHRISTODO: Don't hard code endian-ness
+       using (var writer = new GameSaveWriter(_characterLibrary, filePath, ByteOrder.BigEndian))
+@@ -120,8 +190,10 @@ namespace PowerUp.GameSave.Api
+           gsPlayers.Add(_playerMapper.MapToGSPlayer(player.player, jerseyTeam, ppId));
+         }
+ 
+-        var mappedFAs = freeAgents.Select(fa => _playerMapper.MapToGSPlayer(fa.player, MLBPPTeam.NationalLeagueAllStars, (ushort)ppIdByExportId[fa.playerExportId]));
++        var mappedFAs = freeAgents.Select(fa => _playerMapper.MapToGSPlayer(fa.player, MLBPPTeam.NationalLeagueAllStars, (ushort)ppIdByExportId[fa.playerExportId])).ToList();
+         gsPlayers.AddRange(mappedFAs);
++        if (originals is not null)
++          gsPlayers.ForEach(p => PreserveUntouched(p, originals));
+ 
+         var blankFreeAgentSpots = new List<GSFreeAgent>();
+         for (var i = freeAgents.Count(); i < 15; i++)
+diff --git a/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
+index fe3d726..63aa06f 100644
+--- a/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
++++ b/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
+@@ -5,6 +5,7 @@ using PowerUp.Entities.Rosters;
+ using PowerUp.Entities.Teams;
+ using PowerUp.GameSave.IO;
+ using PowerUp.GameSave.Objects.GameSaves;
++using PowerUp.GameSave.PowerPros2008;
+ using PowerUp.Libraries;
+ using PowerUp.Mappers;
+ using PowerUp.Mappers.Players;
+@@ -24,11 +25,13 @@ namespace PowerUp.GameSave.Api
+   {
+     private readonly ICharacterLibrary _characterLibrary;
+     private readonly IPlayerMapper _playerMapper;
++    private readonly IBaseGameSavePathProvider? _baseGameSavePathProvider;
+ 
+-    public RosterImportApi(ICharacterLibrary characterLibrary, IPlayerMapper playerMapper)
++    public RosterImportApi(ICharacterLibrary characterLibrary, IPlayerMapper playerMapper, IBaseGameSavePathProvider? baseGameSavePathProvider = null)
+     {
+       _characterLibrary = characterLibrary;
+       _playerMapper = playerMapper;
++      _baseGameSavePathProvider = baseGameSavePathProvider;
+     }
+ 
+     public RosterImportResult ImportRoster(RosterImportParameters parameters)
+@@ -39,7 +42,7 @@ namespace PowerUp.GameSave.Api
+         throw new ArgumentNullException(nameof(parameters.ImportSource));
+ 
+       // CHRISTODO: Don't hard code this
+-      using (var reader = new GameSaveReader(_characterLibrary, parameters.Stream, ByteOrder.BigEndian))
++      using (var reader = new GameSaveReader(_characterLibrary, ReadAsGameSave(parameters.Stream), ByteOrder.BigEndian))
+       {
+         var gameSave = reader.Read();
+         var gsPlayers = gameSave.Players.Where(p => p.PowerProsId.HasValue && p.PowerProsId != 0);
+@@ -100,6 +103,29 @@ namespace PowerUp.GameSave.Api
+         };
+       }
+     }
++
++    /// <summary>
++    /// A 2007 save as it is, or MLB Power Pros 2008's roster (its PROJECT.BIN or game_data.pack)
++    /// turned into one on top of the base save.
++    /// </summary>
++    private Stream ReadAsGameSave(Stream stream)
++    {
++      if (!stream.CanSeek)
++      {
++        var buffer = new MemoryStream();
++        stream.CopyTo(buffer);
++        stream = buffer;
++      }
++      var pack = PowerPros2008Roster.FindGameDataPack(stream);
++      stream.Position = 0;
++      if (pack is null)
++        return stream;
++      if (_baseGameSavePathProvider is null)
++        throw new InvalidOperationException("Importing an MLB Power Pros 2008 roster needs the base game save");
++      var baseSavePath = _baseGameSavePathProvider.GetPath();
++      File.WriteAllBytes(PowerPros2008Roster.OriginalPackPath(baseSavePath), pack);
++      return new MemoryStream(PowerPros2008Roster.ToGameSave(pack, File.ReadAllBytes(baseSavePath)));
++    }
+   }
+ 
+   public class RosterImportParameters
+diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs
+new file mode 100644
+index 0000000..f59942d
+--- /dev/null
++++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs
+@@ -0,0 +1,176 @@
++﻿// Generated by tools/roster/powerup_to_2008.py --emit-cs (MLB Power Pros 2008 recomp project)
++// from GSPlayer.cs: 2007 (bit, width) -> 2008 (bit, width) for every player field outside the
++// byte ranges copied as they are (0x00..0x5B, 0x60..0x6E). BirthYear moves by one year.
++namespace PowerUp.GameSave.PowerPros2008
++{
++  public static class PowerPros2008Fields
++  {
++    public static readonly (int From, int Bits, int To, int ToBits, bool BirthYear)[] All =
++    [
++      (0x2E0, 4, 0x2E0, 4, false), // EyewearColor
++      (0x2E4, 8, 0x2E4, 9, false), // BattingForm
++      (0x2EC, 8, 0x2ED, 9, false), // PitchingForm
++      (0x2F4, 4, 0x2F6, 4, false), // PrimaryPosition
++      (0x2F8, 3, 0x2FA, 3, false), // PitcherCapability
++      (0x2FB, 3, 0x2FD, 3, false), // CatcherCapability
++      (0x378, 2, 0x378, 2, false), // HittingConsistency
++      (0x37A, 3, 0x37A, 3, false), // HittingVersusLefty1
++      (0x380, 3, 0x37D, 3, false), // ClutchHitter
++      (0x383, 1, 0x380, 1, false), // IsTableSetter
++      (0x384, 2, 0x381, 2, false), // Morale
++      (0x386, 1, 0x383, 1, false), // IsSparkplug
++      (0x387, 1, 0x384, 1, false), // IsRallyHitter
++      (0x388, 1, 0x385, 1, false), // IsHotHitter
++      (0x389, 1, 0x386, 1, false), // IsBackToBackHitter
++      (0x38A, 1, 0x387, 1, false), // IsToughOut
++      (0x38B, 1, 0x388, 1, false), // IsPushHitter
++      (0x38C, 1, 0x389, 1, false), // IsSprayHitter
++      (0x38D, 2, 0x38A, 2, false), // InfieldHitter
++      (0x38F, 1, 0x38C, 1, false), // IsContactHitter
++      (0x390, 1, 0x38D, 1, false), // IsPowerHitter
++      (0x391, 1, 0x38E, 1, false), // IsGoodPinchHitter
++      (0x392, 1, 0x38F, 1, false), // IsFreeSwinger
++      (0x393, 1, 0x390, 1, false), // IsFirstballHitter
++      (0x394, 2, 0x391, 2, false), // Bunting
++      (0x396, 2, 0x393, 2, false), // WalkoffHitter
++      (0x398, 2, 0x395, 2, false), // BasesLoadedHitter
++      (0x39A, 1, 0x397, 1, false), // IsRefinedHitter
++      (0x39B, 1, 0x398, 1, false), // IsIntimidatingHitter
++      (0x39C, 2, 0x399, 2, false), // Stealing
++      (0x39E, 2, 0x39B, 2, false), // BaseRunning
++      (0x3A0, 1, 0x39D, 1, false), // WillSlideHeadFirst
++      (0x3A2, 1, 0x39F, 1, false), // IsToughRunner
++      (0x3A3, 1, 0x3A0, 1, false), // WillBreakupDoublePlay
++      (0x3A4, 2, 0x3A1, 2, false), // Throwing
++      (0x3A6, 1, 0x3A3, 1, false), // IsGoldGlover
++      (0x3A7, 1, 0x3A4, 1, false), // CanBarehandCatch
++      (0x3A8, 1, 0x3A5, 1, false), // CanSpiderCatch
++      (0x3A9, 1, 0x3A6, 1, false), // IsErrorProne
++      (0x3AA, 3, 0x3A7, 3, false), // Catching
++      (0x3AD, 1, 0x3AA, 1, false), // IsGoodBlocker
++      (0x3AE, 1, 0x3AB, 1, false), // IsTrashTalker
++      (0x3AF, 1, 0x3AC, 1, false), // HasCannonArm
++      (0x3B2, 1, 0x3AF, 1, false), // IsStar
++      (0x3B3, 2, 0x3B0, 2, false), // SmallBall
++      (0x3B5, 2, 0x3B2, 2, false), // SlugOrSlap
++      (0x3B7, 2, 0x3B4, 2, false), // AggressiveOrPatientHitter
++      (0x3B9, 2, 0x3B6, 2, false), // AggressiveOrCautiousBaseStealer
++      (0x3BC, 1, 0x3B9, 1, false), // IsAggressiveBaserunner
++      (0x3BE, 1, 0x3BB, 1, false), // IsAggressiveFielder
++      (0x3C0, 1, 0x3BE, 1, false), // IsPivotMan
++      (0x3C1, 1, 0x3BF, 1, false), // IsPullHitter
++      (0x3C2, 2, 0x3C0, 2, false), // GoodOrPoorDayGame
++      (0x3C4, 2, 0x3C2, 2, false), // GoodOrPoorRain
++      (0x3C8, 8, 0x3C6, 8, false), // TopThrowingSpeedKMH
++      (0x3D0, 8, 0x3CE, 8, false), // Control
++      (0x3D8, 8, 0x3D6, 8, false), // Stamina
++      (0x3E0, 2, 0x3DE, 2, false), // Recovery
++      (0x3E2, 2, 0x3E0, 2, false), // PitchingConsistency
++      (0x3E4, 2, 0x3E2, 2, false), // GroundBallOrFlyBallPitcher
++      (0x3E6, 2, 0x3E4, 2, false), // SafeOrFatPitch
++      (0x3EE, 2, 0x3EC, 2, false), // WithRunnersInScoringPosition
++      (0x3E8, 2, 0x3E6, 2, false), // Spin
++      (0x3EA, 2, 0x3E8, 2, false), // FastballLife
++      (0x3EC, 1, 0x3EA, 1, false), // Gyroball
++      (0x3ED, 1, 0x3EB, 1, false), // ShuttoSpin
++      (0x3F0, 2, 0x3EE, 2, false), // Poise
++      (0x3F2, 2, 0x3F0, 2, false), // Luck
++      (0x3F4, 2, 0x3F2, 2, false), // Release
++      (0x3F6, 2, 0x3F4, 2, false), // PitchingVersusLefty
++      (0x3F8, 1, 0x3F6, 1, false), // PoorVersusRunner
++      (0x3F9, 1, 0x3F7, 1, false), // GoodPickoff
++      (0x3FA, 1, 0x3F8, 1, false), // GoodDelivery
++      (0x3FB, 1, 0x3F9, 1, false), // GoodLowPitch
++      (0x3FC, 1, 0x3FA, 1, false), // DoctorK
++      (0x3FD, 1, 0x3FB, 1, false), // IsWalkProne
++      (0x3FE, 1, 0x3FC, 1, false), // IsSandbag
++      (0x3FF, 1, 0x3FD, 1, false), // HasPokerFace
++      (0x400, 1, 0x3FE, 1, false), // IsIntimidatingPitcher
++      (0x401, 1, 0x3FF, 1, false), // IsBattler
++      (0x402, 1, 0x400, 1, false), // IsHotHead
++      (0x403, 1, 0x401, 1, false), // IsSlowStarter
++      (0x404, 1, 0x402, 1, false), // IsStarterFinisher
++      (0x405, 1, 0x403, 1, false), // IsChokeArtist
++      (0x406, 1, 0x404, 1, false), // HasGoodReflexes
++      (0x408, 1, 0x406, 1, false), // HasGoodPace
++      (0x409, 2, 0x407, 2, false), // PowerOrBreakingBallPitcher
++      (0x420, 11, 0x414, 11, true), // BirthYear
++      (0x42B, 4, 0x420, 4, false), // BirthMonth
++      (0x42F, 5, 0x424, 5, false), // BirthDay
++      (0x435, 5, 0x42A, 5, false), // YearsInMajors
++      (0x440, 10, 0x42F, 10, false), // BattingAveragePoints
++      (0x44A, 10, 0x440, 10, false), // RunsBattedIn
++      (0x454, 10, 0x44A, 10, false), // HomeRuns
++      (0x460, 14, 0x460, 14, false), // EarnedRunAverage
++      (0x4A0, 5, 0x4A0, 5, false), // FourSeamType
++      (0x4A5, 3, 0x4A5, 3, false), // FourSeamMovement
++      (0x4A8, 5, 0x4A8, 5, false), // Slider1Type
++      (0x4AD, 3, 0x4AD, 3, false), // Slider1Movement
++      (0x4B0, 5, 0x4B0, 5, false), // Curve1Type
++      (0x4B5, 3, 0x4B5, 3, false), // Curve1Movement
++      (0x4B8, 5, 0x4B8, 5, false), // Fork1Type
++      (0x4BD, 3, 0x4BD, 3, false), // Fork1Movement
++      (0x4C0, 5, 0x4C0, 5, false), // Sinker1Type
++      (0x4C5, 3, 0x4C5, 3, false), // Sinker1Movement
++      (0x4C8, 5, 0x4C8, 5, false), // SinkingFastball1Type
++      (0x4CD, 3, 0x4CD, 3, false), // SinkingFastball1Movement
++      (0x4D0, 5, 0x4D0, 5, false), // TwoSeamType
++      (0x4D5, 3, 0x4D5, 3, false), // TwoSeamMovement
++      (0x4D8, 5, 0x4D8, 5, false), // Slider2Type
++      (0x4DD, 3, 0x4DD, 3, false), // Slider2Movement
++      (0x4E0, 5, 0x4E0, 5, false), // Curve2Type
++      (0x4E5, 3, 0x4E5, 3, false), // Curve2Movement
++      (0x4E8, 5, 0x4E8, 5, false), // Fork2Type
++      (0x4ED, 3, 0x4ED, 3, false), // Fork2Movement
++      (0x4F0, 5, 0x4F0, 5, false), // Sinker2Type
++      (0x4F5, 3, 0x4F5, 3, false), // Sinker2Movement
++      (0x4F8, 5, 0x4F8, 5, false), // SinkingFastball2Type
++      (0x4FD, 3, 0x4FD, 3, false), // SinkingFastball2Movement
++      (0x3A1, 1, 0x39E, 1, false), // Bit_74_1
++      (0x3B0, 1, 0x3AD, 1, false), // Bit_76_0
++      (0x3B1, 1, 0x3AE, 1, false), // Bit_76_1
++      (0x3BB, 1, 0x3B8, 1, false), // Bit_77_3
++      (0x3BD, 1, 0x3BA, 1, false), // Bit_77_5
++      (0x3BF, 1, 0x3BD, 1, false), // Bit_77_7
++      (0x3C6, 1, 0x3C4, 1, false), // Bit_78_6
++      (0x3C7, 1, 0x3C5, 1, false), // Bit_78_7
++      (0x407, 1, 0x405, 1, false), // Bit_80_7
++      (0x46E, 1, 0x46E, 1, false), // Bit_8D_6
++      (0x46F, 1, 0x46F, 1, false), // Bit_8D_7
++      (0x470, 1, 0x470, 1, false), // Bit_8E_0
++      (0x471, 1, 0x471, 1, false), // Bit_8E_1
++      (0x472, 1, 0x472, 1, false), // Bit_8E_2
++      (0x473, 1, 0x473, 1, false), // Bit_8E_3
++      (0x474, 1, 0x474, 1, false), // Bit_8E_4
++      (0x475, 1, 0x475, 1, false), // Bit_8E_5
++      (0x476, 1, 0x476, 1, false), // Bit_8E_6
++      (0x477, 1, 0x477, 1, false), // Bit_8E_7
++      (0x478, 1, 0x478, 1, false), // Bit_8F_0
++      (0x479, 1, 0x479, 1, false), // Bit_8F_1
++      (0x47A, 1, 0x47A, 1, false), // Bit_8F_2
++      (0x47B, 1, 0x47B, 1, false), // Bit_8F_3
++      (0x47C, 1, 0x47C, 1, false), // Bit_8F_4
++      (0x47D, 1, 0x47D, 1, false), // Bit_8F_5
++      (0x47E, 1, 0x47E, 1, false), // Bit_8F_6
++      (0x47F, 1, 0x47F, 1, false), // Bit_8F_7
++      (0x480, 1, 0x480, 1, false), // Bit_90_0
++      (0x481, 1, 0x481, 1, false), // Bit_90_1
++      (0x482, 1, 0x482, 1, false), // Bit_90_2
++      (0x483, 1, 0x483, 1, false), // Bit_90_3
++      (0x484, 1, 0x484, 1, false), // Bit_90_4
++      (0x485, 1, 0x485, 1, false), // Bit_90_5
++      (0x486, 1, 0x486, 1, false), // Bit_90_6
++      (0x487, 1, 0x487, 1, false), // Bit_90_7
++      (0x488, 1, 0x488, 1, false), // Bit_91_0
++      (0x489, 1, 0x489, 1, false), // Bit_91_1
++      (0x48A, 1, 0x48A, 1, false), // Bit_91_2
++      (0x48B, 1, 0x48B, 1, false), // Bit_91_3
++      (0x48C, 1, 0x48C, 1, false), // Bit_91_4
++      (0x48D, 1, 0x48D, 1, false), // Bit_91_5
++      (0x48E, 1, 0x48E, 1, false), // Bit_91_6
++      (0x48F, 1, 0x48F, 1, false), // Bit_91_7
++      (0x490, 1, 0x490, 1, false), // Bit_92_0
++      (0x491, 1, 0x491, 1, false), // Bit_92_1
++    ];
++  }
++}
+diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
+new file mode 100644
+index 0000000..a34e220
+--- /dev/null
++++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
+@@ -0,0 +1,149 @@
++﻿using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Text;
++
++namespace PowerUp.GameSave.PowerPros2008
++{
++  /// <summary>
++  /// MLB Power Pros 2008 keeps the roster block of a 2007 save (1500 players of 0xB0 bytes, lineups,
++  /// free agents, 32 teams) in PROJECT.BIN's game_data.pack, after a 0x20-byte PACKWII header. Most
++  /// player fields sit where 2007 has them; PowerPros2008Fields lists the ones that moved. Importing
++  /// turns the 2008 roster into a 2007 save so the rest of PowerUp works unchanged; the game side
++  /// (the recomp's roster mods) converts PowerUp saves back to 2008 with the player's own disc.
++  /// </summary>
++  public static class PowerPros2008Roster
++  {
++    public const int PlayerSize = 0xB0;
++    public const int Slots = 1500;
++    public const int BlockSize = 0x43E80;
++    public const int SaveBlock2007 = 0x68C74;
++    public const int PackBlock2008 = 0x20;
++
++    /// <summary>
++    /// Where an import keeps the player's 2008 game_data.pack (next to PowerUp's base save, never
++    /// shared), so a 2008 mod export can tell which values the user left as they were.
++    /// </summary>
++    public static string OriginalPackPath(string baseSavePath)
++      => Path.Combine(Path.GetDirectoryName(baseSavePath)!, "PowerPros2008_game_data.pack");
++
++    /// <summary>
++    /// game_data.pack from MLB Power Pros 2008's game_data.pack or PROJECT.BIN (a seekable stream),
++    /// else null. Only the archive header and the one entry are read.
++    /// </summary>
++    public static byte[]? FindGameDataPack(Stream stream)
++    {
++      if (stream.Length == PackBlock2008 + BlockSize)
++      {
++        var whole = ReadAt(stream, 0, (int)stream.Length);
++        return IsGameDataPack(whole) ? whole : null;
++      }
++      // PROJECT.BIN: u32 version 2, u32 sector size 0x800; records of 0x1C bytes at 0x14, an order
++      // table (record index, start sector) at 0x28, names at 0x2C, data at 0x34.
++      if (stream.Length < 0x40)
++        return null;
++      var head = ReadAt(stream, 0, 0x40);
++      if (BE32(head, 0) != 2 || BE32(head, 4) != 0x800 || BE32(head, 0x34) > Math.Min(stream.Length, 0x1000000))
++        return null;
++      var data = ReadAt(stream, 0, (int)BE32(head, 0x34));
++      var records = BE32(data, 0x14);
++      var order = BE32(data, 0x28);
++      var names = BE32(data, 0x2C);
++      for (var slot = 1L; order + slot * 8 + 8 <= names; slot++)
++      {
++        var index = BE32(data, order + slot * 8);
++        var sector = BE32(data, order + slot * 8 + 4);
++        if (index == 0 && sector == 0)
++          break;
++        var record = records + index * 0x1C;
++        var nameStart = names + BE32(data, record + 4);
++        var nameEnd = Array.IndexOf(data, (byte)0, (int)nameStart);
++        var name = Encoding.ASCII.GetString(data, (int)nameStart, nameEnd - (int)nameStart);
++        if (!name.Equals("/game_data.pack", StringComparison.OrdinalIgnoreCase))
++          continue;
++        var pack = ReadAt(stream, data.Length + sector * 0x800, (int)BE32(data, record + 0x18));
++        return IsGameDataPack(pack) ? pack : null;
++      }
++      return null;
++    }
++
++    private static byte[] ReadAt(Stream stream, long offset, int count)
++    {
++      var buffer = new byte[count];
++      stream.Position = offset;
++      stream.ReadExactly(buffer);
++      return buffer;
++    }
++
++    /// <summary>A 2007 save (a copy of <paramref name="baseSave"/>) holding the 2008 roster.</summary>
++    public static byte[] ToGameSave(byte[] pack, byte[] baseSave)
++    {
++      var save = (byte[])baseSave.Clone();
++      var newBlock = pack.AsSpan(PackBlock2008, BlockSize);
++      var oldBlock = save.AsSpan(SaveBlock2007, BlockSize);
++
++      // Fields 2008 dropped (the second "versus lefty", the voice) come from the base save's record
++      // of the same player (same last and first name, 0x16..0x4D), when there is one.
++      var basePlayers = new Dictionary<string, byte[]>();
++      for (var i = 0; i < Slots; i++)
++      {
++        var record = oldBlock.Slice(i * PlayerSize, PlayerSize).ToArray();
++        if (record[0] != 0 || record[1] != 0)
++          basePlayers.TryAdd(NameKey(record), record);
++      }
++
++      for (var i = 0; i < Slots; i++)
++      {
++        var from = newBlock.Slice(i * PlayerSize, PlayerSize).ToArray();
++        var to = oldBlock.Slice(i * PlayerSize, PlayerSize);
++        to.Clear();
++        if (from[0] == 0 && from[1] == 0)
++          continue;
++        if (basePlayers.TryGetValue(NameKey(from), out var same))
++          same.CopyTo(to);
++        from.AsSpan(0, 0x5C).CopyTo(to);
++        from.AsSpan(0x60, 0x0F).CopyTo(to.Slice(0x60));
++        foreach (var field in PowerPros2008Fields.All)
++        {
++          var value = GetBits(from, field.To, field.ToBits);
++          if (field.BirthYear && value != 0)
++            value -= 1;
++          SetBits(to, field.From, field.Bits, value);
++        }
++      }
++
++      var players = Slots * PlayerSize;
++      newBlock.Slice(players).CopyTo(oldBlock.Slice(players));
++      return save;
++    }
++
++    private static bool IsGameDataPack(byte[] data)
++      => data.Length == PackBlock2008 + BlockSize && Encoding.ASCII.GetString(data, 0, 8) == "PACKWII ";
++
++    private static string NameKey(byte[] record) => Convert.ToHexString(record, 0x16, 0x38);
++
++    private static long BE32(byte[] data, long offset)
++      => (long)data[offset] << 24 | (long)data[offset + 1] << 16 | (long)data[offset + 2] << 8 | data[offset + 3];
++
++    private static uint GetBits(ReadOnlySpan<byte> record, int bit, int count)
++    {
++      uint value = 0;
++      for (var i = bit; i < bit + count; i++)
++        value = value << 1 | (uint)(record[i / 8] >> (7 - i % 8) & 1);
++      return value;
++    }
++
++    private static void SetBits(Span<byte> record, int bit, int count, uint value)
++    {
++      for (var i = 0; i < count; i++)
++      {
++        var b = bit + i;
++        var mask = (byte)(0x80 >> (b % 8));
++        if ((value >> (count - 1 - i) & 1) != 0)
++          record[b / 8] |= mask;
++        else
++          record[b / 8] &= (byte)~mask;
++      }
++    }
++  }
++}

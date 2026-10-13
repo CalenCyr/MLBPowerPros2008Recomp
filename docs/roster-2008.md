@@ -53,6 +53,27 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 - Al activarlo en MODS y pulsar JUGAR, el juego extrae el `game_data.pack` de **tu** disco, lo convierte con el roster del `.dat` y lo sirve dentro de un `project.bin` modificado.
 - La conversión se guarda en `UserData\Cache\mods\roster\<mod>\`. Se rehace si cambia el `.dat` o la tabla de campos del conversor, porque el nombre del archivo lleva un hash de esa tabla.
 - El mod nunca lleva archivos del juego.
+- Si un jugador del `.dat` también está en el roster original de 2008 (mismo nombre y apellido), parte de su registro de 2008. Así conserva lo que solo existe en 2008 (su voz, los bits nuevos) y sus valores de 2008 en los bits que PowerUp no nombra. PowerUp no puede editar esos bits y los rellena con lo que tuviera ese hueco en su partida base. Los demás jugadores parten de ceros.
+
+**Con PowerUp+ (editar el roster de 2008):** el parche `tools/patches/powerupplus-2008.patch` le agrega a PowerUp+ soporte para 2008.
+- **Abrir:** en *Import Roster → Game Save* se puede elegir el `project.bin` del juego (`<instalación>\Data\files\project.bin`) o un `game_data.pack`.
+  - PowerUp+ lo convierte al formato de 2007 y lo abre como un roster más.
+  - Para los nombres largos que añadió 2008 (Saltalamacchia, Chamberlain…), el parche agrega sus códigos a `SpecialSavedName_Library.csv`.
+  - El `game_data.pack` queda guardado en su carpeta de datos, junto a la partida base. Solo vive en la PC del jugador.
+- **Exportar:** *Export Roster → MLB Power Pros 2008 Mod* descarga un zip con `<nombre>\mod.toml` y `<nombre>\roster\<nombre>.dat`. Se descomprime en `mods\` y se activa en MODS.
+  - El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado".
+  - Por eso, en cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, la exportación escribe el valor original de 2008.
+- **Línea de comandos:** `tools/powerupplus.ps1` compila y ejecuta PowerUp+ con todo dentro de `local\` (necesita el SDK de .NET 10 en `local\tools\dotnet10`). Ejemplos:
+  - `read-game-save --in-file <project.bin> --name "MLB 2008"`
+  - `write-game-save --roster-id N --mlb2008-mod --out-dir <carpeta mods>`
+- **Verificado:**
+  - Abrir el roster de 2008 y exportarlo sin cambios lo devuelve igual. Solo cambian los id de jugador, que PowerUp reasigna. También cambian los bytes que sobran tras el código de los nombres largos, que el juego no lee.
+  - En el juego, MLB Life muestra a los Red Sox de 2008 (Beckett, ERA 3.27, 97 mph).
+  - Un cambio hecho en PowerUp+ (el ERA de Beckett, de 3.27 a 1.23) llega al juego.
+  - La exportación desde la interfaz y desde la línea de comandos dan el mismo archivo.
+- **Límites:**
+  - PowerUp exporta solo jugadores con equipo o en la lista de agentes libres. Los 10 jugadores sueltos del roster de 2008 (Matt Morris, Tomas Perez…) se pierden.
+  - Las caras de 2008 no coinciden con la lista de caras de 2007 que muestra PowerUp+.
 
 **A mano:** `python tools/roster/powerup_to_2008.py <roster.dat> <game_data.pack original> <carpeta del mod>` genera el mod con `project/game_data.pack`. El resultado es byte a byte igual al del runtime. `tools/projectbin.py extract` saca el `game_data.pack` original.
 
@@ -61,5 +82,5 @@ La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicomp
 ## Pendiente
 
 - Confirmar "table setter", "push hitter", "free swinger" y la tabla de voces, usando el modo Edit de 2008 sobre un jugador conocido.
-- Escribir rosters de 2008 directamente desde PowerUp+ (generador con la MLB Stats API), sin pasar por el formato de 2007.
-- Los jugadores de 2025 usan las caras y formas de 2007 que eligió PowerUp+. Las caras o uniformes nuevos de 2008 no se aprovechan todavía.
+- Los jugadores de 2025 usan las caras y formas de 2007 que eligió PowerUp+. Las caras nuevas de 2008 no se aprovechan todavía: hace falta una tabla de caras de 2008 para el editor.
+- Conservar los id de jugador de 2008 en los jugadores importados, en lugar de dejar que PowerUp los reasigne según el salario.
