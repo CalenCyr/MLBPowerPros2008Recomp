@@ -202,10 +202,10 @@ index 0000000..bcbc3f7
 +}
 diff --git a/runtime/include/launcher_visuals.h b/runtime/include/launcher_visuals.h
 new file mode 100644
-index 0000000..d3170d2
+index 0000000..bd51826
 --- /dev/null
 +++ b/runtime/include/launcher_visuals.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,30 @@
 +#pragma once
 +#include "power_pros_ui.h"
 +#include <string>
@@ -214,9 +214,14 @@ index 0000000..d3170d2
 +// blue/orange pills over ImGui's button geometry.
 +inline bool PillButton(const char* label, ImVec2 size = ImVec2(0,0), bool selected = false) {
 +    const bool pressed = ImGui::Button(label,size);
-+    const ImVec2 a=ImGui::GetItemRectMin(), b=ImGui::GetItemRectMax();
++    ImVec2 a=ImGui::GetItemRectMin(), b=ImGui::GetItemRectMax();
 +    const bool highlight=selected || ImGui::IsItemHovered() || (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible);
 +    const float u=ImGui::GetFontSize()/24.f;
++    // The rim reaches 4u outside the button: keep it inside the container
++    // horizontally so full-width pills are not cut at the edge.
++    const float rim=4*u+2;
++    a.x=std::max(a.x,ImGui::GetWindowDrawList()->GetClipRectMin().x+rim);
++    b.x=std::min(b.x,ImGui::GetWindowDrawList()->GetClipRectMax().x-rim);
 +    power_pros_ui::Pill(ImGui::GetWindowDrawList(),a,b,
 +        highlight ? IM_COL32(255,200,90,255) : IM_COL32(45,111,212,255),
 +        highlight ? IM_COL32(242,118,18,255) : IM_COL32(10,45,138,255),u);
@@ -1211,10 +1216,10 @@ index 0000000..83c0fb4
 +}
 diff --git a/runtime/src/launcher_settings.inc b/runtime/src/launcher_settings.inc
 new file mode 100644
-index 0000000..b13e247
+index 0000000..a73657e
 --- /dev/null
 +++ b/runtime/src/launcher_settings.inc
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,190 @@
 +// Included in launcher::Run: the settings model and callbacks remain shared
 +// with the normal launch path. ImGui containers clip and scroll their content.
 +auto drawSettings = [&] {
@@ -1316,6 +1321,7 @@ index 0000000..b13e247
 +        const float listWidth = wide ? available * .53f : available;
 +        ImGui::BeginChild("Opciones", ImVec2(listWidth, height));
 +        ImGui::BeginChild("Lista", ImVec2(0, height - 56 * scale));
++        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5 * scale);  // room for the first pill's rim
 +        for (int i = scroll; i < scroll + shown; ++i) {
 +            Option& opt = current.options[i];
 +            ImGui::PushID(i);
