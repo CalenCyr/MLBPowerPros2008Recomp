@@ -7,7 +7,7 @@ records of 0xB0 bytes, then lineups, free agents and 32 teams of 0x140, 0x43E80 
 moved part of the record (see tools/roster/align_2007_2008.py and docs/roster-2008.md):
   - up to 0x5C and 0x60..0x6F (names, number, appearance, fielding capabilities, hot zones,
     batting side, ratings) are unchanged, except the face: 2008 inserted faces, so 2007's ids move
-    by 0 to 12 (face_2008);
+    by 0 to 12 (face_2008), and skin/eyes, where 2008 added a complexion (skin_2008);
   - batting and pitching forms grew to 9 bits, which moves position and the P/C capabilities by
     2 bits;
   - the second "hitting versus lefty" field is gone, so 0x70..0x77.6 moves back 3 bits; 2008 adds
@@ -26,8 +26,8 @@ the bytes after a long name's special id (u16 >= 0xF00 at 0x02). Everyone else s
 unused slots get 2008's empty record. Lineups, free agents and teams come from the save, with 2008's
 empty entries and the entry bits PowerUp does not model (convert_rest).
 
-A mod whose mod.toml says roster_ids = "2008" (PowerUp+'s 2008 export) has 2008 voice and face ids
-in its .dat already, so they are copied as they are.
+A mod whose mod.toml says roster_ids = "2008" (PowerUp+'s 2008 export) has 2008 voice, face and
+skin/eyes values in its .dat already, so they are copied as they are.
 
 The output is a mod folder: <out>/mod.toml and <out>/project/game_data.pack, built on the player's
 own game_data.pack (extract it with tools/projectbin.py), so nothing from the game ships.
@@ -176,6 +176,20 @@ def face_2008(face):
     return face + (0 if face < 28 else 1 if face < 106 else 2 if face < 161 else 7 if face < 177 else 12)
 
 
+SKIN = (0x2AC, 4)                        # SkinAndEyes: complexion, + offset for brown eyes
+
+
+def skin_2008(value):
+    """2007 SkinAndEyes -> 2008's. 2007 has 5 complexions and adds 5 for brown eyes; 2008 inserted a
+    complexion at 2 and adds 6 (695 of the 729 common players match; 272 without it)."""
+    return value + (0 if value < 2 else 1 if value < 7 else 2)
+
+
+def skin_2007(value):
+    """2008 SkinAndEyes -> 2007's; 2008's new complexion becomes the one before it."""
+    return max(v for v in range(16) if skin_2008(v) <= value)
+
+
 def face_2007(face):
     """2008 face id -> 2007's; a face 2008 added becomes the 2007 one before it."""
     return max(f for f in range(256) if face_2008(f) <= face)
@@ -214,6 +228,7 @@ def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAY
         set_bits(new, *VOICE, get_bits(old, *VOICE))
     else:
         set_bits(new, *FACE, face_2008(get_bits(old, *FACE)))
+        set_bits(new, *SKIN, skin_2008(get_bits(old, *SKIN)))
     if base:
         for b in unnamed_2008(fields):
             set_bits(new, b, 1, get_bits(base, b, 1))
@@ -244,6 +259,7 @@ def revert_player(new, fields, base=None):
         set_bits(old, bit, count, value)
     set_bits(old, *VOICE, get_bits(new, *VOICE))
     set_bits(old, *FACE, face_2007(get_bits(new, *FACE)))
+    set_bits(old, *SKIN, skin_2007(get_bits(new, *SKIN)))
     return bytes(old)
 
 

@@ -207,7 +207,7 @@ index 6ab259b..4cbcf00 100644
        services.AddTransient<IPlayerMapper>(provider => new PlayerMapper(provider.GetRequiredService<ISpecialSavedNameLibrary>()));
        services.AddTransient<IPlayerApi>(provider => new PlayerApi());
 diff --git a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
-index e06c584..a318b61 100644
+index e06c584..c50a5d8 100644
 --- a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 +++ b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 @@ -1,10 +1,13 @@
@@ -240,7 +240,7 @@ index e06c584..a318b61 100644
    }
  
    public class RosterExportApi : IRosterExportApi
-@@ -72,6 +77,226 @@ namespace PowerUp.GameSave.Api
+@@ -72,6 +77,231 @@ namespace PowerUp.GameSave.Api
        WriteRosterToFile(roster, filePath, 0);
      }
  
@@ -288,8 +288,8 @@ index e06c584..a318b61 100644
 +    private class PowerPros2008Originals
 +    {
 +      public Dictionary<string, List<GSPlayer>> ByPerson { get; } = new();
-+      /// <summary>2008 face ids by player id (the players above carry 2007's numbering).</summary>
-+      public Dictionary<int, int> Faces { get; init; } = new();
++      /// <summary>2008 face and skin/eyes by player id (the players above carry 2007's numbering).</summary>
++      public Dictionary<int, (int Face, int Skin)> Looks { get; init; } = new();
 +
 +      /// <summary>The imported player itself when names and birthdays repeat (two "Great Harris").</summary>
 +      public GSPlayer? Find(string key, int? sourceId)
@@ -304,7 +304,7 @@ index e06c584..a318b61 100644
 +      var pack = File.ReadAllBytes(packPath);
 +      var save = PowerPros2008Roster.ToGameSave(pack, File.ReadAllBytes(baseSavePath));
 +      using var reader = new GameSaveReader(_characterLibrary, new MemoryStream(save), ByteOrder.BigEndian);
-+      var originals = new PowerPros2008Originals { Faces = PowerPros2008Roster.FacesById(pack) };
++      var originals = new PowerPros2008Originals { Looks = PowerPros2008Roster.LooksById(pack) };
 +      foreach (var player in reader.Read().Players.Where(p => p.PowerProsId is > 0).Cast<GSPlayer>())
 +      {
 +        // Keyed the way the exported players are: through PowerUp's model (no birthday -> 1/1).
@@ -346,7 +346,7 @@ index e06c584..a318b61 100644
 +    /// - unused slots are empty instead of holding the base save's 2007 players;
 +    /// - untouched values of known players are restored (PreserveUntouched), and everyone else gets
 +    ///   the 2008 voice whose name sounds closest (PowerUp's own voice matching, on 2008's voices);
-+    /// - voice and face ids are written in 2008's numbering (mod.toml roster_ids = "2008").
++    /// - voice, face and skin/eyes values are written in 2008's numbering (mod.toml roster_ids = "2008").
 +    /// </summary>
 +    private void WritePowerPros2008Roster(Roster roster, string filePath, PowerPros2008Originals? originals)
 +    {
@@ -416,10 +416,15 @@ index e06c584..a318b61 100644
 +          PreserveUntouched(gsPlayer, original);
 +        else
 +          gsPlayer.VoiceId = voices is { Count: > 0 } ? ClosestVoice(voices, player.FirstName ?? "", player.LastName ?? "") : (ushort)0;
-+        // Faces are edited in 2007's numbering; an untouched one goes back to the exact 2008 face.
-+        gsPlayer.Face = (ushort)(original is not null && gsPlayer.Face == original.Face
-+          ? originals!.Faces[original.PowerProsId!.Value]
++        // Faces and skin/eyes are edited in 2007's numbering; untouched ones go back to the exact
++        // 2008 values.
++        var looks = original is not null ? originals!.Looks[original.PowerProsId!.Value] : default((int Face, int Skin)?);
++        gsPlayer.Face = (ushort)(looks is { } f && gsPlayer.Face == original!.Face
++          ? f.Face
 +          : PowerPros2008Roster.Face2008(gsPlayer.Face!.Value));
++        gsPlayer.SkinAndEyes = (ushort)(looks is { } s && gsPlayer.SkinAndEyes == original!.SkinAndEyes
++          ? s.Skin
++          : PowerPros2008Roster.Skin2008(gsPlayer.SkinAndEyes!.Value));
 +        gsPlayers.Add(gsPlayer);
 +      }
 +
@@ -731,10 +736,10 @@ index 0000000..f59942d
 +}
 diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
 new file mode 100644
-index 0000000..6213848
+index 0000000..ef27754
 --- /dev/null
 +++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,192 @@
 +﻿using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -759,6 +764,16 @@ index 0000000..6213848
 +    public const int PackBlock2008 = 0x20;
 +    private const int VoiceBit = 0x492, VoiceBits = 14;
 +    private const int FaceBit = 0x2A4, FaceBits = 8;
++    private const int SkinBit = 0x2AC, SkinBits = 4;
++
++    /// <summary>
++    /// 2007 SkinAndEyes -> 2008's: 2007 has 5 complexions and adds 5 for brown eyes; 2008 inserted
++    /// a complexion at 2 and adds 6 (695 of the 729 common players match this way).
++    /// </summary>
++    public static int Skin2008(int value) => value + (value < 2 ? 0 : value < 7 ? 1 : 2);
++
++    /// <summary>2008 SkinAndEyes -> 2007's; 2008's new complexion becomes the one before it.</summary>
++    public static int Skin2007(int value) => Enumerable.Range(0, 16).Last(v => Skin2008(v) <= value);
 +
 +    /// <summary>
 +    /// 2007 face id -> 2008's: 2008 inserted faces after 27, 105, 160 and 176 (707 of the 729
@@ -772,18 +787,18 @@ index 0000000..6213848
 +    public static int Face2007(int face)
 +      => Enumerable.Range(0, 256).Last(f => Face2008(f) <= face);
 +
-+    /// <summary>The 2008 face id of each player of game_data.pack, by player id.</summary>
-+    public static Dictionary<int, int> FacesById(byte[] pack)
++    /// <summary>The 2008 face and SkinAndEyes of each player of game_data.pack, by player id.</summary>
++    public static Dictionary<int, (int Face, int Skin)> LooksById(byte[] pack)
 +    {
-+      var faces = new Dictionary<int, int>();
++      var looks = new Dictionary<int, (int Face, int Skin)>();
 +      for (var i = 0; i < Slots; i++)
 +      {
 +        var record = pack.AsSpan(PackBlock2008 + i * PlayerSize, PlayerSize);
 +        var id = record[0] << 8 | record[1];
 +        if (id != 0)
-+          faces.TryAdd(id, (int)GetBits(record, FaceBit, FaceBits));
++          looks.TryAdd(id, ((int)GetBits(record, FaceBit, FaceBits), (int)GetBits(record, SkinBit, SkinBits)));
 +      }
-+      return faces;
++      return looks;
 +    }
 +
 +    /// <summary>
@@ -850,7 +865,7 @@ index 0000000..6213848
 +
 +      // The second "versus lefty", which 2008 dropped, comes from the base save's record of the
 +      // same player (same last and first name, 0x16..0x4D), when there is one. The voice id sits
-+      // where 2007 has it and keeps 2008's numbering; the face goes back to 2007's numbering.
++      // where 2007 has it and keeps 2008's numbering; face and skin/eyes go back to 2007's.
 +      var basePlayers = new Dictionary<string, byte[]>();
 +      for (var i = 0; i < Slots; i++)
 +      {
@@ -879,6 +894,7 @@ index 0000000..6213848
 +        }
 +        SetBits(to, VoiceBit, VoiceBits, GetBits(from, VoiceBit, VoiceBits));
 +        SetBits(to, FaceBit, FaceBits, (uint)Face2007((int)GetBits(from, FaceBit, FaceBits)));
++        SetBits(to, SkinBit, SkinBits, (uint)Skin2007((int)GetBits(from, SkinBit, SkinBits)));
 +      }
 +
 +      var players = Slots * PlayerSize;

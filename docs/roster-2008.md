@@ -54,6 +54,14 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 
 Con esta tabla coinciden 707 de los 729 jugadores comunes; sin ella, solo 26. Los demás cambiaron de cara entre juegos.
 
+**Piel y ojos** (0x55.4, 4 bits): 2007 tiene 5 tonos de piel y suma 5 si los ojos son marrones. 2008 agregó un tono en la posición 2 y suma 6. Por eso 0–1 quedan igual, 2–6 suben 1 y 7–9 suben 2. Coinciden 695 de 729 (272 sin la tabla).
+
+**Revisión del resto de campos:** se compararon todos los campos de los 729 jugadores, ya convertidos, con el roster real de 2008. Solo la cara y la piel/ojos tenían números de catálogo cambiados. Lo demás que difiere son datos de la nueva temporada:
+- ratings, estadísticas, peinados;
+- 2008 marca a la mayoría de los pitchers como robadores "cautelosos".
+
+El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura como nacido en 1981, es decir, 26 años en el calendario de 2007), y por eso se le suma 1 para 2008.
+
 **Voces:** el campo está en el mismo lugar, pero 2008 renumeró parte de las voces: Erstad sigue con la 2051 y Accardo pasó de la 2056 a la 2057. Por eso un número de voz de 2007 no sirve en 2008.
 
 ## Usarlo
@@ -73,14 +81,14 @@ Con esta tabla coinciden 707 de los 729 jugadores comunes; sin ella, solo 26. Lo
   - las entradas vacías llevan el patrón vacío de 2008;
   - las entradas de un mismo jugador conservan los bits que PowerUp no modela.
 - Un `.dat` de 2007 (como `2025_MLB_Rosters.dat`) trae caras y voces con números de 2007.
-  - Las caras se pasan a 2008 con la tabla de arriba.
+  - Las caras y la piel/ojos se pasan a 2008 con las tablas de arriba.
   - Las voces de 2007 se descartan; los jugadores que también están en 2008 mantienen la suya.
-- Si el `mod.toml` dice `roster_ids = "2008"` (lo escribe la exportación de PowerUp+), caras y voces ya vienen en números de 2008 y se copian tal cual.
+- Si el `mod.toml` dice `roster_ids = "2008"` (lo escribe la exportación de PowerUp+), voz, cara y piel/ojos ya vienen en números de 2008 y se copian tal cual.
 
 **Con PowerUp+ (editar el roster de 2008):** el parche `tools/patches/powerupplus-2008.patch` le agrega a PowerUp+ soporte para 2008.
 - **Abrir:** en *Import Roster → Game Save* se puede elegir el `project.bin` del juego (`<instalación>\Data\files\project.bin`) o un `game_data.pack`.
   - PowerUp+ lo convierte al formato de 2007 y lo abre como un roster más.
-  - Las caras pasan a la numeración de 2007, la que muestra su editor.
+  - La cara y la piel/ojos pasan a la numeración de 2007, la que muestra su editor.
   - Para los nombres largos que añadió 2008 (Saltalamacchia, Chamberlain…), el parche agrega sus códigos a `SpecialSavedName_Library.csv`.
   - La lista de agentes libres tiene sitio para 200 jugadores; antes PowerUp leía solo 15, y 2008 usa 25.
   - El `game_data.pack` queda guardado en su carpeta de datos, junto a la partida base. Solo vive en la PC del jugador.
@@ -89,7 +97,7 @@ Con esta tabla coinciden 707 de los 729 jugadores comunes; sin ella, solo 26. Lo
   - **Números de jugador originales.** Los jugadores que vienen del roster de 2008 conservan su número de jugador y, con él, su hueco y su salario. Los nuevos toman el número que elige PowerUp por salario o el primero libre.
   - **Huecos vacíos y orden.** Los huecos sobrantes quedan vacíos, en vez de llevar jugadores de la partida base de 2007. Los equipos mantienen su orden, con los de grandes ligas primero; la exportación de 2007 los reordenaba con un `OrderBy` encadenado.
   - **Valores sin tocar.** El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado". En cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, se escribe el valor original de 2008.
-  - **Caras y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara sin tocar vuelve a su número exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
+  - **Caras, piel/ojos y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara o piel sin tocar vuelve a su valor exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
 - **Abrir el editor:** `tools/powerupplus.ps1 -Ui` compila PowerUp+ con todo dentro de `local\` y lo abre en el navegador (`http://127.0.0.1:5123`).
   - Usa la versión web de su interfaz, que sirve su propio backend, así que no necesita Electron.
   - Requiere el SDK de .NET 10 en `local\tools\dotnet10` y Node.
@@ -102,6 +110,8 @@ Con esta tabla coinciden 707 de los 729 jugadores comunes; sin ella, solo 26. Lo
   - **En el juego.** MLB Life muestra a los Red Sox de 2008 (Beckett, ERA 3.27, 97 mph).
   - **Las ediciones llegan.** Un cambio hecho en PowerUp+ (el ERA de Beckett, de 3.27 a 1.23) llega al juego.
   - **Roster 2025.** El de PowerUp+ exportado como mod de 2008 da las mismas caras que el `.dat` directo (1.082 de 1.082), sin voces vacías y sin copias All-Star. Pasa de 1.281 a 1.209 registros.
+    - La piel/ojos coincide en 792 jugadores.
+    - Los otros 288 tienen caras genéricas "sin color de ojos": el modelo de PowerUp descarta ese bit porque esas caras no lo muestran.
   - **Runtime == Python.** La conversión del runtime es igual byte a byte a la de `powerup_to_2008.py` en los tres casos: roster de 2008 ida y vuelta, 2025 exportado y 2025 en `.dat` directo.
 - **Límites:**
   - El roster 2025 de PowerUp+ pone a algunos jugadores traspasados en dos equipos regulares (Ramón Laureano en BAL y SD). Esos quedan como dos registros, igual que en sus datos.

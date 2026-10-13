@@ -438,10 +438,10 @@ index 6707fc9..fde15ce 100644
          const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
 new file mode 100644
-index 0000000..c0a82bb
+index 0000000..35824cb
 --- /dev/null
 +++ b/runtime/src/mods.cpp
-@@ -0,0 +1,481 @@
+@@ -0,0 +1,488 @@
 +#include "mods.h"
 +
 +#include "recomp_mod_loader.h"
@@ -626,7 +626,7 @@ index 0000000..c0a82bb
 +// fields are moved with kRosterFields (tools/roster/powerup_to_2008.py, docs/roster-2008.md).
 +constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
 +constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
-+constexpr uint32_t kRosterConverter = 7;
++constexpr uint32_t kRosterConverter = 8;
 +
 +uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
 +    uint32_t value = 0;
@@ -655,9 +655,15 @@ index 0000000..c0a82bb
 +    return face + (face < 28 ? 0 : face < 106 ? 1 : face < 161 ? 2 : face < 177 ? 7 : 12);
 +}
 +
-+// ids2008: the .dat's voice and face ids already follow 2008's numbering (mod.toml roster_ids =
++// SkinAndEyes: 2007 has 5 complexions plus 5 for brown eyes; 2008 inserted a complexion at 2 and
++// adds 6.
++uint32_t Skin2008(uint32_t value) {
++    return value + (value < 2 ? 0 : value < 7 ? 1 : 2);
++}
++
++// ids2008: the .dat's voice, face and skin/eyes values already follow 2008's numbering (mod.toml roster_ids =
 +// "2008", written by PowerUp+'s 2008 export); otherwise 2007 voice ids are dropped (2008 renumbered
-+// the voices) and faces are moved with Face2008.
++// the voices) and faces and skin/eyes are moved with Face2008 and Skin2008.
 +bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool ids2008, std::string& error) {
 +    if (save.size() < kSaveRoster2007 + kRosterBlock) {
 +        error = "not an MLB Power Pros 2007 Wii save (pm2maus.dat)";
@@ -720,6 +726,7 @@ index 0000000..c0a82bb
 +            SetBits(to, 0x492, 14, GetBits(from, 0x492, 14));
 +        } else {
 +            SetBits(to, 0x2A4, 8, Face2008(GetBits(from, 0x2A4, 8)));
++            SetBits(to, 0x2AC, 4, Skin2008(GetBits(from, 0x2AC, 4)));
 +        }
 +        // PowerUp cannot edit the bits it has no name for (it leaves whatever its base save had in
 +        // that slot), so a known player keeps his 2008 ones; so do the bytes after a long name's
