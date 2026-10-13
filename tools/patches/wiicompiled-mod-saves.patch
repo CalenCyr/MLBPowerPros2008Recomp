@@ -1,0 +1,172 @@
+diff --git a/runtime/include/mods.h b/runtime/include/mods.h
+index f341074..4a69ea5 100644
+--- a/runtime/include/mods.h
++++ b/runtime/include/mods.h
+@@ -17,6 +17,11 @@
+ //                  2008's game_data.pack on the player's PC; it applies to every mode, MLB Life too.
+ // Enabled folders are listed in Config.toml under [mods] enabled. Everything is read once at
+ // start-up, so toggling a mod needs a restart (the launcher relaunches).
++//
++// Mods that change the roster (roster/, or a game_data.pack in project/) get their own saves: a
++// career started with a roster only makes sense with it, so each combination of them keeps the
++// game's save folder under <user data>/ModSaves/<mod+mod...>; with none enabled the normal NAND
++// is used. Texture, uniform and other mods share the normal saves.
+ namespace mods {
+ 
+ struct Mod {
+@@ -33,6 +38,8 @@ struct Mod {
+     bool project = false;
+     bool roster = false;
+     bool enabled = false;
++
++    bool changesRoster = false;  // roster/ or project/game_data.pack: saves are kept apart
+ };
+ 
+ std::filesystem::path Directory();
+@@ -43,4 +50,9 @@ bool SetEnabled(const std::string& id, bool enabled);
+ // aurora_initialize; the texture folder strings stay alive for the process lifetime.
+ void Apply(AuroraConfig& config);
+ 
++// The host folder that replaces the game's NAND save folder (title/00010000/524c3845/data) for the
++// enabled data-changing mods, or empty for the normal saves. Valid after Apply.
++std::filesystem::path SaveDirectory();
++std::filesystem::path SaveDirectoryFor(const std::vector<Mod>& mods);
++
+ } // namespace mods
+diff --git a/runtime/src/hle/storage/nand_fs.cpp b/runtime/src/hle/storage/nand_fs.cpp
+index 4dba4f0..3ea0d81 100644
+--- a/runtime/src/hle/storage/nand_fs.cpp
++++ b/runtime/src/hle/storage/nand_fs.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "isa/big_endian.h"
+ #include "hle/storage/riivolution.h"
++#include "mods.h"
+ #include "runtime_log.h"
+ 
+ // ============================================================================
+@@ -235,14 +236,38 @@ static void CloneRiivolutionSaveIfNeeded(const std::filesystem::path& sourceHost
+     }
+ }
+ 
++// Data-changing mods (a roster...) keep their own saves (mods.h). Read on every call: the NAND is
++// touched before mods::Apply runs, so this cannot be decided once like the Riivolution redirect.
++static RiivolutionSaveRedirect ModSaveRedirect() {
++    RiivolutionSaveRedirect redirect;
++    if (auto directory = mods::SaveDirectory(); !directory.empty()) {
++        static std::once_flag created;
++        std::call_once(created, [&] { CreateDirectoryPath(directory); });
++        redirect.enabled = true;
++        redirect.hostDirectory = std::move(directory);
++    }
++    return redirect;
++}
++
+ static bool ResolveRiivolutionSaveHostPath(const std::string& absoluteWiiPath,
+                                            std::filesystem::path& outHostPath) {
+-    const RiivolutionSaveRedirect& redirect = GetRiivolutionSaveRedirect();
++    const RiivolutionSaveRedirect& riivolution = GetRiivolutionSaveRedirect();
++    const RiivolutionSaveRedirect redirect = riivolution.enabled ? riivolution : ModSaveRedirect();
+     if (!redirect.enabled) {
+         return false;
+     }
+ 
+-    const std::string dataDir = CurrentNandDataDir();
++    std::string dataDir = CurrentNandDataDir();
++    if (!riivolution.enabled) {
++        // The game code in low memory does not last once the game runs (CurrentNandDataDir falls
++        // back to RMCP), so mod saves take the data folder of any disc title: only one game runs.
++        constexpr std::string_view kDiscTitles = "/title/00010000/";
++        constexpr size_t kDataDirLength = kDiscTitles.size() + 8 + 5;  // <title id>/data
++        if (absoluteWiiPath.size() >= kDataDirLength && absoluteWiiPath.compare(0, kDiscTitles.size(), kDiscTitles) == 0 &&
++            absoluteWiiPath.compare(kDiscTitles.size() + 8, 5, "/data") == 0) {
++            dataDir = absoluteWiiPath.substr(0, kDataDirLength);
++        }
++    }
+     if (absoluteWiiPath != dataDir &&
+         (absoluteWiiPath.size() <= dataDir.size() ||
+          absoluteWiiPath.compare(0, dataDir.size(), dataDir) != 0 ||
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 6d248c7..768fa64 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -209,6 +209,8 @@ constexpr const char* kModsHelp =
+     "  riivolution   parches Riivolution (.xml)\n"
+     "  project   paquetes .pack de project.bin\n"
+     "  roster   roster de PowerUp / PowerUp+ (.dat)\n\n"
++    "Los mods que cambian el roster tienen partidas propias: cada combinación guarda las suyas y, "
++    "sin ellos, vuelven tus partidas normales.\n\n"
+     "Un mod solo debe traer sus propios archivos, nunca copias del juego.";
+ 
+ constexpr const char* kModsReadme =
+@@ -223,7 +225,11 @@ constexpr const char* kModsReadme =
+     "  roster\\       un roster de PowerUp / PowerUp+ (.dat de MLB Power Pros 2007); se convierte al iniciar\r\n"
+     "                y vale para todos los modos, MLB Life incluido\r\n\r\n"
+     "Los mods se activan en el launcher (MODS). Un mod solo debe incluir sus propios archivos,\r\n"
+-    "nunca copias del juego.\r\n";
++    "nunca copias del juego.\r\n\r\n"
++    "Partidas: los mods que cambian el roster (roster\\ o un game_data.pack en project\\) tienen\r\n"
++    "sus propias partidas (MLB Life, Season, League...) para cada combinacion, guardadas en\r\n"
++    "ModSaves junto a los datos del usuario. Sin esos mods vuelven tus partidas normales; los de\r\n"
++    "texturas y uniformes usan las normales.\r\n";
+ 
+ void OpenModsFolder() {
+     const std::filesystem::path dir = mods::Directory();
+@@ -361,7 +367,8 @@ Result Run(int argc, char** argv) {
+         if (m.riivolution) contents += std::string(contents.empty() ? "" : ", ") + "Riivolution";
+         if (m.project) contents += std::string(contents.empty() ? "" : ", ") + "paquetes de project.bin";
+         if (m.roster) contents += std::string(contents.empty() ? "" : ", ") + "roster de PowerUp (todos los modos, también MLB Life)";
+-        help += "\n\nIncluye: " + (contents.empty() ? std::string("nada reconocible (textures, disc o riivolution)") : contents);
++        help += "\n\nIncluye: " + (contents.empty() ? std::string("nada reconocible (textures, disc, riivolution, project o roster)") : contents);
++        if (m.changesRoster) help += "\n\nPartidas propias: cambia el roster, así que lo que juegues con este mod (MLB Life, Season, League...) se guarda aparte.";
+         modHelp.push_back(std::move(help));
+         modsTab.options.push_back({m.name.c_str(), modHelp.back().c_str(), YesNo(), m.enabled ? 1 : 0, true,
+                                    static_cast<int>(i)});
+diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
+index 35824cb..359eb98 100644
+--- a/runtime/src/mods.cpp
++++ b/runtime/src/mods.cpp
+@@ -158,6 +158,7 @@ std::vector<Mod> Discover() {
+         mod.riivolution = IsDirectory(mod.root / "riivolution");
+         mod.project = IsDirectory(mod.root / "project");
+         mod.roster = IsDirectory(mod.root / "roster");
++        mod.changesRoster = mod.roster || std::filesystem::is_regular_file(mod.root / "project" / "game_data.pack", ec);
+         mod.enabled = std::find(enabled.begin(), enabled.end(), mod.id) != enabled.end();
+         found.push_back(std::move(mod));
+     }
+@@ -455,11 +456,34 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
+ 
+ } // namespace
+ 
++namespace {
++std::filesystem::path g_saveDirectory;
++}  // namespace
++
++std::filesystem::path SaveDirectoryFor(const std::vector<Mod>& all) {
++    std::vector<std::string> ids;
++    for (const Mod& mod : all) {
++        if (mod.enabled && mod.changesRoster) ids.push_back(mod.id);
++    }
++    if (ids.empty()) return {};
++    std::sort(ids.begin(), ids.end());
++    std::string key;
++    for (const std::string& id : ids) key += (key.empty() ? "" : "+") + id;
++    return RuntimeConfigFile::ApplicationDataDirectory() / "ModSaves" / std::filesystem::path(reinterpret_cast<const char8_t*>(key.c_str()));
++}
++
++std::filesystem::path SaveDirectory() { return g_saveDirectory; }
++
+ void Apply(AuroraConfig& config) {
+     static std::vector<std::string> textureRoots;
+     static std::vector<const char*> texturePointers;
+     std::map<std::string, std::filesystem::path> packs;  // first enabled mod (by name) wins
+-    for (const Mod& mod : Discover()) {
++    const std::vector<Mod> all = Discover();
++    g_saveDirectory = SaveDirectoryFor(all);
++    if (!g_saveDirectory.empty()) {
++        RT_LOG(RT_TAG_RUNTIME) << "mods: saves go to " << Utf8(g_saveDirectory) << std::endl;
++    }
++    for (const Mod& mod : all) {
+         if (!mod.enabled) continue;
+         RT_LOG(RT_TAG_RUNTIME) << "mods: enabled \"" << mod.name << "\" (" << Utf8(mod.root) << ")" << std::endl;
+         if (mod.riivolution) RecompMod::RegisterDvdOverlayRoot(Utf8(mod.root));

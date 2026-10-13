@@ -607,3 +607,8 @@ No está validado píxel a píxel contra Dolphin.
   - `mods::Apply` genera `UserData/Cache/mods/disc/project.bin` con un port en C++ de `projectbin.py build` y lo registra como overlay del disco.
   - Se reconstruye solo si cambian el original o algún pack (tamaño y fecha en `project.bin.sources`).
   - **Medido:** 656 ms la primera vez y reutilizado después. El SHA-256 es idéntico al de la herramienta de Python, y los Cubs aparecen con el uniforme de los Yankees.
+
+## Partidas por roster (12 de octubre de 2026)
+
+- **Parche 24, `wiicompiled-mod-saves`:** los mods que cambian el roster (`roster/` o `project/game_data.pack`) llevan la carpeta de partidas del juego a `ModSaves\<mods>`. Así una carrera de MLB Life empezada con un roster no se mezcla con las partidas normales. Detalles en `docs/mods.md`.
+- Se encontró que `CurrentNandDataDir()` deja de valer una vez que el juego corre: lee el código de juego en 0x80000000, que el juego sobrescribe, y cae a `RMCP`. El redireccionador de mods toma la carpeta del título desde la ruta. El de Riivolution conserva su comportamiento.

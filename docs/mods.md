@@ -63,6 +63,21 @@ Formato (verificado en las 2.424 entradas): cabecera con versión 2 y sector 0x8
 
 Un mod no debe distribuir un `project.bin` completo (es contenido del juego): solo sus `.pack` en `project/`.
 
+## Partidas por roster
+
+Una carrera de MLB Life, una temporada o una liga empezadas con un roster modificado solo tienen sentido con ese roster. Por eso los mods que cambian el roster tienen partidas propias. Cuentan como tales los que traen `roster/` o un `game_data.pack` en `project/`.
+- Con uno o más de ellos activos, la carpeta de partidas del juego (`title/00010000/524c3845/data` de la NAND) se lee y escribe en `<datos del usuario>\ModSaves\<mod+mod...>`. Cada combinación tiene la suya.
+- Sin ellos, vuelven las partidas normales.
+- Los mods de texturas, uniformes (`project/` sin `game_data.pack`), `disc/` o Riivolution usan las partidas normales.
+- Si un mod Riivolution define su propio `<savegame>`, ese tiene prioridad.
+- Una combinación nueva empieza sin partidas.
+- Las partidas jugadas con un roster antes de este cambio quedaron en las normales.
+- Parche `wiicompiled-mod-saves`. Usa el mismo redireccionador que el `<savegame>` de Riivolution, pero toma la carpeta de datos del título de disco que aparece en la ruta: el código de juego en memoria baja no dura una vez que el juego corre, y `CurrentNandDataDir` vuelve a `RMCP`.
+- Verificado:
+  - con Roster2025 activo, el juego busca `pm3usma.dat` en `ModSaves\Roster2025\`;
+  - con solo uniformes y texturas, en la NAND normal.
+  - La creación de una partida dentro de esa carpeta no se probó todavía.
+
 ## Reglas
 
 Un mod solo debe traer sus propios archivos o diferencias, **nunca copias del juego** (ni texturas originales sin modificar, ni `project.bin`, ni el ejecutable).
