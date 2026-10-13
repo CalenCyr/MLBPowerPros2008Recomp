@@ -629,3 +629,11 @@ No está validado píxel a píxel contra Dolphin.
 - **Parche 26, `wiicompiled-launcher-live-settings`:** antes, cambiar cualquier ajuste en el launcher hacía que JUGAR cerrara la ventana y abriera otro proceso, porque el runtime lee la configuración antes de crear la ventana.
   - Pantalla, resolución interna, forzar 16:9, mostrar FPS, volumen y silenciar ya no reinician: `main.cpp` y `settings_overlay::InitializeRuntimeSettings` los vuelven a leer de `Config.toml` después del launcher, igual que el menú F10 los cambia en vivo. El modo de pantalla se aplica al momento, en el propio launcher.
   - Siguen reiniciando la API gráfica (hace falta otro renderer), el Wii Remote (pistas de SDL previas a su inicio) y los mods (aurora indexa las texturas y el disco al iniciar).
+
+## Cierre en Exhibition → LINEUP (13 de octubre de 2026)
+
+- Error: `missing_jump_target 0x80664C30`, desde `func_80663264` (llamada por puntero, `bctrl`).
+- Causa: en `0x80664C18` hay cinco funciones seguidas que el mapa de dtk tenía como una sola. `C18` suma 4 y salta a `C38`; `C20`, `C28` y `C30` son *getters* de dos instrucciones (`lwz`/`addi` + `blr`) que solo se llaman desde una *vtable* en `0x80D5183C`. Al no estar en el mapa, no se traducían como funciones.
+- Arreglo: `0x80664C20`, `0x80664C28`, `0x80664C30` y `0x80664C38` añadidas a `config/wiicompiled/rl8e54-functions.map`. La retraducción pasa de 48.219 a 48.223 funciones.
+- La pantalla se alcanzó con el roster de un mod que ahora muestra nombres (antes la alineación salía vacía).
+- Pendiente: puede haber más funciones así en otras *vtables*. Un rastreo de punteros a mitad de función encontró unos 450 candidatos, pero mezclados con tablas de `switch`. Partir funciones en etiquetas de `switch` rompería el código, así que no se añadieron en bloque.
