@@ -704,3 +704,14 @@ No está validado píxel a píxel contra Dolphin.
   - Si la cola se vacía, se pausa hasta volver a tener 80 ms: un silencio corto en vez de chasquidos.
 - **Resultado, misma prueba:** la cola se mantiene en 65-80 ms. En las pausas de 40-50 ms del partido no baja de 16-40 ms. No hay descartes. Solo una pausa de 88 ms al cargar el partido la dejó casi vacía.
 - No se comprobó a oído: falta que alguien lo escuche jugando.
+
+## Chasquidos del comentarista (13 de octubre de 2026)
+
+- Después del arreglo de la cola, el chasquido seguía en la voz del comentarista, sobre todo al leer la alineación y los nombres. La cola ya no se vaciaba: el defecto estaba en la mezcla.
+- **Mediciones** (diagnósticos locales: `WIICOMPILED_AUDIO_DUMP=archivo` graba la salida; el volcado por voz y la traza de eventos de voz no se conservan):
+  - En 119 s de partido hay unos 27 saltos bruscos en la salida. Sin el hilo de mezcla salen los mismos (28), así que no es una carrera. Con un solo bloque por tick también (29), así que no es la recuperación tras las pausas.
+  - El comentarista usa dos voces *stream* (`stream=1`) con dos búferes alternos, uno por frase o nombre. Los datos de cada búfer no cambian mientras suena: la carga del disco está bien.
+  - El juego para cada frase con `running=0`, 2-4 fotogramas (6-12 ms) después de que se acaban sus datos. Mientras tanto el decodificador ADPCM lee ceros y se queda en el último nivel (por ejemplo 16614); al parar, cae de golpe a 0. En una de las dos voces pasó 38 veces.
+  - Las voces del comentarista llegan a ±32767 (113 y 57 veces); la música no. Puede ser la mezcla original del juego: falta una referencia para saberlo.
+- **Parche `wiicompiled-audio-depop`:** el mezclador guardaba el último valor de cada voz por bus (`dpop`) pero no lo usaba, igual que Dolphin. Ahora, cuando el juego para una voz que sonaba, ese valor baja a cero en un fotograma (3 ms) en vez de cortarse. El volcado `WIICOMPILED_AUDIO_DUMP` se incluye para comprobaciones futuras.
+- No se pudo demostrar con números que desaparezca lo que se oye: en la salida mezclada, la multitud y la música tapan ese patrón. Falta escucharlo, y comparar con Dolphin la saturación del comentarista.

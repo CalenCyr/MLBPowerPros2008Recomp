@@ -1,0 +1,86 @@
+diff --git a/runtime/src/audio_backend.cpp b/runtime/src/audio_backend.cpp
+index bf2e290..e65ecfb 100644
+--- a/runtime/src/audio_backend.cpp
++++ b/runtime/src/audio_backend.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <cstdio>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <iostream>
+@@ -220,6 +221,12 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
+     }
+ 
+     const int lenBytes = static_cast<int>(frameCount * 2 * sizeof(int16_t));
++    // Local diagnostics: raw s16le stereo of everything the game outputs (WIICOMPILED_AUDIO_DUMP=file).
++    static FILE* dump = [] { const char* f = std::getenv("WIICOMPILED_AUDIO_DUMP"); return f && *f ? std::fopen(f, "wb") : nullptr; }();
++    if (dump) {
++        std::fwrite(m_convertBuffer.data(), 1, static_cast<size_t>(lenBytes), dump);
++        std::fflush(dump);
++    }
+     if (!QueueHasCapacityLocked(lenBytes)) {
+         return true;
+     }
+diff --git a/runtime/src/hle/audio/ax_mix.cpp b/runtime/src/hle/audio/ax_mix.cpp
+index ba225e6..c6a9e90 100644
+--- a/runtime/src/hle/audio/ax_mix.cpp
++++ b/runtime/src/hle/audio/ax_mix.cpp
+@@ -21,6 +21,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include <unordered_map>
+ #include <deque>
+ #include <filesystem>
+ #include <fstream>
+@@ -644,6 +645,36 @@ private:
+         }
+     }
+ 
++    // A voice the game stops while it is still audible would cut from its last level to silence.
++    // The DSP de-pops instead: the last output per bus (dpop, kept by MixAdd) ramps to zero over
++    // the next frame. MLB's commentary needs it: the game stops each phrase's stream voice a few
++    // frames after its data ends, while the decoder holds the last level (a click per name).
++    std::unordered_map<uint32_t, bool> m_wasRunning;
++
++    static void Depop(const AXBuffers& buffers, AXMixControl control, PBDpopWii& dpop) {
++        auto tail = [&](uint32_t bit, int* out, int16_t& value) {
++            if ((control & bit) != 0 && value != 0) {
++                for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
++                    out[i] += static_cast<int32_t>(value) * static_cast<int32_t>(kAxSamplesPerFrame - i) /
++                              static_cast<int32_t>(kAxSamplesPerFrame);
++                }
++            }
++            value = 0;
++        };
++        tail(MIX_MAIN_L, buffers[kBusMainL], dpop.main_left);
++        tail(MIX_MAIN_R, buffers[kBusMainR], dpop.main_right);
++        tail(MIX_MAIN_S, buffers[kBusMainS], dpop.main_surround);
++        tail(MIX_AUXA_L, buffers[kBusAuxAL], dpop.auxA_left);
++        tail(MIX_AUXA_R, buffers[kBusAuxAR], dpop.auxA_right);
++        tail(MIX_AUXA_S, buffers[kBusAuxAS], dpop.auxA_surround);
++        tail(MIX_AUXB_L, buffers[kBusAuxBL], dpop.auxB_left);
++        tail(MIX_AUXB_R, buffers[kBusAuxBR], dpop.auxB_right);
++        tail(MIX_AUXB_S, buffers[kBusAuxBS], dpop.auxB_surround);
++        tail(MIX_AUXC_L, buffers[kBusAuxCL], dpop.auxC_left);
++        tail(MIX_AUXC_R, buffers[kBusAuxCR], dpop.auxC_right);
++        tail(MIX_AUXC_S, buffers[kBusAuxCS], dpop.auxC_surround);
++    }
++
+     void ProcessPBList(uint32_t pbAddr, bool newFilter, bool oldAxLayout) {
+         uint32_t guard = 0;
+         while (pbAddr && guard++ < 256) {
+@@ -651,6 +682,11 @@ private:
+             ReadPB(pbAddr, pb);
+             AXBuffers buffers = MixBuffers();
+             const AXMixControl control = ConvertMixerControl(Hilo(pb.mixer_control_hi, pb.mixer_control_lo));
++            bool& wasRunning = m_wasRunning[pbAddr];
++            if (pb.running != 1 && wasRunning) {
++                Depop(buffers, control, pb.dpop);
++            }
++            wasRunning = pb.running == 1;
+             if (oldAxLayout && (pb.updates.num_updates[0] | pb.updates.num_updates[1] | pb.updates.num_updates[2]) != 0) {
+                 const auto updates = LoadPBUpdates(pb);
+                 for (uint32_t ms = 0; ms < 3; ++ms) {
