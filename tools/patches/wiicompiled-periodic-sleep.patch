@@ -1,8 +1,116 @@
+diff --git a/runtime/src/hle/os/os_internal.h b/runtime/src/hle/os/os_internal.h
+index 9b2b700..a5ae604 100644
+--- a/runtime/src/hle/os/os_internal.h
++++ b/runtime/src/hle/os/os_internal.h
+@@ -131,6 +131,7 @@ uint32_t SetThreadEffectivePriority(uint32_t threadPtr, int32_t priority);
+ void CancelSleepTimer(uint32_t threadPtr);
+ void ClearOutstandingPark(uint32_t threadPtr);
+ bool ProcessSleepTimers(CpuContext* cpu);
++bool SleepTimerOverdue();
+ 
+ // Defined in os_alarm.cpp.
+ bool ProcessAlarmQueue(CpuContext* cpu, int maxToProcess);
+diff --git a/runtime/src/hle/os/os_interrupt.cpp b/runtime/src/hle/os/os_interrupt.cpp
+index 29bc4c1..a7805ba 100644
+--- a/runtime/src/hle/os/os_interrupt.cpp
++++ b/runtime/src/hle/os/os_interrupt.cpp
+@@ -76,6 +76,31 @@ bool OS_HLE_InterruptsEnabled() noexcept
+     return g_interrupts_enabled.load(std::memory_order_acquire);
+ }
+ 
++extern "C" void OS_HLE_PreemptionPoint();
++
++// Guest-code entry points only (runtime C++ keeps calling the plain versions above). On hardware,
++// re-enabling interrupts with a timer interrupt pending takes it at once and the interrupt return
++// switches to the woken higher-priority thread. Guest threads here are cooperative fibers, so a
++// due OSSleepTicks timer otherwise waits for the running thread to block: MLB's main thread can
++// compute a whole frame without blocking and starve the 5 ms sound ticker.
++extern "C" int32_t OSRestoreInterrupts_GuestEntry(int32_t level)
++{
++    const int32_t previous = OS__RestoreInterrupts_801a65d4(level);
++    if (level != 0 && previous == 0 && SleepTimerOverdue()) {
++        OS_HLE_PreemptionPoint();
++    }
++    return previous;
++}
++
++extern "C" int32_t OSEnableInterrupts_GuestEntry()
++{
++    const int32_t previous = OS__EnableInterrupts_801a65c0();
++    if (previous == 0 && SleepTimerOverdue()) {
++        OS_HLE_PreemptionPoint();
++    }
++    return previous;
++}
++
+ extern "C" uint32_t OS____InterruptInit_801a661c(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8)
+ {
+     (void)r3;
+@@ -234,8 +259,8 @@ extern "C" uint32_t SetInterruptMask_801a66e0(uint32_t mask, uint32_t enable)
+ }
+ 
+ PPC_NATIVE_OVERRIDE(801A65AC, OS__DisableInterrupts_801a65ac, int32_t, (), ());
+-PPC_NATIVE_OVERRIDE(801A65C0, OS__EnableInterrupts_801a65c0, int32_t, (), ());
+-PPC_NATIVE_OVERRIDE(801A65D4, OS__RestoreInterrupts_801a65d4, int32_t, (int32_t level), (level));
++PPC_NATIVE_OVERRIDE(801A65C0, OSEnableInterrupts_GuestEntry, int32_t, (), ());
++PPC_NATIVE_OVERRIDE(801A65D4, OSRestoreInterrupts_GuestEntry, int32_t, (int32_t level), (level));
+ PPC_NATIVE_OVERRIDE(801A661C, OS____InterruptInit_801a661c, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
+ PPC_NATIVE_OVERRIDE(801A66E0, SetInterruptMask_801a66e0, uint32_t, (uint32_t mask, uint32_t enable), (mask, enable));
+ PPC_NATIVE_OVERRIDE(801A00E0, OS__ExceptionInit_801a00e0, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20), (r3, r4, r5, r6, r7, r8, r20));
 diff --git a/runtime/src/hle/os/os_sleep.cpp b/runtime/src/hle/os/os_sleep.cpp
-index 70b73ac..3b5538f 100644
+index 70b73ac..b155a20 100644
 --- a/runtime/src/hle/os/os_sleep.cpp
 +++ b/runtime/src/hle/os/os_sleep.cpp
-@@ -83,9 +83,27 @@ void ScheduleSleepTimer(uint32_t threadPtr, uint64_t ticks)
+@@ -1,10 +1,11 @@
+-// OSSleepTicks / OSSleepThread parking plus the host-side sleep-timer table.
++﻿// OSSleepTicks / OSSleepThread parking plus the host-side sleep-timer table.
+ 
+ #include <algorithm>
+ #include <atomic>
+ #include <chrono>
+ #include <cstdint>
+ #include <iostream>
++#include <limits>
+ #include <mutex>
+ #include <unordered_map>
+ #include <unordered_set>
+@@ -23,6 +24,35 @@ namespace OsHleInternal {
+ std::mutex gSleepTimerMutex;
+ std::vector<SleepTimerEntry> gSleepTimers;
+ 
++// Earliest pending sleep deadline, never later than the real one (a stale early value only costs
++// one extra scheduler pass). Lets the interrupt-enable hooks test for a due timer without locking.
++std::atomic<std::chrono::steady_clock::rep> gEarliestSleepDeadline{
++    std::numeric_limits<std::chrono::steady_clock::rep>::max()};
++
++// Callers hold gSleepTimerMutex.
++void NoteSleepDeadline(std::chrono::steady_clock::time_point deadline)
++{
++    const auto value = deadline.time_since_epoch().count();
++    if (value < gEarliestSleepDeadline.load(std::memory_order_relaxed)) {
++        gEarliestSleepDeadline.store(value, std::memory_order_relaxed);
++    }
++}
++
++void RefreshEarliestSleepDeadline()
++{
++    auto earliest = std::numeric_limits<std::chrono::steady_clock::rep>::max();
++    for (const SleepTimerEntry& entry : gSleepTimers) {
++        earliest = std::min(earliest, entry.deadline.time_since_epoch().count());
++    }
++    gEarliestSleepDeadline.store(earliest, std::memory_order_relaxed);
++}
++
++bool SleepTimerOverdue()
++{
++    return std::chrono::steady_clock::now().time_since_epoch().count() >=
++           gEarliestSleepDeadline.load(std::memory_order_relaxed);
++}
++
+ void CancelSleepTimer(uint32_t threadPtr)
+ {
+     std::lock_guard<std::mutex> lock(gSleepTimerMutex);
+@@ -83,13 +113,35 @@ void ScheduleSleepTimer(uint32_t threadPtr, uint64_t ticks)
      using Clock = std::chrono::steady_clock;
  
      const auto duration = TimeBaseContract::TicksToDuration(ticks);
@@ -15,19 +123,45 @@ index 70b73ac..3b5538f 100644
 +    // sound ticker, whose wakes advance the commentary phrase clocks) then runs 15-45% slow and
 +    // phrases are stopped late. On hardware the alarm interrupt is on time, so anchor a repeated
 +    // sleep to the previous deadline; the lost time is caught up, at up to four wakes per period,
-+    // while other threads idle. A sleep with a different length or long after the last deadline
-+    // starts from now, as in the SDK.
++    // when other threads idle or guest code re-enables interrupts (os_interrupt.cpp). A sleep with
++    // a different length or long after the last deadline starts from now, as in the SDK.
 +    struct LastSleep { uint64_t ticks; Clock::time_point deadline; };
 +    static std::unordered_map<uint32_t, LastSleep> lastSleeps;
 +    constexpr auto kMaxCatchUp = std::chrono::milliseconds(50);
  
      std::lock_guard<std::mutex> lock(gSleepTimerMutex);
 +    LastSleep& last = lastSleeps[threadPtr];
++    auto anchor = deadline;
 +    if (last.ticks == ticks && now - last.deadline <= kMaxCatchUp && last.deadline <= now) {
-+        // Never already due: a past deadline can fire before the thread finishes parking.
-+        deadline = std::max(last.deadline + duration, now + duration / 4);
++        anchor = last.deadline + duration;
++        // The timer itself is never already due: a past deadline can fire before the thread
++        // finishes parking. The anchor keeps the full debt so it is still caught up later.
++        deadline = std::max(anchor, now + duration / 4);
 +    }
-+    last = {ticks, deadline};
++    last = {ticks, anchor};
      std::erase_if(gSleepTimers, [threadPtr](const SleepTimerEntry& entry) {
          return entry.threadPtr == threadPtr;
      });
+     gSleepTimers.push_back({threadPtr, deadline});
++    NoteSleepDeadline(deadline);
+ }
+ 
+ bool ProcessSleepTimers(CpuContext* cpu)
+@@ -121,6 +173,9 @@ bool ProcessSleepTimers(CpuContext* cpu)
+                     break;
+                 }
+             }
++            if (!found) {
++                RefreshEarliestSleepDeadline();
++            }
+         }
+         if (!found) {
+             break;
+@@ -152,6 +207,7 @@ bool ProcessSleepTimers(CpuContext* cpu)
+             }
+             if (!present) {
+                 gSleepTimers.push_back({threadPtr, now + std::chrono::milliseconds(2)});
++                NoteSleepDeadline(now + std::chrono::milliseconds(2));
+             }
+             continue;
+         }
