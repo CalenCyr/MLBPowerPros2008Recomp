@@ -100,10 +100,10 @@ index 6791381..7a9d91d 100644
  const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {
 diff --git a/runtime/include/mods.h b/runtime/include/mods.h
 new file mode 100644
-index 0000000..5274ef9
+index 0000000..f341074
 --- /dev/null
 +++ b/runtime/include/mods.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,46 @@
 +#pragma once
 +
 +#include <aurora/aurora.h>
@@ -131,6 +131,7 @@ index 0000000..5274ef9
 +    std::string author;
 +    std::string version;
 +    std::string description;
++    std::string rosterIds;  // "2008" when roster/*.dat voice and face ids follow 2008's numbering
 +    std::filesystem::path root;
 +    bool textures = false;
 +    bool disc = false;
@@ -437,10 +438,10 @@ index 6707fc9..fde15ce 100644
          const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
 new file mode 100644
-index 0000000..97f72a7
+index 0000000..c0a82bb
 --- /dev/null
 +++ b/runtime/src/mods.cpp
-@@ -0,0 +1,404 @@
+@@ -0,0 +1,481 @@
 +#include "mods.h"
 +
 +#include "recomp_mod_loader.h"
@@ -590,6 +591,7 @@ index 0000000..97f72a7
 +                text("author", mod.author);
 +                text("version", mod.version);
 +                text("description", mod.description);
++                text("roster_ids", mod.rosterIds);
 +            } catch (const std::exception& error) {
 +                RT_LOG(RT_TAG_RUNTIME) << "mods: ignoring unreadable " << Utf8(manifest) << ": " << error.what()
 +                                       << std::endl;
@@ -624,7 +626,7 @@ index 0000000..97f72a7
 +// fields are moved with kRosterFields (tools/roster/powerup_to_2008.py, docs/roster-2008.md).
 +constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
 +constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
-+constexpr uint32_t kRosterConverter = 3;
++constexpr uint32_t kRosterConverter = 7;
 +
 +uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
 +    uint32_t value = 0;
@@ -648,7 +650,15 @@ index 0000000..97f72a7
 +}
 +
 +// Rebuilds `pack` (the player's own game_data.pack) with the roster of a PowerUp save.
-+bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, std::string& error) {
++// 2008 inserted faces after 2007's 27, 105, 160 and 176, so 2007 face ids move by 0 to 12.
++uint32_t Face2008(uint32_t face) {
++    return face + (face < 28 ? 0 : face < 106 ? 1 : face < 161 ? 2 : face < 177 ? 7 : 12);
++}
++
++// ids2008: the .dat's voice and face ids already follow 2008's numbering (mod.toml roster_ids =
++// "2008", written by PowerUp+'s 2008 export); otherwise 2007 voice ids are dropped (2008 renumbered
++// the voices) and faces are moved with Face2008.
++bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool ids2008, std::string& error) {
 +    if (save.size() < kSaveRoster2007 + kRosterBlock) {
 +        error = "not an MLB Power Pros 2007 Wii save (pm2maus.dat)";
 +        return false;
@@ -659,24 +669,46 @@ index 0000000..97f72a7
 +    }
 +    const auto* oldBlock = reinterpret_cast<const unsigned char*>(save.data() + kSaveRoster2007);
 +    auto* newBlock = reinterpret_cast<unsigned char*>(pack.data() + kPackRoster2008);
-+    // A player also in the original 2008 roster (same last and first name, 0x16..0x4D) starts from
-+    // his 2008 record, so what only 2008 has (voice, the bits 2008 added) survives.
-+    // tools/roster/powerup_to_2008.py does the same; both must give the same bytes.
-+    const std::vector<unsigned char> original(newBlock, newBlock + kRosterSlots * kRosterPlayer);
-+    std::map<std::string, const unsigned char*> originals;
++    // A player also in the original 2008 roster (same name, 0x16..0x4D, and birthday; 2008 repeats
++    // a few, then the same id decides) starts from his 2008 record, so what only 2008 has (voice,
++    // the bits 2008 added) survives. tools/roster/powerup_to_2008.py does the same; both must give
++    // the same bytes.
++    const std::vector<unsigned char> original(newBlock, newBlock + kRosterBlock);
++    auto person = [](const unsigned char* record, uint32_t monthBit, uint32_t dayBit) {
++        std::string key(reinterpret_cast<const char*>(record) + 0x16, 0x38);
++        key += static_cast<char>(GetBits(record, monthBit, 4));
++        key += static_cast<char>(GetBits(record, dayBit, 5));
++        return key;
++    };
++    std::map<std::string, std::vector<const unsigned char*>> originals;
++    std::vector<unsigned char> empty(kRosterPlayer, 0);  // 2008's unused slots are a fixed record, not zeros
++    bool foundEmpty = false;
 +    for (size_t i = 0; i < kRosterSlots; ++i) {
 +        const unsigned char* record = original.data() + i * kRosterPlayer;
 +        if (record[0] != 0 || record[1] != 0) {
-+            originals.try_emplace(std::string(reinterpret_cast<const char*>(record) + 0x16, 0x38), record);
++            originals[person(record, 0x420, 0x424)].push_back(record);
++        } else if (!foundEmpty) {
++            std::memcpy(empty.data(), record, kRosterPlayer);
++            foundEmpty = true;
 +        }
 +    }
 +    for (size_t i = 0; i < kRosterSlots; ++i) {
 +        const unsigned char* from = oldBlock + i * kRosterPlayer;
 +        unsigned char* to = newBlock + i * kRosterPlayer;
-+        std::memset(to, 0, kRosterPlayer);
++        std::memcpy(to, empty.data(), kRosterPlayer);
 +        if (from[0] == 0 && from[1] == 0) continue;  // empty slot
-+        const auto same = originals.find(std::string(reinterpret_cast<const char*>(from) + 0x16, 0x38));
-+        if (same != originals.end()) std::memcpy(to, same->second, kRosterPlayer);
++        std::memset(to, 0, kRosterPlayer);
++        const unsigned char* base = nullptr;
++        if (const auto same = originals.find(person(from, 0x42B, 0x42F)); same != originals.end()) {
++            base = same->second.front();
++            for (const unsigned char* candidate : same->second) {
++                if (std::memcmp(candidate, from, 2) == 0) {
++                    base = candidate;
++                    break;
++                }
++            }
++            std::memcpy(to, base, kRosterPlayer);
++        }
 +        std::memcpy(to, from, 0x5C);
 +        std::memcpy(to + 0x60, from + 0x60, 0x0F);
 +        for (const RosterField& field : kRosterFields) {
@@ -684,14 +716,54 @@ index 0000000..97f72a7
 +            if (field.birthYear && value != 0) value += 1;  // PowerUp dates count from opening day 2007
 +            SetBits(to, field.to, field.toBits, value);
 +        }
++        if (ids2008) {
++            SetBits(to, 0x492, 14, GetBits(from, 0x492, 14));
++        } else {
++            SetBits(to, 0x2A4, 8, Face2008(GetBits(from, 0x2A4, 8)));
++        }
 +        // PowerUp cannot edit the bits it has no name for (it leaves whatever its base save had in
-+        // that slot), so a known player keeps his 2008 ones.
-+        if (same != originals.end()) {
-+            for (const uint16_t bit : kRosterUnnamed) SetBits(to, bit, 1, GetBits(same->second, bit, 1));
++        // that slot), so a known player keeps his 2008 ones; so do the bytes after a long name's
++        // special id (u16 >= 0xF00 at 0x02), which the game does not read.
++        if (base != nullptr) {
++            for (const uint16_t bit : kRosterUnnamed) SetBits(to, bit, 1, GetBits(base, bit, 1));
++            if (std::memcmp(to + 2, base + 2, 2) == 0 && (to[2] << 8 | to[3]) >= 0xF00) {
++                std::memcpy(to + 4, base + 4, 0x12);
++            }
 +        }
 +    }
-+    const size_t players = kRosterSlots * kRosterPlayer;
-+    std::memcpy(newBlock + players, oldBlock + players, kRosterBlock - players);
++    // Lineups (32 x 18 entries of 4 bytes), free agents (200 x 8) and teams (32 x 40 x 8) come from
++    // the save, over 2008's: blank entries get 2008's empty entry, used free agents 2008's filler
++    // bytes, a team entry for the same member keeps the original's bits PowerUp does not model, and
++    // a lineup entry with the same player and position keeps the original's flags.
++    constexpr size_t kLineups = 0x40740, kFreeAgents = 0x41040, kTeams = 0x41680;
++    constexpr unsigned char kTeamEntryUnmodeled[8] = {0x00, 0x00, 0x38, 0x3F, 0xFF, 0xF0, 0xE3, 0x00};
++    std::memcpy(newBlock + kLineups, oldBlock + kLineups, kRosterBlock - kLineups);
++    const unsigned char* emptyEntry = nullptr;
++    const unsigned char* usedFreeAgent = nullptr;
++    for (size_t o = kFreeAgents; o < kRosterBlock; o += 8) {
++        const bool blank = original[o] == 0 && original[o + 1] == 0;
++        if (blank && emptyEntry == nullptr) emptyEntry = original.data() + o;
++        if (!blank && o < kTeams && usedFreeAgent == nullptr) usedFreeAgent = original.data() + o;
++    }
++    for (size_t o = kFreeAgents; o < kRosterBlock; o += 8) {
++        unsigned char* entry = newBlock + o;
++        if (entry[0] == 0 && entry[1] == 0) {
++            if (emptyEntry != nullptr) std::memcpy(entry, emptyEntry, 8);
++        } else if (o < kTeams) {
++            if (usedFreeAgent != nullptr) std::memcpy(entry + 2, usedFreeAgent + 2, 6);
++        } else if (std::memcmp(entry, original.data() + o, 2) == 0) {
++            for (size_t k = 0; k < 8; ++k) {
++                entry[k] = static_cast<unsigned char>((entry[k] & ~kTeamEntryUnmodeled[k]) |
++                                                      (original[o + k] & kTeamEntryUnmodeled[k]));
++            }
++        }
++    }
++    for (size_t o = kLineups; o < kFreeAgents; o += 4) {
++        unsigned char* entry = newBlock + o;
++        if (std::memcmp(entry, original.data() + o, 2) == 0 && entry[2] >> 4 == original[o + 2] >> 4) {
++            std::memcpy(entry, original.data() + o, 4);
++        }
++    }
 +    return true;
 +}
 +
@@ -734,8 +806,8 @@ index 0000000..97f72a7
 +    const fs::path base = cachePath != nullptr ? fs::path(reinterpret_cast<const char8_t*>(cachePath))
 +                                               : Directory().parent_path();
 +    const fs::path dir = base / "mods" / "roster" / mod.root.filename();
-+    // The cache name carries a hash of the field tables and of kRosterConverter (bump it when
-+    // ConvertRoster changes), so a newer converter redoes old conversions.
++    // The cache name carries a hash of the field tables, kRosterConverter (bump it when
++    // ConvertRoster changes) and roster_ids, so a newer converter redoes old conversions.
 +    uint32_t tableHash = (2166136261u ^ kRosterConverter) * 16777619u;
 +    for (const RosterField& field : kRosterFields) {
 +        for (const uint32_t value : {uint32_t{field.from}, uint32_t{field.bits}, uint32_t{field.to}, uint32_t{field.toBits}}) {
@@ -743,6 +815,7 @@ index 0000000..97f72a7
 +        }
 +    }
 +    for (const uint16_t bit : kRosterUnnamed) tableHash = (tableHash ^ bit) * 16777619u;
++    if (mod.rosterIds == "2008") tableHash = (tableHash ^ 2008u) * 16777619u;
 +    char name[32];
 +    std::snprintf(name, sizeof(name), "game_data-%08x.pack", tableHash);
 +    const fs::path pack = dir / name;
@@ -754,11 +827,16 @@ index 0000000..97f72a7
 +    if (!ReadProjectEntry(RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin", "game_data.pack", packData)) {
 +        error = "game_data.pack not found in the disc's PROJECT.BIN";
 +    }
-+    if (!error.empty() || !ConvertRoster(saveData, packData, error)) {
++    if (!error.empty() || !ConvertRoster(saveData, packData, mod.rosterIds == "2008", error)) {
 +        RT_LOG(RT_TAG_RUNTIME) << "mods: cannot load the roster " << Utf8(save) << ": " << error << std::endl;
 +        return {};
 +    }
 +    fs::create_directories(dir, ec);
++    std::vector<fs::path> stale;  // conversions by older converters
++    for (const auto& file : fs::directory_iterator(dir, ec)) {
++        if (file.path().extension() == ".pack") stale.push_back(file.path());
++    }
++    for (const auto& file : stale) fs::remove(file, ec);
 +    std::ofstream(pack, std::ios::binary | std::ios::trunc)
 +        .write(packData.data(), static_cast<std::streamsize>(packData.size()));
 +    RT_LOG(RT_TAG_RUNTIME) << "mods: converted roster " << Utf8(save.filename())

@@ -207,18 +207,24 @@ index 6ab259b..4cbcf00 100644
        services.AddTransient<IPlayerMapper>(provider => new PlayerMapper(provider.GetRequiredService<ISpecialSavedNameLibrary>()));
        services.AddTransient<IPlayerApi>(provider => new PlayerApi());
 diff --git a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
-index e06c584..74e7bbb 100644
+index e06c584..a318b61 100644
 --- a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 +++ b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
-@@ -5,6 +5,7 @@ using PowerUp.GameSave.IO;
+@@ -1,10 +1,13 @@
+ ﻿using PowerUp.Entities;
++using PowerUp.Entities.Players;
+ using PowerUp.Entities.Rosters;
+ using PowerUp.GameSave.GameSaveManagement;
+ using PowerUp.GameSave.IO;
  using PowerUp.GameSave.Objects.FreeAgents;
  using PowerUp.GameSave.Objects.GameSaves;
  using PowerUp.GameSave.Objects.Players;
++using PowerUp.GameSave.Objects.Teams;
 +using PowerUp.GameSave.PowerPros2008;
  using PowerUp.Libraries;
  using PowerUp.Mappers;
  using PowerUp.Mappers.Players;
-@@ -12,6 +13,7 @@ using PowerUp.Providers;
+@@ -12,6 +15,7 @@ using PowerUp.Providers;
  using System;
  using System.Collections.Generic;
  using System.IO;
@@ -226,7 +232,7 @@ index e06c584..74e7bbb 100644
  using System.Linq;
  
  namespace PowerUp.GameSave.Api
-@@ -20,6 +22,7 @@ namespace PowerUp.GameSave.Api
+@@ -20,6 +24,7 @@ namespace PowerUp.GameSave.Api
    {
      Stream ExportRoster(RosterExportParameters parameters);
      void WriteRosterToFile(Roster roster, string filePath);
@@ -234,27 +240,29 @@ index e06c584..74e7bbb 100644
    }
  
    public class RosterExportApi : IRosterExportApi
-@@ -72,7 +75,74 @@ namespace PowerUp.GameSave.Api
+@@ -72,6 +77,226 @@ namespace PowerUp.GameSave.Api
        WriteRosterToFile(roster, filePath, 0);
      }
  
--    private void WriteRosterToFile(Roster roster, string filePath, int gameSaveId)
 +    /// <summary>
 +    /// The roster as an MLB Power Pros 2008 roster mod for the 2008 recomp: a zip holding
-+    /// NAME/mod.toml and NAME/roster/NAME.dat. The .dat is a regular 2007 save; the game converts
-+    /// it to 2008 with the player's own disc when the mod loads, so the mod carries no game files.
-+    /// After a 2008 import, players the user did not touch keep their exact 2008 values.
++    /// NAME/mod.toml and NAME/roster/NAME.dat. The .dat is a 2007 save laid out the way 2008 keeps
++    /// its roster; the game converts it with the player's own disc when the mod loads, so the mod
++    /// carries no game files. See WritePowerPros2008Roster.
 +    /// </summary>
 +    public Stream ExportPowerPros2008Mod(Roster roster)
 +    {
 +      var baseSavePath = _baseGameSavePathProvider.GetPath();
 +      var tempFilePath = Path.GetTempFileName();
 +      File.Copy(baseSavePath, tempFilePath, overwrite: true);
-+      WriteRosterToFile(roster, tempFilePath, 0, LoadPowerPros2008Originals(baseSavePath));
++      var originals = LoadPowerPros2008Originals(baseSavePath);
++      WritePowerPros2008Roster(roster, tempFilePath, originals);
 +
 +      var name = string.Concat((roster.Name ?? "Roster").Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim();
 +      var toml = $"name = \"{TomlEscape(roster.Name ?? name)}\"\nauthor = \"PowerUp+\"\nversion = \"1\"\n" +
-+        "description = \"Roster de PowerUp+ para MLB Power Pros 2008. Afecta a todos los modos, incluido MLB Life.\"\n";
++        "description = \"Roster de PowerUp+ para MLB Power Pros 2008. Afecta a todos los modos, incluido MLB Life.\"\n" +
++        // Voice and face ids in the .dat follow 2008's numbering.
++        "roster_ids = \"2008\"\n";
 +      var zip = new MemoryStream();
 +      using (var archive = new ZipArchive(zip, ZipArchiveMode.Create, leaveOpen: true))
 +      {
@@ -269,17 +277,42 @@ index e06c584..74e7bbb 100644
 +
 +    private static string TomlEscape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 +
-+    /// <summary>The 2008 roster kept by the last 2008 import, as 2007-layout players keyed by name.</summary>
-+    private IReadOnlyDictionary<string, GSPlayer>? LoadPowerPros2008Originals(string baseSavePath)
++    /// <summary>
++    /// Players are the same person when name and birthday match: 2008 has two Chris Youngs and
++    /// two Tony Peñas, and a new player may share a name with a 2008 one.
++    /// </summary>
++    private static string PersonKey(string? lastName, string? firstName, int birthMonth, int birthDay)
++      => $"{lastName}|{firstName}|{birthMonth}|{birthDay}";
++
++    /// <summary>The roster kept by the last 2008 import (2007 layout), by PersonKey.</summary>
++    private class PowerPros2008Originals
++    {
++      public Dictionary<string, List<GSPlayer>> ByPerson { get; } = new();
++      /// <summary>2008 face ids by player id (the players above carry 2007's numbering).</summary>
++      public Dictionary<int, int> Faces { get; init; } = new();
++
++      /// <summary>The imported player itself when names and birthdays repeat (two "Great Harris").</summary>
++      public GSPlayer? Find(string key, int? sourceId)
++        => ByPerson.TryGetValue(key, out var same) ? same.FirstOrDefault(o => o.PowerProsId == sourceId) ?? same[0] : null;
++    }
++
++    private PowerPros2008Originals? LoadPowerPros2008Originals(string baseSavePath)
 +    {
 +      var packPath = PowerPros2008Roster.OriginalPackPath(baseSavePath);
 +      if (!File.Exists(packPath))
 +        return null;
-+      var save = PowerPros2008Roster.ToGameSave(File.ReadAllBytes(packPath), File.ReadAllBytes(baseSavePath));
++      var pack = File.ReadAllBytes(packPath);
++      var save = PowerPros2008Roster.ToGameSave(pack, File.ReadAllBytes(baseSavePath));
 +      using var reader = new GameSaveReader(_characterLibrary, new MemoryStream(save), ByteOrder.BigEndian);
-+      var originals = new Dictionary<string, GSPlayer>();
-+      foreach (var player in reader.Read().Players.Where(p => p.PowerProsId is > 0))
-+        originals.TryAdd($"{player.LastName}|{player.FirstName}", (GSPlayer)player);
++      var originals = new PowerPros2008Originals { Faces = PowerPros2008Roster.FacesById(pack) };
++      foreach (var player in reader.Read().Players.Where(p => p.PowerProsId is > 0).Cast<GSPlayer>())
++      {
++        // Keyed the way the exported players are: through PowerUp's model (no birthday -> 1/1).
++        var mapped = _playerMapper.MapToPlayer(player, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008" });
++        var key = PersonKey(mapped.LastName, mapped.FirstName, mapped.BirthMonth, mapped.BirthDay);
++        originals.ByPerson.TryAdd(key, new List<GSPlayer>());
++        originals.ByPerson[key].Add(player);
++      }
 +      return originals;
 +    }
 +
@@ -289,10 +322,8 @@ index e06c584..74e7bbb 100644
 +    /// value equals what an untouched round trip of the original gives was not edited, so it takes
 +    /// the original value. Team and id stay as exported.
 +    /// </summary>
-+    private void PreserveUntouched(IGSPlayer exported, IReadOnlyDictionary<string, GSPlayer> originals)
++    private void PreserveUntouched(IGSPlayer exported, GSPlayer original)
 +    {
-+      if (!originals.TryGetValue($"{exported.LastName}|{exported.FirstName}", out var original))
-+        return;
 +      var player = _playerMapper.MapToPlayer(original, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008" });
 +      var untouched = _playerMapper.MapToGSPlayer(player, (MLBPPTeam)exported.PowerProsTeamId!.Value, exported.PowerProsId!.Value);
 +      foreach (var property in typeof(GSPlayer).GetProperties())
@@ -306,22 +337,136 @@ index e06c584..74e7bbb 100644
 +      }
 +    }
 +
-+    private void WriteRosterToFile(Roster roster, string filePath, int gameSaveId, IReadOnlyDictionary<string, GSPlayer>? originals = null)
++    /// <summary>
++    /// Writes the roster the way MLB Power Pros 2008 keeps it, unlike the 2007 export:
++    /// - one record per person; All-Star and regular team entries share it, as in the game;
++    /// - players also in the imported 2008 roster (same person) keep their 2008 id, so their slot
++    ///   and salary stay; the rest take PowerUp's salary-based id, or the first free one;
++    /// - team members keep their order (major leaguers first), all free agents are written;
++    /// - unused slots are empty instead of holding the base save's 2007 players;
++    /// - untouched values of known players are restored (PreserveUntouched), and everyone else gets
++    ///   the 2008 voice whose name sounds closest (PowerUp's own voice matching, on 2008's voices);
++    /// - voice and face ids are written in 2008's numbering (mod.toml roster_ids = "2008").
++    /// </summary>
++    private void WritePowerPros2008Roster(Roster roster, string filePath, PowerPros2008Originals? originals)
++    {
++      const int playersOffset = PowerPros2008Roster.SaveBlock2007;
++      using (var file = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite))
++      {
++        file.Position = playersOffset;
++        file.Write(new byte[PowerPros2008Roster.Slots * PowerPros2008Roster.PlayerSize]);
++      }
++
++      var teams = roster.GetTeams()
++        .OrderBy(t => t.Value.GetDivision())
++        .ThenBy(t => t.Value == MLBPPTeam.NationalLeagueAllStars)
++        .ThenBy(t => t.Value)
++        .ToList();
++      var entries = teams.SelectMany(t => t.Key.GetPlayers().Select(p => (team: (MLBPPTeam?)t.Value, player: p)))
++        .Concat(roster.GetFreeAgentPlayers().Select(p => (team: (MLBPPTeam?)null, player: p)))
++        .ToList();
++      // One record per person. Rosters imported from 2007 exports hold All-Stars as copies (same
++      // name and birthday, on no regular team); the regular team's player stands in for the copy.
++      // Two players on regular teams stay apart even when name and birthday match.
++      bool OnRegularTeam(Player p) => entries.Any(e => e.player.Id == p.Id && e.team is { } t && t.GetDivision() != MLBPPDivision.AllStars);
++      string Person(Player p) => PersonKey(p.LastName, p.FirstName, p.BirthMonth, p.BirthDay);
++      var allPlayers = entries.Select(e => e.player).DistinctBy(p => p.Id).ToList();
++      var regular = allPlayers.Where(OnRegularTeam).GroupBy(Person).ToDictionary(g => g.Key, g => g.First());
++      Player StandIn(Player p) => !OnRegularTeam(p) && regular.TryGetValue(Person(p), out var q) ? q : p;
++      var players = allPlayers.Where(p => StandIn(p) == p).ToList();
++
++      // Ids: imported 2008 players keep theirs, the rest take PowerUp's choice or the first free one.
++      var taken = new HashSet<int>();
++      var idByPlayer = new Dictionary<int, ushort>();
++      GSPlayer? Original(Player p) => originals?.Find(PersonKey(p.LastName, p.FirstName, p.BirthMonth, p.BirthDay), p.SourcePowerProsId);
++      foreach (var player in players)
++        if (Original(player) is { } original && taken.Add(original.PowerProsId!.Value))
++          idByPlayer[player.Id!.Value] = original.PowerProsId!.Value;
++      var suggested = _powerProsIdAssigner.AssignIds(
++        players.Select(p => new PowerProsIdParameters { PlayerId = p.Id!.Value, YearsInMajors = p.YearsInMajors, HitterRating = p.HitterRating, Overall = p.Overall }),
++        _playerSalariesLibrary.PlayerSalaries);
++      var nextFree = 1;
++      foreach (var player in players.Where(p => !idByPlayer.ContainsKey(p.Id!.Value)))
++      {
++        var id = suggested[player.Id!.Value];
++        if (id < 1 || id > PowerPros2008Roster.Slots || !taken.Add(id))
++        {
++          while (taken.Contains(nextFree))
++            nextFree++;
++          if (nextFree > PowerPros2008Roster.Slots)
++            throw new InvalidOperationException($"MLB Power Pros 2008 holds at most {PowerPros2008Roster.Slots} players");
++          id = nextFree;
++          taken.Add(id);
++        }
++        idByPlayer[player.Id!.Value] = (ushort)id;
++      }
++      foreach (var player in allPlayers)
++        idByPlayer.TryAdd(player.Id!.Value, idByPlayer[StandIn(player).Id!.Value]);
++
++      var voices = originals?.ByPerson.Values.SelectMany(o => o).Where(o => o.VoiceId is > 0).DistinctBy(o => o.VoiceId).ToList();
++      var gsPlayers = new List<GSPlayer>();
++      foreach (var player in players)
++      {
++        // Jersey: the player's regular team, else the free agent one (as the 2007 export does).
++        var jersey = entries.Where(e => e.player.Id == player.Id && e.team is { } t && t.GetDivision() != MLBPPDivision.AllStars)
++          .Select(e => e.team).FirstOrDefault() ?? MLBPPTeam.NationalLeagueAllStars;
++        var gsPlayer = (GSPlayer)_playerMapper.MapToGSPlayer(player, jersey, idByPlayer[player.Id!.Value]);
++        var original = Original(player);
++        if (original is not null)
++          PreserveUntouched(gsPlayer, original);
++        else
++          gsPlayer.VoiceId = voices is { Count: > 0 } ? ClosestVoice(voices, player.FirstName ?? "", player.LastName ?? "") : (ushort)0;
++        // Faces are edited in 2007's numbering; an untouched one goes back to the exact 2008 face.
++        gsPlayer.Face = (ushort)(original is not null && gsPlayer.Face == original.Face
++          ? originals!.Faces[original.PowerProsId!.Value]
++          : PowerPros2008Roster.Face2008(gsPlayer.Face!.Value));
++        gsPlayers.Add(gsPlayer);
++      }
++
++      var ppIdsByTeam = teams.ToDictionary(t => t.Value, t => (IDictionary<int, ushort>)t.Key.GetPlayers()
++        .Select(p => p.Id!.Value).Distinct().ToDictionary(id => id, id => idByPlayer[id]));
++      var freeAgentIds = roster.GetFreeAgentPlayers().Select(p => idByPlayer[p.Id!.Value]).ToList();
++
++      using var writer = new GameSaveWriter(_characterLibrary, filePath, ByteOrder.BigEndian);
++      writer.Write(new GSGameSave
++      {
++        PowerUpId = 0,
++        Players = gsPlayers.OrderBy(p => p.PowerProsId),
++        // TeamMapper.MapToGSTeam reorders members by pitcher role; the game's order is kept here.
++        Teams = teams.Select(t => (IGSTeam)new GSTeam
++        {
++          PlayerEntries = t.Key.PlayerDefinitions
++            .OrderBy(p => p.IsAAA)
++            .Select(p => TeamMapper.MapToGSTeamPlayerEntry(p, t.Value, ppIdsByTeam[t.Value][p.PlayerId]))
++            .Concat(Enumerable.Repeat(GSTeamPlayerEntry.Empty, 40 - t.Key.PlayerDefinitions.Count()))
++        }),
++        Lineups = teams.Select(t => TeamMapper.MapToGSLineup(t.Key, ppIdsByTeam[t.Value])),
++        FreeAgents = new GSFreeAgentList
++        {
++          FreeAgents = freeAgentIds.Select(id => new GSFreeAgent { PowerProsPlayerId = id })
++            .Concat(Enumerable.Range(0, Math.Max(0, 200 - freeAgentIds.Count)).Select(_ => new GSFreeAgent { PowerProsPlayerId = 0 }))
++        }
++      });
++    }
++
++    /// <summary>The 2008 voice whose player's name sounds closest, with VoiceLibrary's comparer.</summary>
++    private static ushort ClosestVoice(List<GSPlayer> voices, string firstName, string lastName)
++    {
++      var firstNames = voices.ToDictionary(v => (int)v.VoiceId!.Value, v => v.FirstName ?? "");
++      var lastNames = voices.ToDictionary(v => (int)v.VoiceId!.Value, v => v.LastName ?? "");
++      var comparer = new VoiceLibrary.VoiceSoundexSimilarityComparer(
++        firstNames,
++        firstNames.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.GetSoundex()),
++        lastNames,
++        lastNames.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.RemovePrefixesAndSuffixes().GetSoundex()),
++        firstName,
++        lastName);
++      return (ushort)voices.Select(v => new KeyValuePair<int, string>(v.VoiceId!.Value, "")).MaxBy(kvp => kvp, comparer).Key;
++    }
++
+     private void WriteRosterToFile(Roster roster, string filePath, int gameSaveId)
      {
        // CHRISTODO: Don't hard code endian-ness
-       using (var writer = new GameSaveWriter(_characterLibrary, filePath, ByteOrder.BigEndian))
-@@ -120,8 +190,10 @@ namespace PowerUp.GameSave.Api
-           gsPlayers.Add(_playerMapper.MapToGSPlayer(player.player, jerseyTeam, ppId));
-         }
- 
--        var mappedFAs = freeAgents.Select(fa => _playerMapper.MapToGSPlayer(fa.player, MLBPPTeam.NationalLeagueAllStars, (ushort)ppIdByExportId[fa.playerExportId]));
-+        var mappedFAs = freeAgents.Select(fa => _playerMapper.MapToGSPlayer(fa.player, MLBPPTeam.NationalLeagueAllStars, (ushort)ppIdByExportId[fa.playerExportId])).ToList();
-         gsPlayers.AddRange(mappedFAs);
-+        if (originals is not null)
-+          gsPlayers.ForEach(p => PreserveUntouched(p, originals));
- 
-         var blankFreeAgentSpots = new List<GSFreeAgent>();
-         for (var i = freeAgents.Count(); i < 15; i++)
 diff --git a/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
 index fe3d726..63aa06f 100644
 --- a/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
@@ -388,6 +533,20 @@ index fe3d726..63aa06f 100644
    }
  
    public class RosterImportParameters
+diff --git a/PowerUp/PowerUp/GameSave/Objects/FreeAgents/GSFreeAgentList.cs b/PowerUp/PowerUp/GameSave/Objects/FreeAgents/GSFreeAgentList.cs
+index bfab9dd..e12ab0e 100644
+--- a/PowerUp/PowerUp/GameSave/Objects/FreeAgents/GSFreeAgentList.cs
++++ b/PowerUp/PowerUp/GameSave/Objects/FreeAgents/GSFreeAgentList.cs
+@@ -5,7 +5,8 @@ namespace PowerUp.GameSave.Objects.FreeAgents
+ {
+   public class GSFreeAgentList
+   {
+-    [GSArray(offset: 0x0, itemLength: 0x8, arrayLength: 15)]
++    // The game has room for 200 free agents (MLB Power Pros 2008 uses 25); the 2007 export writes 15.
++    [GSArray(offset: 0x0, itemLength: 0x8, arrayLength: 200)]
+     public IEnumerable<GSFreeAgent>? FreeAgents { get; set; }
+   }
+ 
 diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs
 new file mode 100644
 index 0000000..f59942d
@@ -572,13 +731,14 @@ index 0000000..f59942d
 +}
 diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
 new file mode 100644
-index 0000000..a34e220
+index 0000000..6213848
 --- /dev/null
 +++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,181 @@
 +﻿using System;
 +using System.Collections.Generic;
 +using System.IO;
++using System.Linq;
 +using System.Text;
 +
 +namespace PowerUp.GameSave.PowerPros2008
@@ -597,6 +757,34 @@ index 0000000..a34e220
 +    public const int BlockSize = 0x43E80;
 +    public const int SaveBlock2007 = 0x68C74;
 +    public const int PackBlock2008 = 0x20;
++    private const int VoiceBit = 0x492, VoiceBits = 14;
++    private const int FaceBit = 0x2A4, FaceBits = 8;
++
++    /// <summary>
++    /// 2007 face id -> 2008's: 2008 inserted faces after 27, 105, 160 and 176 (707 of the 729
++    /// players in both games match this way; the rest got another face).
++    /// </summary>
++    public static int Face2008(int face)
++      => face + (face < 28 ? 0 : face < 106 ? 1 : face < 161 ? 2 : face < 177 ? 7 : 12);
++
++    /// <summary>2008 face id -> 2007's, the numbering PowerUp's editor shows; a face 2008 added
++    /// becomes the 2007 one before it.</summary>
++    public static int Face2007(int face)
++      => Enumerable.Range(0, 256).Last(f => Face2008(f) <= face);
++
++    /// <summary>The 2008 face id of each player of game_data.pack, by player id.</summary>
++    public static Dictionary<int, int> FacesById(byte[] pack)
++    {
++      var faces = new Dictionary<int, int>();
++      for (var i = 0; i < Slots; i++)
++      {
++        var record = pack.AsSpan(PackBlock2008 + i * PlayerSize, PlayerSize);
++        var id = record[0] << 8 | record[1];
++        if (id != 0)
++          faces.TryAdd(id, (int)GetBits(record, FaceBit, FaceBits));
++      }
++      return faces;
++    }
 +
 +    /// <summary>
 +    /// Where an import keeps the player's 2008 game_data.pack (next to PowerUp's base save, never
@@ -660,8 +848,9 @@ index 0000000..a34e220
 +      var newBlock = pack.AsSpan(PackBlock2008, BlockSize);
 +      var oldBlock = save.AsSpan(SaveBlock2007, BlockSize);
 +
-+      // Fields 2008 dropped (the second "versus lefty", the voice) come from the base save's record
-+      // of the same player (same last and first name, 0x16..0x4D), when there is one.
++      // The second "versus lefty", which 2008 dropped, comes from the base save's record of the
++      // same player (same last and first name, 0x16..0x4D), when there is one. The voice id sits
++      // where 2007 has it and keeps 2008's numbering; the face goes back to 2007's numbering.
 +      var basePlayers = new Dictionary<string, byte[]>();
 +      for (var i = 0; i < Slots; i++)
 +      {
@@ -688,6 +877,8 @@ index 0000000..a34e220
 +            value -= 1;
 +          SetBits(to, field.From, field.Bits, value);
 +        }
++        SetBits(to, VoiceBit, VoiceBits, GetBits(from, VoiceBit, VoiceBits));
++        SetBits(to, FaceBit, FaceBits, (uint)Face2007((int)GetBits(from, FaceBit, FaceBits)));
 +      }
 +
 +      var players = Slots * PlayerSize;

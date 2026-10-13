@@ -35,7 +35,7 @@ function Invoke-Checked([string]$label) {
 if (-not (Test-Path "$src\.git")) {
     git clone -q (Join-Path $root 'local\vendor\PowerUpPlus') $src; Invoke-Checked 'git clone'
     foreach ($patch in Get-ChildItem (Join-Path $root 'tools\patches\powerupplus-*.patch') | Sort-Object Name) {
-        git -C $src apply $patch.FullName; Invoke-Checked "patch $($patch.Name)"
+        git -C $src apply --whitespace=nowarn $patch.FullName; Invoke-Checked "patch $($patch.Name)"
     }
 }
 # Both front ends share one data folder (base save, libraries, database), a copy of the UI's.
@@ -43,20 +43,21 @@ if (-not (Test-Path "$run\Data")) { Copy-Item -Recurse "$src\PowerUp\PowerUp.Ele
 
 if ($Ui) {
     # The Electron UI's web build, served by its own ASP.NET backend; no Electron needed.
-    $ui = "$src\PowerUp\PowerUp.ElectronUI"
-    Push-Location "$ui\electron"
+    $uiProject = "$src\PowerUp\PowerUp.ElectronUI"
+    Push-Location "$uiProject\electron"
     try {
-        if (-not (Test-Path node_modules)) { cmd /c "npm ci --ignore-scripts --no-audit --no-fund"; Invoke-Checked 'npm ci' }
-        cmd /c "npm run build"; Invoke-Checked 'npm run build'
+        if (-not (Test-Path node_modules)) { cmd /c "npm ci --ignore-scripts --no-audit --no-fund 2>&1"; Invoke-Checked 'npm ci' }
+        cmd /c "npm run build 2>&1"; Invoke-Checked 'npm run build'
     } finally {
         Pop-Location
     }
-    & $dotnet build "$ui\PowerUp.ElectronUI.csproj" -c Release -o "$work\bin-ui" | Select-Object -Last 3 | Out-Host
+    & $dotnet build "$uiProject\PowerUp.ElectronUI.csproj" -c Release -o "$work\bin-ui" | Select-Object -Last 3 | Out-Host
     Invoke-Checked 'dotnet build'
     Start-Process 'http://127.0.0.1:5123/'
     Push-Location $run
     try {
-        & "$work\bin-ui\PowerUp.ElectronUI.exe" --urls http://127.0.0.1:5123 --contentRoot $ui "--DataDirectory=$run\Data"
+        $ErrorActionPreference = 'Continue'  # the server logs to stderr too; that is not a failure
+        & "$work\bin-ui\PowerUp.ElectronUI.exe" --urls http://127.0.0.1:5123 --contentRoot $uiProject "--DataDirectory=$run\Data"
     } finally {
         Pop-Location
     }

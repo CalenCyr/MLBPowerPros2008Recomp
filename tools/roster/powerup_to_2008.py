@@ -2,26 +2,32 @@
 Pros 2008 roster mod.
 
 2008 keeps the 2007 save's roster block inside project.bin's game_data.pack, at 0x20: 1500 player
-records of 0xB0 bytes, lineups, free agents and 32 teams of 0x140, 0x43E80 bytes in all (the 2007
-save holds the same block at 0x68C74). Teams, lineups and free agents are copied as they are; player
-records are rebuilt field by field, because 2008 moved part of the record (see
-tools/roster/align_2007_2008.py and docs/roster-2008.md):
+records of 0xB0 bytes, then lineups, free agents and 32 teams of 0x140, 0x43E80 bytes in all (the
+2007 save holds the same block at 0x68C74). Player records are rebuilt field by field, because 2008
+moved part of the record (see tools/roster/align_2007_2008.py and docs/roster-2008.md):
   - up to 0x5C and 0x60..0x6F (names, number, appearance, fielding capabilities, hot zones,
-    batting side, ratings) are unchanged;
+    batting side, ratings) are unchanged, except the face: 2008 inserted faces, so 2007's ids move
+    by 0 to 12 (face_2008);
   - batting and pitching forms grew to 9 bits, which moves position and the P/C capabilities by
     2 bits;
   - the second "hitting versus lefty" field is gone, so 0x70..0x77.6 moves back 3 bits; 2008 adds
     a bit at 0x77.4, so from 0x77.7 (pivot man, pull hitter, pitching block) it is back 2 bits;
   - birth date moves back 12 bits; years in the majors and season stats are at 0x85.2 (years),
     0x85.7 (AVG), 0x88.0 (RBI), 0x89.2 (HR); ERA stays at 0x8C.0;
-  - 0x8C..0x93 and the pitch arsenal (0x94..) are unchanged, except the voice id (2008 renumbered
-    the voices; left at 0).
-Bits PowerUp has no name for travel with their zone, so nothing the game stores is dropped. The
-per-bit evidence is in docs/roster-2008.md. A player who is also in the original 2008 roster (same
-first and last name) starts from his 2008 record, so what only 2008 has (his voice, the bits 2008
-added) survives, and keeps his 2008 values for the bits PowerUp has no name for (PowerUp cannot edit
-them and fills them from whatever player had that slot in its base save); everyone else starts from
-zeros.
+  - 0x8C..0x93 and the pitch arsenal (0x94..) are unchanged; the voice id keeps its place but
+    2008 renumbered the voices, so a 2007 voice id is dropped.
+Bits PowerUp has no name for travel with their zone, so nothing the game stores is dropped.
+
+A player who is also in the original 2008 roster (same name and birthday; when those repeat, as with
+2008's two "Great Harris", the same id decides) starts from his 2008 record: what only 2008 has (his
+voice, the bits 2008 added) survives, and so do his 2008 values for the bits PowerUp has no name for
+(PowerUp cannot edit them and fills them from whatever player had that slot in its base save) and
+the bytes after a long name's special id (u16 >= 0xF00 at 0x02). Everyone else starts from zeros;
+unused slots get 2008's empty record. Lineups, free agents and teams come from the save, with 2008's
+empty entries and the entry bits PowerUp does not model (convert_rest).
+
+A mod whose mod.toml says roster_ids = "2008" (PowerUp+'s 2008 export) has 2008 voice and face ids
+in its .dat already, so they are copied as they are.
 
 The output is a mod folder: <out>/mod.toml and <out>/project/game_data.pack, built on the player's
 own game_data.pack (extract it with tools/projectbin.py), so nothing from the game ships.
@@ -37,7 +43,12 @@ SLOTS = 1500
 BLOCK = 0x43E80
 SAVE_BLOCK_2007 = 0x68C74
 PACK_BLOCK_2008 = 0x20
-NAMES = slice(0x16, 0x4E)                # last and first name, the key between rosters
+NAMES = slice(0x16, 0x4E)                # last and first name
+# The rest of the block, after the players: 32 lineups of 0x48 (18 entries of 4 bytes: id, position),
+# 200 free agents of 8 bytes, 32 teams of 0x140 (40 entries of 8 bytes).
+LINEUPS, FREE_AGENTS, TEAMS = 0x40740, 0x41040, 0x41680
+# Bits of a team entry that PowerUp's GSTeamPlayerEntry has no field for.
+TEAM_ENTRY_UNMODELED = (0x00, 0x00, 0x38, 0x3F, 0xFF, 0xF0, 0xE3, 0x00)
 
 # PowerUp GSPlayer fields: name -> (bit position in 2007, bits). Parsed from the PowerUp sources at
 # runtime when available; this table only lists the fields whose 2008 position differs.
@@ -103,14 +114,48 @@ def set_bits(record, bit, count, field):
     record[:] = value.to_bytes(len(record), "big")
 
 
+def person_2008(record):
+    return bytes(record[NAMES]), get_bits(record, 0x420, 4), get_bits(record, 0x424, 5)
+
+
+def person_2007(record):
+    return bytes(record[NAMES]), get_bits(record, 0x42B, 4), get_bits(record, 0x42F, 5)
+
+
 def originals_by_name(block):
-    """Player records of a roster block keyed by their name bytes (first one wins)."""
+    """Player records of a 2008 roster block by name and birthday (a list: they can repeat)."""
     found = {}
     for i in range(SLOTS):
         record = block[i * PLAYER:(i + 1) * PLAYER]
         if record[0] or record[1]:
-            found.setdefault(bytes(record[NAMES]), bytes(record))
+            found.setdefault(person_2008(record), []).append(bytes(record))
     return found
+
+
+def convert_rest(old, original):
+    """Lineups, free agents and teams of a PowerUp save (`old`, from 0x40740 of the block) over the
+    original 2008 ones. Entries PowerUp leaves blank get 2008's empty entry, used free agents 2008's
+    filler bytes; a team entry for the same member keeps the original's bits PowerUp does not model,
+    and a lineup entry with the same player and position keeps the original's flags."""
+    rest = bytearray(old)
+    def entries(start, count, size):
+        return [start - LINEUPS + i * size for i in range(count)]
+    fa = entries(FREE_AGENTS, 200, 8)
+    teams = entries(TEAMS, 32 * 40, 8)
+    empty = next((original[o:o + 8] for o in fa + teams if original[o:o + 2] == b"\0\0"), None)
+    used_fa = next((original[o:o + 8] for o in fa if original[o:o + 2] != b"\0\0"), None)
+    for o in fa + teams:
+        if rest[o:o + 2] == b"\0\0" and empty:
+            rest[o:o + 8] = empty
+        elif o < TEAMS - LINEUPS and used_fa:
+            rest[o + 2:o + 8] = used_fa[2:]
+        elif o >= TEAMS - LINEUPS and rest[o:o + 2] == original[o:o + 2]:
+            for k, mask in enumerate(TEAM_ENTRY_UNMODELED):
+                rest[o + k] = rest[o + k] & ~mask | original[o + k] & mask
+    for o in entries(LINEUPS, 32 * 18, 4):
+        if rest[o:o + 2] == original[o:o + 2] and rest[o + 2] >> 4 == original[o + 2] >> 4:
+            rest[o:o + 4] = original[o:o + 4]
+    return bytes(rest)
 
 
 def unnamed_2008(fields):
@@ -121,10 +166,36 @@ def unnamed_2008(fields):
     return copied + [target(name, bit, 1)[0] for name, bit, _ in fields if name.startswith("Bit_")]
 
 
-def convert_player(old, fields, originals=None):
+VOICE = (0x492, 14)                      # VoiceId, same place in both games
+FACE = (0x2A4, 8)
+
+
+def face_2008(face):
+    """2007 face id -> 2008's. 2008 inserted faces after 27, 105, 160 and 176 (707 of the 729 players
+    in both games match with this; the rest got another face)."""
+    return face + (0 if face < 28 else 1 if face < 106 else 2 if face < 161 else 7 if face < 177 else 12)
+
+
+def face_2007(face):
+    """2008 face id -> 2007's; a face 2008 added becomes the 2007 one before it."""
+    return max(f for f in range(256) if face_2008(f) <= face)
+
+
+def empty_record(block):
+    """2008 fills unused slots with a fixed record (zeros plus "no value" stats), not zeros."""
+    for i in range(SLOTS):
+        record = block[i * PLAYER:(i + 1) * PLAYER]
+        if record[0] == 0 and record[1] == 0:
+            return bytes(record)
+    return bytes(PLAYER)
+
+
+def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAYER)):
     if old[0] == 0 and old[1] == 0:
-        return bytes(PLAYER)
-    base = (originals or {}).get(bytes(old[NAMES]))
+        return empty
+    same = (originals or {}).get(person_2007(old), [])
+    # Repeated name and birthday (2008 has two "Great Harris"): the one with the same id.
+    base = next((o for o in same if o[:2] == old[:2]), same[0] if same else None)
     new = bytearray(base or bytes(PLAYER))
     new[:0x5C] = old[:0x5C]              # id, names, flags, team, number, appearance
     new[0x60:0x6F] = old[0x60:0x6F]      # capabilities, hot zones, side, ratings
@@ -139,15 +210,23 @@ def convert_player(old, fields, originals=None):
             # PowerUp stores "opening day 2007 minus age"; 2008's calendar is a year later.
             value += 1
         set_bits(new, place[0], place[1], value)
+    if ids_2008:
+        set_bits(new, *VOICE, get_bits(old, *VOICE))
+    else:
+        set_bits(new, *FACE, face_2008(get_bits(old, *FACE)))
     if base:
         for b in unnamed_2008(fields):
             set_bits(new, b, 1, get_bits(base, b, 1))
+        if new[2:4] == base[2:4] and int.from_bytes(base[2:4], "big") >= 0xF00:
+            new[4:0x16] = base[4:0x16]
     return bytes(new)
 
 
 def revert_player(new, fields, base=None):
-    """2008 record back to the 2007 layout (PowerUp+ imports the 2008 roster this way). Fields 2008
-    dropped (second "versus lefty", voice) come from `base`, the 2007 record of the same player."""
+    """2008 record back to the 2007 layout (PowerUp+ imports the 2008 roster this way). The face goes
+    back to 2007's numbering, which PowerUp's editor shows; the voice keeps 2008's id (same place,
+    2008 numbering); the second "versus lefty", which 2008 dropped, comes from `base`, the 2007
+    record of the same player."""
     if new[0] == 0 and new[1] == 0:
         return bytes(PLAYER)
     old = bytearray(base or bytes(PLAYER))
@@ -163,6 +242,8 @@ def revert_player(new, fields, base=None):
         if name == "BirthYear" and value:
             value -= 1
         set_bits(old, bit, count, value)
+    set_bits(old, *VOICE, get_bits(new, *VOICE))
+    set_bits(old, *FACE, face_2007(get_bits(new, *FACE)))
     return bytes(old)
 
 
@@ -226,11 +307,14 @@ def main(argv):
     if pack[:8] != b"PACKWII " or len(pack) != PACK_BLOCK_2008 + BLOCK:
         sys.exit("not MLB Power Pros 2008's game_data.pack")
     originals = originals_by_name(pack[PACK_BLOCK_2008:])
-    players = b"".join(convert_player(old_block[i * PLAYER:(i + 1) * PLAYER], fields, originals)
+    empty = empty_record(pack[PACK_BLOCK_2008:])
+    manifest = save.parent.parent / "mod.toml"
+    ids_2008 = manifest.is_file() and re.search(r'(?m)^roster_ids\s*=\s*"2008"', manifest.read_text("utf-8")) is not None
+    players = b"".join(convert_player(old_block[i * PLAYER:(i + 1) * PLAYER], fields, originals, ids_2008, empty)
                        for i in range(SLOTS))
     pack[PACK_BLOCK_2008:PACK_BLOCK_2008 + SLOTS * PLAYER] = players
     rest = SLOTS * PLAYER
-    pack[PACK_BLOCK_2008 + rest:PACK_BLOCK_2008 + BLOCK] = old_block[rest:]   # lineups, free agents, teams
+    pack[PACK_BLOCK_2008 + rest:PACK_BLOCK_2008 + BLOCK] = convert_rest(old_block[rest:], pack[PACK_BLOCK_2008 + rest:PACK_BLOCK_2008 + BLOCK])
     (out / "project").mkdir(parents=True, exist_ok=True)
     (out / "project" / "game_data.pack").write_bytes(pack)
     (out / "mod.toml").write_text(

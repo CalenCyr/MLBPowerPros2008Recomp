@@ -23,7 +23,7 @@ Se obtuvieron comparando los 729 jugadores que están en el roster base de ambos
 
 | Zona (bits de 2007) | En 2008 |
 |---|---|
-| 0x00–0x5B (id, nombres, número, equipo, apariencia) | igual |
+| 0x00–0x5B (id, nombres, número, equipo, apariencia) | igual, salvo la cara (ver abajo) |
 | forma de bateo y de lanzamiento | pasan de 8 a 9 bits (0x5C.4 y 0x5D.5) |
 | posición principal y capacidades de P y C | +2 bits |
 | 0x60–0x6E (capacidades de defensa, zonas calientes, lado de bateo, ratings) | igual |
@@ -32,59 +32,87 @@ Se obtuvieron comparando los 729 jugadores que están en el roster base de ambos
 | 0x77.7–0x81 (pivot man, pull hitter, bloque de pitcher) | −2 bits; 2008 agrega un bit nuevo en 0x77.4 |
 | fecha de nacimiento | −12 bits; el año se suma +1 porque PowerUp calcula desde el día inaugural de 2007 |
 | años en las mayores y estadísticas | años en 0x85.2, AVG en 0x85.7, RBI en 0x88.0, HR en 0x89.2; ERA sigue en 0x8C.0 |
-| 0x8C–0x93 | igual, salvo la voz (2008 renumeró las voces; queda en 0) |
+| 0x8C–0x93 | igual; la voz (0x92.2, 14 bits) sigue en su sitio pero con otra numeración |
 | repertorio (0x94–) | igual |
 
 Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como campos de un bit. Por ejemplo, 0x76.0 y 0x76.1, 0x77.7, 0x80.7, 0x8D.6–0x8E.3 y 0x92.0: 2008 los conserva en la posición esperada, con φ ≈ 1.
 
 **Cómo se confirmó:** `align_2007_2008.py --bits` calcula, para cada bit de 2008, la correlación φ con los bits de 2007 desplazados de 0 a 4 posiciones. Así salen claras las banderas raras que el voto por coincidencias no distingue:
 - abridor, relevista y cerrador son campos de 3 bits (0x62.5, 0x63.0 y 0x63.3) y siguen en su sitio (φ 0,82, 0,83 y 0,70);
-- el límite entre −3 y −2 está en 0x77.7, no en 0x78.2 como se creía antes. Con el límite viejo, "pull hitter" caía en 0x77.6, donde 2008 tiene un solo jugador marcado; en 0x77.7 hay 42 (φ 0,37);
-- frente al conversor anterior, los bits que coinciden con el roster real de 2008 suben de 88,9 % a 89,3 %, y los 1 reproducidos, de 61,7 % a 64,5 %.
+- el límite entre −3 y −2 está en 0x77.7. Con un límite en 0x78.2, "pull hitter" caía en 0x77.6, donde 2008 tiene un solo jugador marcado; en 0x77.7 hay 42.
+- las habilidades se comprueban con los jugadores que las tienen en 2008:
+  - "push hitter" (0x71.0): Ichiro, Joe Mauer, Todd Helton, Michael Young, Mark Loretta;
+  - "free swinger" (0x71.7): Alfonso Soriano, José Guillén, Iván Rodríguez, Torii Hunter, Garret Anderson;
+  - "pull hitter" (0x77.7): Jason Giambi, Alex Rodríguez, Gary Sheffield, Andruw Jones, Carlos Peña.
+- "table setter" (0x70.0) no lo tiene ningún jugador de 2008; el conversor lo escribe en su sitio.
 
-**Todavía dudosos:**
-- "table setter": en 2008 ese bit vale 0 para los 1.004 jugadores.
-- "push hitter" (φ 0,20) y "free swinger" (φ 0,07): están en medio de la zona −3, así que la posición es coherente, pero 2008 los asignó a otros jugadores.
-- La voz.
+**Caras:** 2008 insertó caras nuevas, así que los números de 2007 se corren por tramos:
+
+| Cara 2007 | 0–27 | 28–105 | 106–160 | 161–176 | 177 en adelante (caras genéricas) |
+|---|---|---|---|---|---|
+| Cara 2008 | igual | +1 | +2 | +7 | +12 |
+
+Con esta tabla coinciden 707 de los 729 jugadores comunes; sin ella, solo 26. Los demás cambiaron de cara entre juegos.
+
+**Voces:** el campo está en el mismo lugar, pero 2008 renumeró parte de las voces: Erstad sigue con la 2051 y Accardo pasó de la 2056 a la 2057. Por eso un número de voz de 2007 no sirve en 2008.
 
 ## Usarlo
 
 **Como mod (lo normal):** una carpeta `mods\<nombre>\roster\` con el `.dat` de PowerUp / PowerUp+ (por ejemplo `2025_MLB_Rosters.dat`) y un `mod.toml` opcional.
 - Al activarlo en MODS y pulsar JUGAR, el juego extrae el `game_data.pack` de **tu** disco, lo convierte con el roster del `.dat` y lo sirve dentro de un `project.bin` modificado.
-- La conversión se guarda en `UserData\Cache\mods\roster\<mod>\`. Se rehace si cambia el `.dat` o la tabla de campos del conversor, porque el nombre del archivo lleva un hash de esa tabla.
+- La conversión se guarda en `UserData\Cache\mods\roster\<mod>\`.
+  - Se rehace si cambia el `.dat`, el conversor o `roster_ids`.
+  - Las conversiones viejas se borran.
 - El mod nunca lleva archivos del juego.
-- Si un jugador del `.dat` también está en el roster original de 2008 (mismo nombre y apellido), parte de su registro de 2008. Así conserva lo que solo existe en 2008 (su voz, los bits nuevos) y sus valores de 2008 en los bits que PowerUp no nombra. PowerUp no puede editar esos bits y los rellena con lo que tuviera ese hueco en su partida base. Los demás jugadores parten de ceros.
+- Un jugador del `.dat` que también está en el roster original de 2008 parte de su registro de 2008.
+  - Se reconoce por nombre, apellido y cumpleaños. Si eso se repite, decide el número de jugador: 2008 tiene dos "Chris Young", dos "Tony Peña" y dos "Great Harris".
+  - Así conserva lo que solo existe en 2008 (su voz, los bits nuevos) y sus valores de 2008 en los bits que PowerUp no nombra. PowerUp no puede editar esos bits y los rellena con lo que tuviera ese hueco en su partida base.
+  - Los demás jugadores parten de ceros.
+- Los huecos sin jugador reciben el registro vacío de 2008, que no es todo ceros.
+- Alineaciones, agentes libres y equipos salen del `.dat`, con estos ajustes:
+  - las entradas vacías llevan el patrón vacío de 2008;
+  - las entradas de un mismo jugador conservan los bits que PowerUp no modela.
+- Un `.dat` de 2007 (como `2025_MLB_Rosters.dat`) trae caras y voces con números de 2007.
+  - Las caras se pasan a 2008 con la tabla de arriba.
+  - Las voces de 2007 se descartan; los jugadores que también están en 2008 mantienen la suya.
+- Si el `mod.toml` dice `roster_ids = "2008"` (lo escribe la exportación de PowerUp+), caras y voces ya vienen en números de 2008 y se copian tal cual.
 
 **Con PowerUp+ (editar el roster de 2008):** el parche `tools/patches/powerupplus-2008.patch` le agrega a PowerUp+ soporte para 2008.
 - **Abrir:** en *Import Roster → Game Save* se puede elegir el `project.bin` del juego (`<instalación>\Data\files\project.bin`) o un `game_data.pack`.
   - PowerUp+ lo convierte al formato de 2007 y lo abre como un roster más.
+  - Las caras pasan a la numeración de 2007, la que muestra su editor.
   - Para los nombres largos que añadió 2008 (Saltalamacchia, Chamberlain…), el parche agrega sus códigos a `SpecialSavedName_Library.csv`.
+  - La lista de agentes libres tiene sitio para 200 jugadores; antes PowerUp leía solo 15, y 2008 usa 25.
   - El `game_data.pack` queda guardado en su carpeta de datos, junto a la partida base. Solo vive en la PC del jugador.
-- **Exportar:** *Export Roster → MLB Power Pros 2008 Mod* descarga un zip con `<nombre>\mod.toml` y `<nombre>\roster\<nombre>.dat`. Se descomprime en `mods\` y se activa en MODS.
-  - El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado".
-  - Por eso, en cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, la exportación escribe el valor original de 2008.
+- **Exportar:** *Export Roster → MLB Power Pros 2008 Mod* descarga un zip con `<nombre>\mod.toml` y `<nombre>\roster\<nombre>.dat`. Se descomprime en `mods\` y se activa en MODS. A diferencia de la exportación de 2007:
+  - **Un registro por persona.** Los equipos All-Star apuntan al mismo jugador, como en el juego, en vez de crear copias. Las copias que trae un roster importado de una exportación de 2007 se unen al jugador de su equipo regular.
+  - **Números de jugador originales.** Los jugadores que vienen del roster de 2008 conservan su número de jugador y, con él, su hueco y su salario. Los nuevos toman el número que elige PowerUp por salario o el primero libre.
+  - **Huecos vacíos y orden.** Los huecos sobrantes quedan vacíos, en vez de llevar jugadores de la partida base de 2007. Los equipos mantienen su orden, con los de grandes ligas primero; la exportación de 2007 los reordenaba con un `OrderBy` encadenado.
+  - **Valores sin tocar.** El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado". En cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, se escribe el valor original de 2008.
+  - **Caras y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara sin tocar vuelve a su número exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
 - **Abrir el editor:** `tools/powerupplus.ps1 -Ui` compila PowerUp+ con todo dentro de `local\` y lo abre en el navegador (`http://127.0.0.1:5123`).
   - Usa la versión web de su interfaz, que sirve su propio backend, así que no necesita Electron.
   - Requiere el SDK de .NET 10 en `local\tools\dotnet10` y Node.
-  - Un roster importado es de solo lectura. Para editarlo se hace *Copy Existing Roster* y se trabaja sobre la copia; la conservación de valores originales también funciona en la copia.
+  - Un roster importado es de solo lectura. Para editarlo se hace *Copy Existing Roster* y se trabaja sobre la copia.
 - **Línea de comandos:** el mismo script sin `-Ui` ejecuta los comandos de PowerUp+. Ejemplos:
   - `read-game-save --in-file <project.bin> --name "MLB 2008"`
   - `write-game-save --roster-id N --mlb2008-mod --out-dir <carpeta mods>`
 - **Verificado:**
-  - Abrir el roster de 2008 y exportarlo sin cambios lo devuelve igual. Solo cambian los id de jugador, que PowerUp reasigna. También cambian los bytes que sobran tras el código de los nombres largos, que el juego no lee.
-  - En el juego, MLB Life muestra a los Red Sox de 2008 (Beckett, ERA 3.27, 97 mph).
-  - Un cambio hecho en PowerUp+ (el ERA de Beckett, de 3.27 a 1.23) llega al juego.
-  - La exportación desde la interfaz (probada en el navegador: *Import Roster* con el `project.bin` de 406 MB y *Export → MLB Power Pros 2008 Mod*) y desde la línea de comandos dan el mismo archivo.
+  - **Ida y vuelta exacta.** Importar el roster de 2008 y exportarlo sin cambios da, tras la conversión del juego, un `game_data.pack` **idéntico byte a byte** al original. Se comprobó por la línea de comandos, con la API de la interfaz levantada desde un clon limpio con el parche (`-Ui`) y en el runtime.
+  - **En el juego.** MLB Life muestra a los Red Sox de 2008 (Beckett, ERA 3.27, 97 mph).
+  - **Las ediciones llegan.** Un cambio hecho en PowerUp+ (el ERA de Beckett, de 3.27 a 1.23) llega al juego.
+  - **Roster 2025.** El de PowerUp+ exportado como mod de 2008 da las mismas caras que el `.dat` directo (1.082 de 1.082), sin voces vacías y sin copias All-Star. Pasa de 1.281 a 1.209 registros.
+  - **Runtime == Python.** La conversión del runtime es igual byte a byte a la de `powerup_to_2008.py` en los tres casos: roster de 2008 ida y vuelta, 2025 exportado y 2025 en `.dat` directo.
 - **Límites:**
-  - PowerUp exporta solo jugadores con equipo o en la lista de agentes libres. Los 10 jugadores sueltos del roster de 2008 (Matt Morris, Tomas Perez…) se pierden.
-  - Las caras de 2008 no coinciden con la lista de caras de 2007 que muestra PowerUp+.
+  - El roster 2025 de PowerUp+ pone a algunos jugadores traspasados en dos equipos regulares (Ramón Laureano en BAL y SD). Esos quedan como dos registros, igual que en sus datos.
+  - La elección de voz por parecido de nombre es aproximada (Aaron Judge → la de Derek Jeter). Es el mismo criterio que usa PowerUp+ en 2007.
+  - El editor de PowerUp+ muestra la lista de caras de 2007. Las caras que solo existen en 2008 se ven como la de 2007 anterior, pero se exportan con su número exacto si no se tocan.
 
-**A mano:** `python tools/roster/powerup_to_2008.py <roster.dat> <game_data.pack original> <carpeta del mod>` genera el mod con `project/game_data.pack`. El resultado es byte a byte igual al del runtime. `tools/projectbin.py extract` saca el `game_data.pack` original.
+**A mano:** `python tools/roster/powerup_to_2008.py <roster.dat> <game_data.pack original> <carpeta del mod>` genera el mod con `project/game_data.pack`. El resultado es byte a byte igual al del runtime y lee `roster_ids` del `mod.toml` que esté junto a la carpeta `roster`. `tools/projectbin.py extract` saca el `game_data.pack` original.
 
-La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicompiled-mods`) sale de `powerup_to_2008.py --emit-cpp`, que lee `GSPlayer.cs` de PowerUp.
+La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicompiled-mods`) sale de `powerup_to_2008.py --emit-cpp`, y la de PowerUp+ (`PowerPros2008Fields.cs`) de `--emit-cs`. Las dos se generan desde `GSPlayer.cs` de PowerUp.
 
 ## Pendiente
 
-- Confirmar "table setter", "push hitter", "free swinger" y la tabla de voces, usando el modo Edit de 2008 sobre un jugador conocido.
-- Los jugadores de 2025 usan las caras y formas de 2007 que eligió PowerUp+. Las caras nuevas de 2008 no se aprovechan todavía: hace falta una tabla de caras de 2008 para el editor.
-- Conservar los id de jugador de 2008 en los jugadores importados, en lugar de dejar que PowerUp los reasigne según el salario.
+- Elegir voces con la tabla real de voces de 2008: nombres de los clips, que hoy salen del roster.
+- Una lista de caras de 2008 para el editor de PowerUp+.
