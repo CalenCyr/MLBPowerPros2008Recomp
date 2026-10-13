@@ -1,0 +1,100 @@
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 3651477..31e56b7 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -459,6 +459,9 @@ Result Run(int argc, char** argv) {
+     for (int v = 0; v <= 100; v += 10) volume.choices.push_back(std::to_string(v) + "%");
+     volume.value = std::clamp(static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 10.0f)), 0, 10);
+     Option mute{"SILENCIAR", "Silencia todo el audio del juego.", YesNo(), RuntimeConfigFile::AudioMuted(false) ? 1 : 0};
++    // The runtime re-reads these after the launcher (main.cpp, settings_overlay::InitializeRuntimeSettings),
++    // so Play keeps this window; only the API, Wii Remotes and mods need a new process.
++    display.restart = resolution.restart = aspect.restart = fps.restart = volume.restart = mute.restart = false;
+     Option wiimote{"WII REMOTE", "Usar Wii Remotes reales por Bluetooth. Déjalo en No si solo usas mando o teclado.",
+                    YesNo(), RuntimeConfigFile::WiiRemotesEnabled(true) ? 1 : 0};
+     Option launcherOption{"MOSTRAR AL INICIAR",
+@@ -529,7 +532,10 @@ Result Run(int argc, char** argv) {
+         }
+         const std::string label = o.label;
+         if (label == api.label) RuntimeConfigFile::SetGraphicsApi(apis[static_cast<size_t>(o.value)].configName);
+-        if (label == display.label) RuntimeConfigFile::SetDisplayMode(kDisplayModes[static_cast<size_t>(o.value)]);
++        if (label == display.label) {
++            RuntimeConfigFile::SetDisplayMode(kDisplayModes[static_cast<size_t>(o.value)]);
++            aurora_set_display_mode(static_cast<AuroraDisplayMode>(o.value));  // same order as kDisplayModes
++        }
+         if (label == resolution.label) RuntimeConfigFile::SetResolutionMultiplier(kResolutions[static_cast<size_t>(o.value)]);
+         if (label == aspect.label) RuntimeConfigFile::SetForceAspect169(o.value != 0);
+         if (label == fps.label) RuntimeConfigFile::SetShowFps(o.value != 0);
+diff --git a/runtime/src/main.cpp b/runtime/src/main.cpp
+index 1991f8c..34d05a4 100644
+--- a/runtime/src/main.cpp
++++ b/runtime/src/main.cpp
+@@ -1366,7 +1366,7 @@ int RuntimeMain(int argc, char** argv) {
+         auroraConfig.logCallback = &RuntimeAuroraLogCallback;
+         auroraConfig.logLevel = LOG_DEBUG;
+         const bool configWidescreen = RuntimeConfigFile::WidescreenEnabled(true);
+-        const bool forceAspect169 = RuntimeConfigFile::ForceAspect169Enabled();
++        bool forceAspect169 = RuntimeConfigFile::ForceAspect169Enabled();
+         auroraConfig.windowWidth = (configWidescreen || forceAspect169) ? 854 : 640;
+         auroraConfig.windowHeight = 480;
+         auroraConfig.windowWidth = RuntimeConfigFile::WindowWidth(auroraConfig.windowWidth);
+@@ -1386,7 +1386,7 @@ int RuntimeMain(int argc, char** argv) {
+         mods::Apply(auroraConfig);
+         // No vsync knob: aurora always configures a non-blocking present mode.
+         auroraConfig.desiredBackend = BACKEND_AUTO;
+-        const float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
++        float resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+         ConfigureMkwDynamicAspect(configWidescreen, forceAspect169,
+                                   auroraConfig.windowWidth, auroraConfig.windowHeight);
+         VISetFrameBufferScale(resolutionMultiplier);
+@@ -1460,6 +1460,13 @@ int RuntimeMain(int argc, char** argv) {
+             }
+             return 0;
+         }
++        // Play keeps this process: pick up what the launcher changed after the setup above (the
++        // overlay re-reads the rest in InitializeRuntimeSettings).
++        if (RuntimeConfigFile::ForceAspect169Enabled() != forceAspect169) {
++            forceAspect169 = !forceAspect169;
++            ConfigureMkwDynamicAspect(configWidescreen, forceAspect169, auroraConfig.windowWidth, auroraConfig.windowHeight);
++        }
++        resolutionMultiplier = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+         aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
+         GxGuestWrite::InstallAuroraHooks();
+         UpdateMkwDynamicAspectSurface(auroraInfo.windowSize.native_fb_width,
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index a609e50..6fcbae0 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -99,7 +99,7 @@ int g_frameInterpolationMode = [] {
+         return 0;
+     }
+ }();
+-int g_displayMode = [] {
++int ConfiguredDisplayMode() {
+     const std::string mode = RuntimeConfigFile::DisplayMode("windowed");
+     if (mode == "borderless") {
+         return static_cast<int>(AURORA_DISPLAY_MODE_BORDERLESS);
+@@ -108,7 +108,8 @@ int g_displayMode = [] {
+         return static_cast<int>(AURORA_DISPLAY_MODE_EXCLUSIVE);
+     }
+     return static_cast<int>(AURORA_DISPLAY_MODE_WINDOWED);
+-}();
++}
++int g_displayMode = ConfiguredDisplayMode();
+ bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
+ bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
+ bool g_showFps = RuntimeConfigFile::ShowFps(true);
+@@ -1521,6 +1522,14 @@ void ApplyInputBlockState() {
+ } // namespace
+ 
+ void InitializeRuntimeSettings() noexcept {
++    // The pre-boot launcher saves these to Config.toml after the initializers above ran.
++    g_resolutionScale = RuntimeConfigFile::ResolutionMultiplier(1.0f);
++    VISetFrameBufferScale(g_resolutionScale);
++    g_audioVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 100.0f));
++    g_audioMuted = RuntimeConfigFile::AudioMuted(false);
++    g_displayMode = ConfiguredDisplayMode();
++    g_showFps = RuntimeConfigFile::ShowFps(true);
++    g_forceAspect169 = RuntimeConfigFile::ForceAspect169Enabled();
+     PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
+     InputBindings::Reload();
+     controller_mapping_wizard::LoadPersistedMappings();

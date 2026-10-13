@@ -623,3 +623,9 @@ No está validado píxel a píxel contra Dolphin.
   - En ventanas con otra proporción que el arte, los bordes muestran una copia difuminada y oscurecida, con una sombra suave. Antes se veía un trozo repetido del arte. El Setup hace lo mismo, con el difuminado calculado en la CPU.
   - Ganchos para pruebas sin teclado: `WIICOMPILED_LAUNCHER_ROW`, `WIICOMPILED_LAUNCHER_PAGE=tools` y `WIICOMPILED_LAUNCHER_ACTION=roster-editor`. Las teclas simuladas con `WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT` también leían el teclado real.
 - **Setup:** `Make-Payload.ps1` incluye PowerUp+ compilado (`tools/powerupplus.ps1 -Publish`, unos 113 MB) con su licencia, el commit y el parche. `LocalBuild.ps1` lo instala en `Game\powerupplus\`. El control de contenido del juego también rechaza `game_data.pack` y los `.dat` de rosters.
+
+## JUGAR sin cambiar de ventana (13 de octubre de 2026)
+
+- **Parche 26, `wiicompiled-launcher-live-settings`:** antes, cambiar cualquier ajuste en el launcher hacía que JUGAR cerrara la ventana y abriera otro proceso, porque el runtime lee la configuración antes de crear la ventana.
+  - Pantalla, resolución interna, forzar 16:9, mostrar FPS, volumen y silenciar ya no reinician: `main.cpp` y `settings_overlay::InitializeRuntimeSettings` los vuelven a leer de `Config.toml` después del launcher, igual que el menú F10 los cambia en vivo. El modo de pantalla se aplica al momento, en el propio launcher.
+  - Siguen reiniciando la API gráfica (hace falta otro renderer), el Wii Remote (pistas de SDL previas a su inicio) y los mods (aurora indexa las texturas y el disco al iniciar).
