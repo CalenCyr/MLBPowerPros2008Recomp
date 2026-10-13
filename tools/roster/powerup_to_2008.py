@@ -204,7 +204,7 @@ def empty_record(block):
     return bytes(PLAYER)
 
 
-def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAYER)):
+def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAYER), typical=None):
     if old[0] == 0 and old[1] == 0:
         return empty
     same = (originals or {}).get(person_2007(old), [])
@@ -234,7 +234,22 @@ def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAY
             set_bits(new, b, 1, get_bits(base, b, 1))
         if new[2:4] == base[2:4] and int.from_bytes(base[2:4], "big") >= 0xF00:
             new[4:0x16] = base[4:0x16]
+    elif ids_2008 and typical:
+        # PowerUp+'s 2008 export starts from a zeroed block: its new players take 2008's usual value
+        # of each bit PowerUp cannot name (0x4E-0x4F and 0x92.0 hold the lineup screen's names).
+        for b, value in typical.items():
+            set_bits(new, b, 1, value)
+    # game_data.pack is the base roster: nobody is edited (Unedited 0x50.3, IsEdited 0x50.4), and
+    # the game keeps edited players out of MLB Life. PowerUp+ marks every imported player edited.
+    set_bits(new, 0x283, 2, 0b10)
     return bytes(new)
+
+
+def typical_unnamed(block, fields):
+    """For each unnamed bit, the value most of 2008's players have."""
+    records = [block[i * PLAYER:(i + 1) * PLAYER] for i in range(SLOTS)]
+    records = [r for r in records if r[0] or r[1]]
+    return {b: int(sum(get_bits(r, b, 1) for r in records) * 2 > len(records)) for b in unnamed_2008(fields)}
 
 
 def revert_player(new, fields, base=None):
@@ -326,7 +341,8 @@ def main(argv):
     empty = empty_record(pack[PACK_BLOCK_2008:])
     manifest = save.parent.parent / "mod.toml"
     ids_2008 = manifest.is_file() and re.search(r'(?m)^roster_ids\s*=\s*"2008"', manifest.read_text("utf-8")) is not None
-    players = b"".join(convert_player(old_block[i * PLAYER:(i + 1) * PLAYER], fields, originals, ids_2008, empty)
+    typical = typical_unnamed(pack[PACK_BLOCK_2008:], fields)
+    players = b"".join(convert_player(old_block[i * PLAYER:(i + 1) * PLAYER], fields, originals, ids_2008, empty, typical)
                        for i in range(SLOTS))
     pack[PACK_BLOCK_2008:PACK_BLOCK_2008 + SLOTS * PLAYER] = players
     rest = SLOTS * PLAYER

@@ -1,0 +1,45 @@
+diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
+index 359eb98..c868c98 100644
+--- a/runtime/src/mods.cpp
++++ b/runtime/src/mods.cpp
+@@ -183,7 +183,7 @@ namespace {
+ // fields are moved with kRosterFields (tools/roster/powerup_to_2008.py, docs/roster-2008.md).
+ constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
+ constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
+-constexpr uint32_t kRosterConverter = 8;
++constexpr uint32_t kRosterConverter = 9;
+ 
+ uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
+     uint32_t value = 0;
+@@ -255,6 +255,17 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+             foundEmpty = true;
+         }
+     }
++    // PowerUp+'s 2008 export starts from a zeroed block, so its new players have none of the bits
++    // PowerUp cannot name; they take the value most 2008 players have (0x4E-0x4F and 0x92.0 are set
++    // on every one, and the lineup screen shows blank names without them).
++    std::vector<uint32_t> typical;
++    for (const uint16_t bit : kRosterUnnamed) {
++        size_t set = 0, players = 0;
++        for (const auto& [key, records] : originals) {
++            for (const unsigned char* record : records) set += GetBits(record, bit, 1), ++players;
++        }
++        typical.push_back(set * 2 > players ? 1u : 0u);
++    }
+     for (size_t i = 0; i < kRosterSlots; ++i) {
+         const unsigned char* from = oldBlock + i * kRosterPlayer;
+         unsigned char* to = newBlock + i * kRosterPlayer;
+@@ -293,7 +304,13 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+             if (std::memcmp(to + 2, base + 2, 2) == 0 && (to[2] << 8 | to[3]) >= 0xF00) {
+                 std::memcpy(to + 4, base + 4, 0x12);
+             }
++        } else if (ids2008) {
++            for (size_t k = 0; k < std::size(kRosterUnnamed); ++k) SetBits(to, kRosterUnnamed[k], 1, typical[k]);
+         }
++        // game_data.pack is the base roster, where no player is edited (Unedited 0x50.3 set,
++        // IsEdited 0x50.4 clear): PowerUp+ marks every imported player as edited, and the game keeps
++        // edited players out of MLB Life.
++        SetBits(to, 0x283, 2, 0b10);
+     }
+     // Lineups (32 x 18 entries of 4 bytes), free agents (200 x 8) and teams (32 x 40 x 8) come from
+     // the save, over 2008's: blank entries get 2008's empty entry, used free agents 2008's filler

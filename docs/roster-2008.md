@@ -84,6 +84,8 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - Las caras y la piel/ojos se pasan a 2008 con las tablas de arriba.
   - Las voces de 2007 se descartan; los jugadores que también están en 2008 mantienen la suya.
 - Si el `mod.toml` dice `roster_ids = "2008"` (lo escribe la exportación de PowerUp+), voz, cara y piel/ojos ya vienen en números de 2008 y se copian tal cual.
+  - Esa exportación parte de un bloque en ceros, así que sus jugadores nuevos no traen los bits que PowerUp no nombra. Reciben el valor que tiene la mayoría de los jugadores de 2008. Sin ellos (0x4E.1, 0x4E.2, 0x4F.0 y 0x92.0, que todo jugador de 2008 tiene en 1), la pantalla de alineación de Exhibition mostraba barras vacías y todos como "P".
+- Todos los jugadores quedan sin editar (`Unedited` 0x50.3 en 1, `IsEdited` 0x50.4 en 0), como en el roster base de 2008. El mapper de PowerUp+ marca como editado a todo jugador importado, y el juego deja fuera de MLB Life a los editados.
 
 **Con PowerUp+ (editar el roster de 2008):** el parche `tools/patches/powerupplus-2008.patch` le agrega a PowerUp+ soporte para 2008.
 - **Abrir:** en *Import Roster → Game Save* se puede elegir el `project.bin` del juego (`<instalación>\Data\files\project.bin`) o un `game_data.pack`.
