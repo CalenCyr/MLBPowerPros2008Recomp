@@ -41,7 +41,7 @@ El traductor y el runtime son los de Wiicompiled, fijados en `config/tools.lock.
 
 - Release: `tools/setup/Make-Payload.ps1` arma el Setup; `tools/setup/LocalBuild.ps1` es lo que corre en la PC del jugador.
 - Mods y roster: `docs/mods.md`, `docs/roster-2008.md`, `tools/projectbin.py`, `tools/roster/`, `tools/powerupplus.ps1`.
-- Ingeniería inversa: `docs/reverse-engineering-tools.md` (Ghidra, dtk), `function_data_refs.py`, `dol_to_elf.py`, `sample_host_thread.cpp`.
+- Ingeniería inversa: **`docs/ingenieria-inversa.md`** (referencia del juego por sistema; PDF con `tools/build_re_pdf.py`), `docs/reverse-engineering-tools.md` (Ghidra, dtk), `function_data_refs.py`, `dol_to_elf.py`, `sample_host_thread.cpp`.
 
 ## Estructura
 
