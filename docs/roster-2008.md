@@ -63,14 +63,18 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 - **Exportar:** *Export Roster → MLB Power Pros 2008 Mod* descarga un zip con `<nombre>\mod.toml` y `<nombre>\roster\<nombre>.dat`. Se descomprime en `mods\` y se activa en MODS.
   - El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado".
   - Por eso, en cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, la exportación escribe el valor original de 2008.
-- **Línea de comandos:** `tools/powerupplus.ps1` compila y ejecuta PowerUp+ con todo dentro de `local\` (necesita el SDK de .NET 10 en `local\tools\dotnet10`). Ejemplos:
+- **Abrir el editor:** `tools/powerupplus.ps1 -Ui` compila PowerUp+ con todo dentro de `local\` y lo abre en el navegador (`http://127.0.0.1:5123`).
+  - Usa la versión web de su interfaz, que sirve su propio backend, así que no necesita Electron.
+  - Requiere el SDK de .NET 10 en `local\tools\dotnet10` y Node.
+  - Un roster importado es de solo lectura. Para editarlo se hace *Copy Existing Roster* y se trabaja sobre la copia; la conservación de valores originales también funciona en la copia.
+- **Línea de comandos:** el mismo script sin `-Ui` ejecuta los comandos de PowerUp+. Ejemplos:
   - `read-game-save --in-file <project.bin> --name "MLB 2008"`
   - `write-game-save --roster-id N --mlb2008-mod --out-dir <carpeta mods>`
 - **Verificado:**
   - Abrir el roster de 2008 y exportarlo sin cambios lo devuelve igual. Solo cambian los id de jugador, que PowerUp reasigna. También cambian los bytes que sobran tras el código de los nombres largos, que el juego no lee.
   - En el juego, MLB Life muestra a los Red Sox de 2008 (Beckett, ERA 3.27, 97 mph).
   - Un cambio hecho en PowerUp+ (el ERA de Beckett, de 3.27 a 1.23) llega al juego.
-  - La exportación desde la interfaz y desde la línea de comandos dan el mismo archivo.
+  - La exportación desde la interfaz (probada en el navegador: *Import Roster* con el `project.bin` de 406 MB y *Export → MLB Power Pros 2008 Mod*) y desde la línea de comandos dan el mismo archivo.
 - **Límites:**
   - PowerUp exporta solo jugadores con equipo o en la lista de agentes libres. Los 10 jugadores sueltos del roster de 2008 (Matt Morris, Tomas Perez…) se pierden.
   - Las caras de 2008 no coinciden con la lista de caras de 2007 que muestra PowerUp+.
