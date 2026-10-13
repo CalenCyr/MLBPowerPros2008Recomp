@@ -1,0 +1,1602 @@
+diff --git a/aurora-main/include/dolphin/pad.h b/aurora-main/include/dolphin/pad.h
+index 69dfcd3..4478af9 100644
+--- a/aurora-main/include/dolphin/pad.h
++++ b/aurora-main/include/dolphin/pad.h
+@@ -227,6 +227,9 @@ void PADClearKeyBindings(u32 port);
+ void PADSetKeyboardActive(u32 port, BOOL active);
+ 
+ PADDeadZones* PADGetDeadZones(u32 port);
++// Per-player response curves; separate from the existing binary mapping ABI.
++typedef struct PADStickResponse { float mainSensitivity; float subSensitivity; } PADStickResponse;
++PADStickResponse* PADGetStickResponse(u32 port);
+ const char* PADGetButtonName(PADButton);
+ const char* PADGetNativeButtonName(u32 button);
+ const char* PADGetAxisName(PADAxis);
+diff --git a/aurora-main/include/dolphin/stick_response.hpp b/aurora-main/include/dolphin/stick_response.hpp
+new file mode 100644
+index 0000000..39b1657
+--- /dev/null
++++ b/aurora-main/include/dolphin/stick_response.hpp
+@@ -0,0 +1,20 @@
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++namespace aurora::pad {
++struct Stick { std::int8_t x{}, y{}; };
++// Shared by PADRead and the controller lab. Sensitivity changes the response
++// curve while preserving center, direction and full travel.
++inline Stick ShapeStick(int x, int y, int deadZone, bool enabled, float sensitivity) {
++    const double magnitude = std::hypot(double(x), double(y));
++    const double zone = enabled ? std::clamp(deadZone, 0, 32000) : 0;
++    if (magnitude <= zone) return {};
++    if (!std::isfinite(sensitivity)) sensitivity = 1.0f;
++    sensitivity = std::clamp(sensitivity, 0.5f, 2.0f);
++    const double travel = std::clamp((magnitude - zone) / (32767.0 - zone), 0.0, 1.0);
++    const double scale = std::pow(travel, 1.0 / sensitivity) * 127.0 / magnitude;
++    return {static_cast<std::int8_t>(std::clamp(int(std::lround(x * scale)), -127, 127)),
++            static_cast<std::int8_t>(std::clamp(int(std::lround(y * scale)), -127, 127))};
++}
++}
+diff --git a/aurora-main/lib/dolphin/pad/pad.cpp b/aurora-main/lib/dolphin/pad/pad.cpp
+index 1ddfa2b..f2fc02b 100644
+--- a/aurora-main/lib/dolphin/pad/pad.cpp
++++ b/aurora-main/lib/dolphin/pad/pad.cpp
+@@ -2,6 +2,8 @@
+ #include "../../input.hpp"
+ #include "../../internal.hpp"
+ #include <dolphin/pad.h>
++#include <dolphin/stick_response.hpp>
++#include <fstream>
+ #include <dolphin/si.h>
+ #include <SDL3/SDL_mouse.h>
+ #include <SDL3/SDL_joystick.h>
+@@ -13,6 +15,21 @@
+ #include <sys/stat.h>
+ 
+ namespace {
++std::array<PADStickResponse, PAD_CHANMAX> g_stickResponse{{{1, 1}, {1, 1}, {1, 1}, {1, 1}}};
++void LoadStickResponse() {
++  static bool loaded = false;
++  if (loaded) return;
++  loaded = true;
++  std::ifstream file(fs_path_from_string(aurora::g_config.userPath) / "stick_response.txt");
++  int version = 0;
++  if (!(file >> version) || version != 1) return;
++  for (auto& response : g_stickResponse) {
++    float main = 1, sub = 1;
++    if (!(file >> main >> sub)) break;
++    if (std::isfinite(main) && main >= .5f && main <= 2.f) response.mainSensitivity = main;
++    if (std::isfinite(sub) && sub >= .5f && sub <= 2.f) response.subSensitivity = sub;
++  }
++}
+ constexpr int32_t k_mappingsFileVersion = 3;
+ 
+ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsStandard{{
+@@ -718,6 +735,7 @@ static void apply_unblock_suppression(PADStatus& status, const u32 port, const b
+ }
+ 
+ u32 PADRead(PADStatus* status) {
++  LoadStickResponse();
+   if (!g_keyboardBindingsLoaded) {
+     g_keyboardBindingsLoaded = true;
+     load_keyboard_bindings();
+@@ -917,19 +935,13 @@ u32 PADRead(PADStatus* status) {
+ 
+       // Radial dead zone rescaled to the full range: the output grows smoothly from the edge of the
+       // zone instead of jumping to it, and diagonals are not snapped onto the axes.
+-      const auto applyStick = [](int x, int y, int deadZone, bool useDeadzones, s8& outX, s8& outY) {
+-        const double magnitude = std::hypot(static_cast<double>(x), static_cast<double>(y));
+-        const double zone = useDeadzones ? std::clamp(deadZone, 0, 32000) : 0;
+-        if (magnitude <= zone) {
+-          outX = outY = 0;
+-          return;
+-        }
+-        const double scale = std::min(1.0, (magnitude - zone) / (32767.0 - zone)) * 127.0 / magnitude;
+-        outX = static_cast<s8>(std::clamp(static_cast<int>(std::lround(x * scale)), -127, 127));
+-        outY = static_cast<s8>(std::clamp(static_cast<int>(std::lround(y * scale)), -127, 127));
++      const auto applyStick = [](int x, int y, int deadZone, bool useDeadzones, float sensitivity, s8& outX, s8& outY) {
++        const auto shaped = aurora::pad::ShapeStick(x, y, deadZone, useDeadzones, sensitivity);
++        outX = shaped.x;
++        outY = shaped.y;
+       };
+       applyStick(xlPos - xlNeg, ylPos - ylNeg, controller->m_deadZones.stickDeadZone,
+-                 controller->m_deadZones.useDeadzones, status[i].stickX, status[i].stickY);
++                 controller->m_deadZones.useDeadzones, g_stickResponse[i].mainSensitivity, status[i].stickX, status[i].stickY);
+ 
+       const auto xrPos = _get_axis_value(controller, PAD_AXIS_RIGHT_X_POS);
+       const auto xrNeg = _get_axis_value(controller, PAD_AXIS_RIGHT_X_NEG);
+@@ -937,7 +949,7 @@ u32 PADRead(PADStatus* status) {
+       const auto yrNeg = _get_axis_value(controller, PAD_AXIS_RIGHT_Y_NEG);
+ 
+       applyStick(xrPos - xrNeg, yrPos - yrNeg, controller->m_deadZones.substickDeadZone,
+-                 controller->m_deadZones.useDeadzones, status[i].substickX, status[i].substickY);
++                 controller->m_deadZones.useDeadzones, g_stickResponse[i].subSensitivity, status[i].substickX, status[i].substickY);
+ 
+       Sint16 tl = std::max(static_cast<Sint16>(0), _get_axis_value(controller, PAD_AXIS_TRIGGER_L));
+       Sint16 tr = std::max(static_cast<Sint16>(0), _get_axis_value(controller, PAD_AXIS_TRIGGER_R));
+@@ -1458,6 +1470,13 @@ void __PADWriteDeadZones(SDL_IOStream* file, // NOLINT(*-reserved-identifier)
+ }
+ 
+ void PADSerializeMappings() {
++  LoadStickResponse();
++  {
++    std::ofstream responseFile(fs_path_from_string(aurora::g_config.userPath) / "stick_response.txt");
++    responseFile << "1\n";
++    for (const auto& response : g_stickResponse)
++      responseFile << response.mainSensitivity << ' ' << response.subSensitivity << '\n';
++  }
+   const std::filesystem::path basePath = fs_path_from_string(aurora::g_config.userPath);
+ 
+   // Avoid std::views::values here: older Apple libc++ releases implement the
+@@ -1522,6 +1541,11 @@ PADDeadZones* PADGetDeadZones(const u32 port) {
+   return &controller->m_deadZones;
+ }
+ 
++PADStickResponse* PADGetStickResponse(u32 port) {
++  LoadStickResponse();
++  return port < g_stickResponse.size() ? &g_stickResponse[port] : nullptr;
++}
++
+ static constexpr std::array<std::pair<PADButton, std::string_view>, PAD_BUTTON_COUNT> skButtonNames = {{
+     {PAD_BUTTON_LEFT, "Left"sv},
+     {PAD_BUTTON_RIGHT, "Right"sv},
+diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
+index a4bc27b..06c2430 100644
+--- a/runtime/CMakeLists.txt
++++ b/runtime/CMakeLists.txt
+@@ -389,6 +389,9 @@ add_test(NAME mkw_runtime_config_tests COMMAND mkw_runtime_config_tests)
+ add_executable(mkw_match_benchmark_tests "${CMAKE_CURRENT_LIST_DIR}/tests/match_benchmark_tests.cpp")
+ target_include_directories(mkw_match_benchmark_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+ add_test(NAME mkw_match_benchmark_tests COMMAND mkw_match_benchmark_tests)
++add_executable(mkw_stick_response_tests "${CMAKE_CURRENT_LIST_DIR}/tests/stick_response_tests.cpp")
++target_compile_features(mkw_stick_response_tests PRIVATE cxx_std_20)
++add_test(NAME mkw_stick_response_tests COMMAND mkw_stick_response_tests)
+ 
+ add_executable(mkw_nand_save_tests "${CMAKE_CURRENT_LIST_DIR}/tests/nand_save_tests.cpp")
+ target_include_directories(mkw_nand_save_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+diff --git a/runtime/include/aurora_events.h b/runtime/include/aurora_events.h
+index e10c151..27d7e3d 100644
+--- a/runtime/include/aurora_events.h
++++ b/runtime/include/aurora_events.h
+@@ -70,7 +70,7 @@ inline void Flush(bool force = false) {
+ }
+ 
+ // Update cached Aurora window/framebuffer dimensions based on pending events.
+-inline void ProcessAuroraEvents(const AuroraEvent* events) {
++inline void ProcessAuroraEvents(const AuroraEvent* events, bool dispatchOverlay = true) {
+     if (!events) {
+         return;
+     }
+@@ -116,7 +116,7 @@ inline void ProcessAuroraEvents(const AuroraEvent* events) {
+         // apply it immediately after the next frame has been prepared.
+         g_mkwDynamicAspectSurfacePending.store(true, std::memory_order_release);
+     }
+-    settings_overlay::HandleEvents(events);
++    if (dispatchOverlay) settings_overlay::HandleEvents(events);
+ }
+ 
+ inline void ApplyPendingMkwDynamicAspectSurface() {
+diff --git a/runtime/include/launcher_controls.h b/runtime/include/launcher_controls.h
+new file mode 100644
+index 0000000..bcbc3f7
+--- /dev/null
++++ b/runtime/include/launcher_controls.h
+@@ -0,0 +1,17 @@
++#pragma once
++#include <aurora/event.h>
++namespace launcher_controls {
++void HandleEvents(const AuroraEvent* events);
++bool UsingGamepad();
++bool PlayStationPrompts();
++const char* AcceptPrompt();
++const char* BackPrompt();
++const char* TabPrompt();
++const char* DeviceLabel();
++// Draw inside a sized, scrollable parent. Returns true while capturing input
++// or exercising the stick, so launcher navigation cannot steal that input.
++bool Draw();
++bool Capturing();
++// Opt-in, bounded SDL virtual-gamepad integration probe; never runs normally.
++bool ProbeTick();
++}
+diff --git a/runtime/include/launcher_visuals.h b/runtime/include/launcher_visuals.h
+new file mode 100644
+index 0000000..d3170d2
+--- /dev/null
++++ b/runtime/include/launcher_visuals.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include "power_pros_ui.h"
++#include <string>
++namespace launcher_visuals {
++// Keep native focus/activation while drawing the launcher's original glossy
++// blue/orange pills over ImGui's button geometry.
++inline bool PillButton(const char* label, ImVec2 size = ImVec2(0,0), bool selected = false) {
++    const bool pressed = ImGui::Button(label,size);
++    const ImVec2 a=ImGui::GetItemRectMin(), b=ImGui::GetItemRectMax();
++    const bool highlight=selected || ImGui::IsItemHovered() || (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible);
++    const float u=ImGui::GetFontSize()/24.f;
++    power_pros_ui::Pill(ImGui::GetWindowDrawList(),a,b,
++        highlight ? IM_COL32(255,200,90,255) : IM_COL32(45,111,212,255),
++        highlight ? IM_COL32(242,118,18,255) : IM_COL32(10,45,138,255),u);
++    const char* end=ImGui::FindRenderedTextEnd(label);
++    std::string text(label,end);
++    const float fs=ImGui::GetFontSize();
++    const auto ts=power_pros_ui::TextSize(power_pros_ui::g_bold,fs,text.c_str());
++    ImGui::GetWindowDrawList()->PushClipRect(a,b,true);
++    power_pros_ui::ShadowedText(ImGui::GetWindowDrawList(),power_pros_ui::g_bold,fs,
++        ImVec2(a.x+(b.x-a.x-ts.x)*.5f,a.y+(b.y-a.y-ts.y)*.5f),IM_COL32_WHITE,text.c_str());
++    ImGui::GetWindowDrawList()->PopClipRect();
++    return pressed;
++}
++}
+diff --git a/runtime/include/power_pros_ui.h b/runtime/include/power_pros_ui.h
+index 0ab5c33..0fb9d28 100644
+--- a/runtime/include/power_pros_ui.h
++++ b/runtime/include/power_pros_ui.h
+@@ -20,6 +20,8 @@ namespace power_pros_ui {
+ inline ImFont* g_text = nullptr;
+ inline ImFont* g_bold = nullptr;
+ inline ImFont* g_title = nullptr;
++inline ImFont* g_menu = nullptr;
++inline ImFont* g_menuBold = nullptr;
+ 
+ inline ImFont* LoadFirstFont(std::initializer_list<const char*> paths, float size) {
+     for (const char* path : paths) {
+@@ -57,6 +59,15 @@ inline void LoadFonts() {
+     if (g_text == nullptr) g_text = fallback;
+     if (g_bold == nullptr) g_bold = g_text;
+     if (g_title == nullptr) g_title = g_bold;
++#if defined(_WIN32)
++    g_menu = LoadFirstFont({"C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf"}, 20.f);
++    g_menuBold = LoadFirstFont({"C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf"}, 26.f);
++#else
++    g_menu = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"}, 20.f);
++    g_menuBold = LoadFirstFont({"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"}, 26.f);
++#endif
++    if (!g_menu) g_menu = g_text;
++    if (!g_menuBold) g_menuBold = g_bold;
+ }
+ 
+ // ---- Drawing helpers ---------------------------------------------------------------------------
+@@ -176,15 +187,16 @@ inline void DrawCheck(ImDrawList* dl, ImVec2 p, float s, ImU32 color) {
+ inline float Hint(ImDrawList* dl, ImFont* bold, ImFont* text, float x, float y, float u, ImU32 badge, const char* key,
+            const char* label) {
+     const float r = 13 * u;
+-    dl->AddCircleFilled(ImVec2(x + r, y + r), r + 2 * u, IM_COL32_WHITE, 24);
+-    dl->AddCircleFilled(ImVec2(x + r, y + r), r, badge, 24);
+     const float ks = 16 * u;
+     const ImVec2 kz = TextSize(bold, ks, key);
+-    dl->AddText(bold, ks, ImVec2(x + r - kz.x * 0.5f, y + r - kz.y * 0.5f), IM_COL32_WHITE, key);
+-    if (*label == '\0') return x + 2 * r + 6 * u;
++    const float bw = std::max(2 * r, kz.x + 16 * u);
++    dl->AddRectFilled(ImVec2(x - 2 * u, y - 2 * u), ImVec2(x + bw + 2 * u, y + 2 * r + 2 * u), IM_COL32_WHITE, r);
++    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + bw, y + 2 * r), badge, r);
++    dl->AddText(bold, ks, ImVec2(x + (bw - kz.x) * .5f, y + r - kz.y * .5f), IM_COL32_WHITE, key);
++    if (*label == '\0') return x + bw + 6 * u;
+     const float ls = 22 * u;
+-    ShadowedText(dl, text, ls, ImVec2(x + 2 * r + 8 * u, y + r - ls * 0.55f), IM_COL32_WHITE, label);
+-    return x + 2 * r + 8 * u + TextSize(text, ls, label).x + 30 * u;
++    ShadowedText(dl, text, ls, ImVec2(x + bw + 8 * u, y + r - ls * 0.55f), IM_COL32_WHITE, label);
++    return x + bw + 8 * u + TextSize(text, ls, label).x + 30 * u;
+ }
+ 
+ } // namespace power_pros_ui
+diff --git a/runtime/include/settings_overlay.h b/runtime/include/settings_overlay.h
+index 631eb3a..ac00f76 100644
+--- a/runtime/include/settings_overlay.h
++++ b/runtime/include/settings_overlay.h
+@@ -6,6 +6,7 @@
+ namespace settings_overlay {
+ // Apply persistent controller settings once Aurora has discovered host devices.
+ void InitializeRuntimeSettings() noexcept;
++void PrepareLauncherControllers(bool devicesChanged = false) noexcept;
+ // Draw the F10 settings bar before each Aurora present.
+ void HandleEvents(const AuroraEvent* events) noexcept;
+ void Draw() noexcept;
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 37e80ca..adfa8c3 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -5,6 +5,10 @@
+ // WIICOMPILED_SKIP_LAUNCHER=1; the guest has not started yet, so that costs only the renderer
+ // start-up.
+ #include "launcher.h"
++#include "launcher_controls.h"
++#include "launcher_visuals.h"
++#include <aurora/gfx.h>
++#include <dolphin/pad.h>
+ #include "mods.h"
+ #include "power_pros_ui.h"
+ 
+@@ -122,8 +126,12 @@ bool Accept() {
+     return Pressed({SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER, SDL_SCANCODE_SPACE, SDL_SCANCODE_J},
+                    {ImGuiKey_GamepadFaceDown, ImGuiKey_GamepadStart});
+ }
++// Back never repeats and only counts the frame the key goes down: the press that
++// closes a popup or cancels a capture must not also close the page under it.
+ bool Back() {
+-    return Pressed({SDL_SCANCODE_ESCAPE, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_K}, {ImGuiKey_GamepadFaceRight});
++    return (g_keyboardEnabled && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false) ||
++                                  ImGui::IsKeyPressed(ImGuiKey_K, false))) ||
++           (g_padEnabled && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false));
+ }
+ 
+ bool Hovered(ImVec2 a, ImVec2 b) {
+@@ -516,10 +524,7 @@ Result Run(int argc, char** argv) {
+     std::vector<Tab> tabs{
+         {"VIDEO", {api, display, resolution, aspect, fps}},
+         {"AUDIO", {volume, mute}},
+-        {"CONTROLES", {wiimote},
+-         "El mando (PS5 con DS4Windows, Xbox...) se usa como mando de GameCube.\n\n"
+-         "Teclado:\n  J / K / L / I   A / B / X / Y\n  Enter   Start\n  U   Z\n  Q / E   L / R\n"
+-         "  WASD   stick\n  T F G H   stick C\n  Flechas   cruceta\n\nF10 durante la partida para reasignar."},
++        {"CONTROLES", {wiimote}},
+         {"INTERFAZ", {launcherOption}},
+     };
+     tabs.push_back(std::move(modsTab));
+@@ -568,6 +573,11 @@ Result Run(int argc, char** argv) {
+     bool discReady = false;
+     const std::string gameLine = GameStatusLine(discReady);
+     LoadFonts();
++    const bool savedSkipPipelines = aurora_get_skip_unready_pipelines();
++    aurora_set_skip_unready_pipelines(false); // the first UI frame must contain all text
++    settings_overlay::PrepareLauncherControllers();
++    const auto savedNavFlags = ImGui::GetIO().ConfigFlags;
++    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+     const Art art = LoadArt();
+ 
+     enum class Choice { None, Play, Quit } choice = Choice::None;
+@@ -598,59 +608,30 @@ Result Run(int argc, char** argv) {
+ 
+     constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
+     int menu = 0;
+-    int tab = toolsPage ? kModsTab + 1 : modsOnly ? kModsTab : 0;
++    int tab = page && std::strcmp(page, "controls") == 0 ? 2 : toolsPage ? kModsTab + 1 : modsOnly ? kModsTab : 0;
++    if (tab == 2) settingsOpen = true;
+     int row = 0;
+-    // Long lists (many mods) are paged: `scroll` is the first row of the selected row's page and
+-    // `pageRows` how many rows a page holds. The mouse wheel moves the selection; on the MODS screen
+-    // Q/E (L/R) turn the page.
++    // Long lists use the rows that fit at the current size; page controls stay
++    // below the scrollable list. Q/E and L1/R1 switch settings categories.
+     int scroll = 0;
+     int pageRows = 6;
+     if (const char* testRow = std::getenv("WIICOMPILED_LAUNCHER_ROW")) row = std::atoi(testRow);
+-    auto visibleRows = [&](int count, int fit) {
+-        pageRows = fit;
+-        const float wheel = ImGui::GetIO().MouseWheel;
+-        if (wheel > 0.0f) row = std::max(0, row - 1);
+-        if (wheel < 0.0f) row = std::min(count - 1, row + 1);
+-        scroll = row / fit * fit;
+-        return std::min(fit, count - scroll);
+-    };
+-    auto pageLabel = [&](int count) {
+-        return "Página " + std::to_string(scroll / pageRows + 1) + " de " + std::to_string((count + pageRows - 1) / pageRows);
+-    };
+-    // Tabs reachable with Q/E: all of them in the procedural look; with the art, the four settings
+-    // tabs, or MODS and HERRAMIENTAS on the MODS screen.
+-    auto tabRange = [&](int& first, int& count) {
+-        first = art.ok && modsOnly ? kModsTab : 0;
+-        count = !art.ok ? static_cast<int>(tabs.size()) : modsOnly ? 2 : kModsTab;
+-    };
+-    auto settingsKeys = [&] {
+-        const int count = static_cast<int>(tabs[static_cast<size_t>(tab)].options.size());
+-        if (count > 0) {
+-            if (Up()) row = (row + count - 1) % count;
+-            if (Down()) row = (row + 1) % count;
+-            if (Left()) change(tab, row, -1);
+-            if (Right() || Accept()) change(tab, row, 1);
+-            // Page Up / Page Down turn the pages of a long list.
+-            if (KeyPressed(SDL_SCANCODE_PAGEUP)) row = std::max(0, (row / pageRows - 1) * pageRows);
+-            if (KeyPressed(SDL_SCANCODE_PAGEDOWN) && (row / pageRows + 1) * pageRows < count) row = (row / pageRows + 1) * pageRows;
+-        }
+-        int first = 0;
+-        int tabCount = 0;
+-        tabRange(first, tabCount);
+-        if (Pressed({SDL_SCANCODE_Q}, {ImGuiKey_GamepadL1})) tab = first + (tab - first + tabCount - 1) % tabCount, row = 0;
+-        if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB}, {ImGuiKey_GamepadR1})) tab = first + (tab - first + 1) % tabCount, row = 0;
+-        return Back();
+-    };
+     using Clock = std::chrono::steady_clock;
+     const auto start = Clock::now();
+     auto nextFrame = start;
+     while (choice == Choice::None) {
+-        UpdateAuroraAndProcessEvents();  // exits the process on window close
++        const AuroraEvent* launcherEvents = aurora_update();
++        launcher_controls::HandleEvents(launcherEvents);
++        ProcessAuroraEvents(launcherEvents, false); // launcher owns its input; the guest has not started
+         if (!BeginAuroraFrame()) {
+             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+             continue;
+         }
+         aurora_wait_for_frame_worker();
++        ImGui::GetIO().ConfigFlags = savedNavFlags | ImGuiConfigFlags_NavEnableKeyboard;
++        if (launcher_controls::Capturing())
++            ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
++        PADBlockInput(false); // no guest is running during the launcher
+         g_padEnabled = SDL_GetKeyboardFocus() != nullptr;
+         g_keyboardEnabled = g_padEnabled || unfocusedInput;
+ 
+@@ -661,7 +642,9 @@ Result Run(int argc, char** argv) {
+         const float t = std::chrono::duration<float>(Clock::now() - start).count();
+         ImDrawList* dl = ImGui::GetBackgroundDrawList();
+         const bool click = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+-        if (art.ok) {
++        if (settingsOpen) {
++#include "launcher_settings.inc"
++        } else if (art.ok) {
+             // MoonInning art: the backdrops come from launcher/*.png (image pixels, 1672x941, fitted
+             // to the window); everything that changes is drawn on top in the art's own colours.
+             const float s = std::min(w / kArtW, h / kArtH);
+@@ -751,6 +734,10 @@ Result Run(int argc, char** argv) {
+                     const float nw = TextSize(g_text, 22 * s, note).x;
+                     ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - nw, at(0, 782).y), Rgba(255, 224, 110), note);
+                 }
++                float hintX = at(100, 885).x;
++                hintX = Hint(dl, g_bold, g_text, hintX, at(0, 885).y, s, Rgba(40, 150, 85), launcher_controls::AcceptPrompt(), "Aceptar");
++                Hint(dl, g_bold, g_text, hintX, at(0, 885).y, s, Rgba(200, 55, 65), launcher_controls::BackPrompt(), "Volver");
++                ShadowedText(dl, g_text, 22 * s, at(1050, 887), Rgba(200, 225, 255), launcher_controls::DeviceLabel());
+                 const int n = static_cast<int>(kArtButtons.size());
+                 if (Up() || Left()) menu = (menu + n - 1) % n;
+                 if (Down() || Right()) menu = (menu + 1) % n;
+@@ -760,108 +747,6 @@ Result Run(int argc, char** argv) {
+                     if (menu == 2) settingsOpen = true, modsOnly = true, tab = kModsTab, row = 0;
+                     if (menu == 3) choice = Choice::Quit;
+                 }
+-            } else {
+-                // Settings: tabs, rows and help text are drawn on the erased panel of settings.png.
+-                int firstTab = 0;
+-                int tabCount = 0;
+-                tabRange(firstTab, tabCount);
+-                for (int i = firstTab; i < firstTab + tabCount; ++i) {
+-                    const ArtRect& r = modsOnly ? kArtModsTabs[static_cast<size_t>(i - firstTab)]
+-                                                : kArtTabs[static_cast<size_t>(i - firstTab)];
+-                    if (click && hit(r)) tab = i, row = 0;
+-                    const float radius = (r.y1 - r.y0) * 0.5f * s;
+-                    if (tab == i) {
+-                        Pill(dl, at(r.x0, r.y0), at(r.x1, r.y1), Rgba(255, 200, 90), Rgba(242, 118, 18), s);
+-                    } else {
+-                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(12, 44, 140, 235), radius);
+-                        dl->AddRect(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(110, 175, 255, 200), radius, 0, 3.0f * s);
+-                    }
+-                    const float fs = 30 * s;
+-                    const ImVec2 tz = TextSize(g_bold, fs, tabs[i].name);
+-                    const ImVec2 c = at((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f);
+-                    ShadowedText(dl, g_bold, fs, ImVec2(c.x - tz.x * 0.5f, c.y - tz.y * 0.5f),
+-                                 tab == i ? IM_COL32_WHITE : Rgba(190, 220, 255), tabs[i].name);
+-                }
+-                Tab& current = tabs[static_cast<size_t>(tab)];
+-                const int count = static_cast<int>(current.options.size());
+-                row = std::clamp(row, 0, std::max(0, count - 1));
+-                const int shown = count > 0 ? visibleRows(count, 6) : 0;  // rows that fit above the footer
+-                if (count > pageRows) {  // "◀ Página 1 de 2 ▶"
+-                    const std::string label = pageLabel(count);
+-                    const float fs = 28 * s;
+-                    const ImVec2 size = TextSize(g_bold, fs, label.c_str());
+-                    const ImVec2 c = at(900, 161);  // in the header, level with the tabs
+-                    ShadowedText(dl, g_bold, fs, ImVec2(c.x - size.x * 0.5f, c.y - size.y * 0.5f), IM_COL32_WHITE, label.c_str());
+-                    const float a = 10 * s;
+-                    const float lx = c.x - size.x * 0.5f - 22 * s;
+-                    const float rx = c.x + size.x * 0.5f + 22 * s;
+-                    // The arrows turn the page with the mouse too.
+-                    auto clicked = [&](float x) {
+-                        const ImVec2 m = ImGui::GetIO().MousePos;
+-                        return click && std::abs(m.x - x) < 24 * s && std::abs(m.y - c.y) < 24 * s;
+-                    };
+-                    if (scroll > 0) {
+-                        dl->AddTriangleFilled(ImVec2(lx - a, c.y), ImVec2(lx + a * 0.6f, c.y - a), ImVec2(lx + a * 0.6f, c.y + a), IM_COL32_WHITE);
+-                        if (clicked(lx)) row = scroll - pageRows;
+-                    }
+-                    if (scroll + shown < count) {
+-                        dl->AddTriangleFilled(ImVec2(rx + a, c.y), ImVec2(rx - a * 0.6f, c.y - a), ImVec2(rx - a * 0.6f, c.y + a), IM_COL32_WHITE);
+-                        if (clicked(rx)) row = scroll + pageRows;
+-                    }
+-                }
+-                for (int i = scroll; i < scroll + shown; ++i) {
+-                    Option& opt = current.options[static_cast<size_t>(i)];
+-                    const float slot = static_cast<float>(i - scroll);
+-                    const ArtRect r{130, 240 + 90.0f * slot, 820, 312 + 90.0f * slot};
+-                    if (MouseMoved() && hit(r)) row = i;
+-                    if (hit(r) && click) row = i, change(tab, i, 1);
+-                    if (hit(r) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
+-                    const float radius = (r.y1 - r.y0) * 0.5f * s;
+-                    const bool selected = row == i;
+-                    if (selected) {
+-                        Pill(dl, at(r.x0, r.y0), at(r.x1, r.y1), Rgba(255, 200, 90), Rgba(242, 118, 18), s);
+-                    } else {
+-                        dl->AddRectFilled(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(10, 36, 120, 235), radius);
+-                        dl->AddRect(at(r.x0, r.y0), at(r.x1, r.y1), Rgba(100, 170, 255, 210), radius, 0, 3.0f * s);
+-                    }
+-                    const float mid = at(0, (r.y0 + r.y1) * 0.5f).y;
+-                    const float ls = 27 * s;
+-                    ShadowedText(dl, g_bold, ls, ImVec2(at(r.x0 + 42, 0).x, mid - ls * 0.6f), IM_COL32_WHITE, opt.label);
+-                    const std::string& value = opt.choices[static_cast<size_t>(opt.value)];
+-                    const float vs = 30 * s;
+-                    const float vw = TextSize(g_text, vs, value.c_str()).x;
+-                    const float vx = at(r.x1 - 50, 0).x - vw;
+-                    ShadowedText(dl, g_text, vs, ImVec2(vx, mid - vs * 0.6f), IM_COL32_WHITE, value.c_str());
+-                    if (selected) {
+-                        const float a = 9 * s;
+-                        dl->AddTriangleFilled(ImVec2(vx - 24 * s, mid), ImVec2(vx - 24 * s + a, mid - a * 1.2f),
+-                                              ImVec2(vx - 24 * s + a, mid + a * 1.2f), IM_COL32_WHITE);
+-                        const float rx = at(r.x1 - 22, 0).x;
+-                        dl->AddTriangleFilled(ImVec2(rx, mid), ImVec2(rx - a, mid - a * 1.2f),
+-                                              ImVec2(rx - a, mid + a * 1.2f), IM_COL32_WHITE);
+-                    }
+-                }
+-                const float wrap = (1535 - 888) * s;
+-                float hy = at(0, 258).y;
+-                if (count > 0) {
+-                    const Option& focused = current.options[static_cast<size_t>(row)];
+-                    // Long help shrinks to stay above the footer (the yellow line goes under it).
+-                    float hs = 31 * s;
+-                    while (hs > 21 * s && hy + g_text->CalcTextSizeA(hs, FLT_MAX, wrap, focused.help).y + 70 * s > at(0, 815).y) {
+-                        hs -= 1 * s;
+-                    }
+-                    ShadowedText(dl, g_text, hs, ImVec2(at(888, 0).x, hy), IM_COL32_WHITE, focused.help, wrap);
+-                    hy += g_text->CalcTextSizeA(hs, FLT_MAX, wrap, focused.help).y + 22 * s;
+-                    ShadowedText(dl, g_text, 28 * s, ImVec2(at(888, 0).x, hy), Rgba(255, 228, 80),
+-                                 focused.restart ? "El cambio se aplicará al iniciar el juego." : "Se aplica al momento.", wrap);
+-                    hy += 60 * s;
+-                }
+-                if (current.footer != nullptr) {
+-                    ShadowedText(dl, g_text, 26 * s, ImVec2(at(count > 0 ? 888 : 130, 0).x, hy), Rgba(215, 232, 255), current.footer,
+-                                 count > 0 ? wrap : (820 - 130) * s);
+-                }
+-                const bool closeClicked = click && (hit(kArtClose) || !hit(kArtPanel));
+-                if (settingsKeys() || closeClicked) settingsOpen = false;
+             }
+         } else {
+             DrawBackground(dl, w, h, u, t, g_title);
+@@ -960,8 +845,8 @@ Result Run(int argc, char** argv) {
+             // Button hints.
+             float hx = w * 0.06f;
+             const float hy = h - 50 * u;
+-            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), "A", "Aceptar");
+-            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), "B", "Volver");
++            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), launcher_controls::AcceptPrompt(), "Aceptar");
++            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), launcher_controls::BackPrompt(), "Volver");
+             Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
+ 
+             if (!settingsOpen) {
+@@ -973,132 +858,10 @@ Result Run(int argc, char** argv) {
+                     if (menu == 1) settingsOpen = true, row = 0;
+                     if (menu == 2) choice = Choice::Quit;
+                 }
+-            } else {
+-                // Settings panel: tab pills on top, options left, help right.
+-                ImDrawList* fg = ImGui::GetForegroundDrawList();
+-                const float pw = std::min(w * 0.92f, 1120 * u);
+-                const float ph = std::min(h * 0.86f, 620 * u);
+-                const ImVec2 p0((w - pw) * 0.5f, (h - ph) * 0.5f - 10 * u);
+-                const ImVec2 p1(p0.x + pw, p0.y + ph);
+-                fg->AddRectFilled(ImVec2(0, 0), size, Rgba(0, 16, 60, 120));
+-                fg->AddRectFilled(ImVec2(p0.x, p0.y + 8 * u), ImVec2(p1.x, p1.y + 8 * u), Rgba(0, 16, 60, 140), 18 * u);
+-                fg->AddRectFilled(p0, p1, IM_COL32_WHITE, 18 * u);
+-                const int panelStart = fg->VtxBuffer.Size;
+-                fg->AddRectFilled(ImVec2(p0.x + 5 * u, p0.y + 5 * u), ImVec2(p1.x - 5 * u, p1.y - 5 * u), IM_COL32_WHITE,
+-                                  14 * u);
+-                Shade(fg, panelStart, p0.y, p1.y, Rgba(34, 110, 214, 250), Rgba(12, 50, 140, 250));
+-
+-                // Tabs.
+-                const float tabH = 46 * u;
+-                const float tabY = p0.y + 20 * u;
+-                float tx = p0.x + 24 * u;
+-                for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
+-                    const float fs = 21 * u;
+-                    const ImVec2 tz = TextSize(g_bold, fs, tabs[i].name);
+-                    const ImVec2 a(tx, tabY);
+-                    const ImVec2 b(tx + tz.x + 44 * u, tabY + tabH);
+-                    if (click && Hovered(a, b)) tab = i, row = 0;
+-                    if (tab == i) {
+-                        Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
+-                    } else {
+-                        fg->AddRectFilled(a, b, Rgba(8, 40, 120, 200), tabH * 0.5f);
+-                        fg->AddRect(a, b, Rgba(140, 200, 255, 120), tabH * 0.5f, 0, 2 * u);
+-                    }
+-                    Text(fg, g_bold, fs, ImVec2(a.x + 22 * u, a.y + (tabH - fs) * 0.5f),
+-                         tab == i ? IM_COL32_WHITE : Rgba(170, 210, 255), tabs[i].name);
+-                    tx = b.x + 14 * u;
+-                }
+-                const ImVec2 xc(p1.x - 44 * u, tabY + tabH * 0.5f);
+-                const float xr = 20 * u;
+-                const bool xHover = Hovered(ImVec2(xc.x - xr, xc.y - xr), ImVec2(xc.x + xr, xc.y + xr));
+-                fg->AddCircleFilled(xc, xr + 3 * u, IM_COL32_WHITE, 32);
+-                fg->AddCircleFilled(xc, xr, xHover ? Rgba(250, 80, 80) : Rgba(220, 50, 60), 32);
+-                const float xs = 8 * u;
+-                fg->AddLine(ImVec2(xc.x - xs, xc.y - xs), ImVec2(xc.x + xs, xc.y + xs), IM_COL32_WHITE, 3.5f * u);
+-                fg->AddLine(ImVec2(xc.x - xs, xc.y + xs), ImVec2(xc.x + xs, xc.y - xs), IM_COL32_WHITE, 3.5f * u);
+-                const float top = tabY + tabH + 18 * u;
+-                fg->AddLine(ImVec2(p0.x + 20 * u, top), ImVec2(p1.x - 20 * u, top), Rgba(160, 215, 255, 120), 2 * u);
+-                const float split = p0.x + pw * 0.48f;
+-                fg->AddLine(ImVec2(split, top + 14 * u), ImVec2(split, p1.y - 60 * u), Rgba(160, 215, 255, 90), 2 * u);
+-
+-                // Options.
+-                Tab& current = tabs[static_cast<size_t>(tab)];
+-                const int count = static_cast<int>(current.options.size());
+-                row = std::clamp(row, 0, std::max(0, count - 1));
+-                const float rowH = 48 * u;
+-                const int fit = std::max(1, static_cast<int>((p1.y - 96 * u - top - 22 * u) / (rowH + 12 * u)));
+-                const int shown = count > 0 ? visibleRows(count, fit) : 0;
+-                if (count > pageRows) {
+-                    const std::string label = pageLabel(count);
+-                    const float fs = 18 * u;
+-                    const ImVec2 size = TextSize(g_bold, fs, label.c_str());
+-                    ShadowedText(fg, g_bold, fs,
+-                                 ImVec2((p0.x + 30 * u + split - 26 * u - size.x) * 0.5f, p1.y - 92 * u),
+-                                 IM_COL32_WHITE, label.c_str());
+-                }
+-                for (int i = scroll; i < scroll + shown; ++i) {
+-                    Option& o = current.options[static_cast<size_t>(i)];
+-                    const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i - scroll) * (rowH + 12 * u));
+-                    const ImVec2 b(split - 26 * u, a.y + rowH);
+-                    if (MouseMoved() && Hovered(a, b)) row = i;
+-                    if (Hovered(a, b) && click) row = i, change(tab, i, 1);
+-                    if (Hovered(a, b) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
+-                    const bool selected = row == i;
+-                    if (selected) {
+-                        Pill(fg, a, b, Rgba(255, 210, 100), Rgba(240, 120, 20), u);
+-                    } else {
+-                        fg->AddRectFilled(a, b, Rgba(8, 40, 120, 210), rowH * 0.5f);
+-                        fg->AddRect(a, b, Rgba(140, 200, 255, 130), rowH * 0.5f, 0, 2 * u);
+-                    }
+-                    const float fs = 20 * u;
+-                    ShadowedText(fg, g_bold, fs, ImVec2(a.x + 24 * u, a.y + (rowH - fs) * 0.5f), IM_COL32_WHITE, o.label);
+-                    const std::string& value = o.choices[static_cast<size_t>(o.value)];
+-                    const float vsz = 21 * u;
+-                    const float vw = TextSize(g_text, vsz, value.c_str()).x;
+-                    const float vx = b.x - 34 * u - vw;
+-                    ShadowedText(fg, g_text, vsz, ImVec2(vx, a.y + (rowH - vsz) * 0.5f), IM_COL32_WHITE, value.c_str());
+-                    if (selected) {  // left / right arrows
+-                        const float cy = a.y + rowH * 0.5f;
+-                        const float s = 6 * u;
+-                        fg->AddTriangleFilled(ImVec2(vx - 16 * u, cy), ImVec2(vx - 16 * u + s, cy - s),
+-                                              ImVec2(vx - 16 * u + s, cy + s), IM_COL32_WHITE);
+-                        fg->AddTriangleFilled(ImVec2(b.x - 16 * u, cy), ImVec2(b.x - 16 * u - s, cy - s),
+-                                              ImVec2(b.x - 16 * u - s, cy + s), IM_COL32_WHITE);
+-                    }
+-                }
+-                // Help.
+-                const float hx2 = split + 30 * u;
+-                const float wrap = p1.x - 34 * u - hx2;
+-                float hy2 = top + 26 * u;
+-                if (count > 0) {
+-                    const Option& focused = current.options[static_cast<size_t>(row)];
+-                    float hs = 23 * u;
+-                    while (hs > 15 * u && hy2 + g_text->CalcTextSizeA(hs, FLT_MAX, wrap, focused.help).y + 60 * u > p1.y - 70 * u) {
+-                        hs -= 1 * u;
+-                    }
+-                    ShadowedText(fg, g_text, hs, ImVec2(hx2, hy2), IM_COL32_WHITE, focused.help, wrap);
+-                    hy2 += g_text->CalcTextSizeA(hs, FLT_MAX, wrap, focused.help).y + 20 * u;
+-                    Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(255, 224, 120),
+-                         focused.restart ? "Se aplica al pulsar JUGAR (el juego se reinicia solo)." : "Se aplica al momento.",
+-                         wrap);
+-                    hy2 += 48 * u;
+-                }
+-                if (current.footer != nullptr) {
+-                    Text(fg, g_text, 20 * u, ImVec2(hx2, hy2), Rgba(210, 232, 255), current.footer, wrap);
+-                }
+-                float kx = p0.x + 30 * u;
+-                const float ky = p1.y - 48 * u;
+-                kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(30, 90, 200), "+", "Elegir / cambiar");
+-                kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "Q", "");
+-                kx = Hint(fg, g_bold, g_text, kx, ky, u, Rgba(90, 90, 110), "E", "Pestaña");
+-                Hint(fg, g_bold, g_text, kx, ky, u, Rgba(220, 50, 60), "B", "Volver");
+-
+-                if (settingsKeys() || (xHover && click) || (click && !Hovered(p0, p1))) {
+-                    settingsOpen = false;
+-                }
+             }
+         }
+ 
++        if (launcher_controls::ProbeTick()) choice = Choice::Quit;
+         aurora_set_present_schedule(0, 0);
+         aurora_end_frame();
+         nextFrame += std::chrono::microseconds(16667);
+@@ -1106,6 +869,8 @@ Result Run(int argc, char** argv) {
+         if (Clock::now() > nextFrame + std::chrono::milliseconds(100)) nextFrame = Clock::now();
+     }
+ 
++    aurora_set_skip_unready_pipelines(savedSkipPipelines);
++    ImGui::GetIO().ConfigFlags = savedNavFlags;
+     if (choice == Choice::Quit) {
+         return Result::Quit;
+     }
+diff --git a/runtime/src/launcher_controls.cpp b/runtime/src/launcher_controls.cpp
+new file mode 100644
+index 0000000..83c0fb4
+--- /dev/null
++++ b/runtime/src/launcher_controls.cpp
+@@ -0,0 +1,499 @@
++#include "launcher_controls.h"
++#include "launcher_visuals.h"
++#include "controller_button_names.h"
++#include "controller_mapping_wizard.h"
++#include "runtime_config.h"
++#include "settings_overlay.h"
++#include "input_bindings.h"
++#include <aurora/aurora.h>
++#include <dolphin/pad.h>
++#include <imgui.h>
++#include <SDL3/SDL_events.h>
++#include <SDL3/SDL_gamepad.h>
++#include <SDL3/SDL_keyboard.h>
++#include <SDL3/SDL_mouse.h>
++#include <SDL3/SDL_joystick.h>
++#include <SDL3/SDL_video.h>
++#include <SDL3/SDL_hints.h>
++#include <dolphin/stick_response.hpp>
++#include <cstdio>
++#include <cstdlib>
++#include <array>
++#include <algorithm>
++#include <cmath>
++#include <filesystem>
++#include <functional>
++#include <fstream>
++#include <string>
++#include <vector>
++
++namespace launcher_controls {
++namespace {
++bool gamepad = false;
++// A manual PlayStation option also handles DS4Windows' virtual Xbox device.
++int promptStyle = 1; // 0 automatic, 1 PlayStation, 2 Xbox
++SDL_JoystickID lastPad = 0;
++int port = 0;
++bool keyboardView = false;  // edit keyboard/mouse bindings instead of the pad's
++bool testing = false;
++std::string notice;
++int captureGraceFrames = 0;
++bool waitForRelease = false;
++ImVec4 captureRect{};  // the binding being captured: clicking it cancels instead of binding the mouse
++// Hit boxes for the integration probe.
++std::array<ImVec4, PAD_BUTTON_COUNT> bindingRects{};
++std::array<ImVec4, PAD_AXIS_COUNT> axisRects{};
++std::filesystem::path PromptPath() { return RuntimeConfigFile::ResolveConfigPath().parent_path() / "launcher_prompts.txt"; }
++void LoadPromptStyle() {
++    static bool loaded = false;
++    if (loaded) return;
++    loaded = true;
++    int value = 1;
++    if (std::ifstream(PromptPath()) >> value; value >= 0 && value <= 2) promptStyle = value;
++}
++enum class CaptureKind { None, Button, Key, KeyAxis, Axis };
++struct Capture {
++    CaptureKind kind = CaptureKind::None;
++    int row = 0;
++    uint32_t port = 0;
++    SDL_JoystickID device = 0;
++    bool released = false;
++    double deadline = 0;
++} capture;
++
++// Short names in the chosen prompt family; the persisted config keeps positional names.
++std::string NativeName(uint32_t value, PADButton action = 0) {
++    if (value == PAD_NATIVE_BUTTON_DISABLED) return "Sin asignar";
++    const bool ps = PlayStationPrompts();
++    if (value == PAD_NATIVE_BUTTON_INVALID) {
++        if (action == PAD_TRIGGER_L) return ps ? "L2 (predeterminado)" : "LT (predeterminado)";
++        if (action == PAD_TRIGGER_R) return ps ? "R2 (predeterminado)" : "RT (predeterminado)";
++        return "Predeterminado";
++    }
++    if (PADIsAxisButton(value)) {
++        const bool negative = PADAxisButtonNegative(value);
++        switch (PADAxisButtonAxis(value)) {
++        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return ps ? "L2" : "LT";
++        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: return ps ? "R2" : "RT";
++        case SDL_GAMEPAD_AXIS_LEFTX: return negative ? "Stick izq. izquierda" : "Stick izq. derecha";
++        case SDL_GAMEPAD_AXIS_LEFTY: return negative ? "Stick izq. arriba" : "Stick izq. abajo";
++        case SDL_GAMEPAD_AXIS_RIGHTX: return negative ? "Stick der. izquierda" : "Stick der. derecha";
++        case SDL_GAMEPAD_AXIS_RIGHTY: return negative ? "Stick der. arriba" : "Stick der. abajo";
++        default: break;
++        }
++    }
++    switch (value) {
++    case SDL_GAMEPAD_BUTTON_SOUTH: return ps ? "Cruz" : "A";
++    case SDL_GAMEPAD_BUTTON_EAST: return ps ? "Círculo" : "B";
++    case SDL_GAMEPAD_BUTTON_WEST: return ps ? "Cuadrado" : "X";
++    case SDL_GAMEPAD_BUTTON_NORTH: return ps ? "Triángulo" : "Y";
++    case SDL_GAMEPAD_BUTTON_START: return ps ? "OPTIONS" : "Menú";
++    case SDL_GAMEPAD_BUTTON_BACK: return ps ? "SHARE / CREATE" : "Vista";
++    case SDL_GAMEPAD_BUTTON_GUIDE: return ps ? "PS" : "Guía";
++    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return ps ? "L1" : "LB";
++    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return ps ? "R1" : "RB";
++    case SDL_GAMEPAD_BUTTON_LEFT_STICK: return ps ? "L3" : "LS";
++    case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return ps ? "R3" : "RS";
++    case SDL_GAMEPAD_BUTTON_DPAD_UP: return "Cruceta arriba";
++    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return "Cruceta abajo";
++    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "Cruceta izquierda";
++    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Cruceta derecha";
++    case SDL_GAMEPAD_BUTTON_TOUCHPAD: return "Panel táctil";
++    default: return ControllerNames::NativeButtonForValue(value).label;
++    }
++}
++std::string AxisName(const PADAxisMapping& m) {
++    if (m.nativeAxis.nativeAxis >= 0)
++        return NativeName(PADEncodeAxisButton(uint32_t(m.nativeAxis.nativeAxis), m.nativeAxis.sign == AXIS_SIGN_NEGATIVE));
++    return m.nativeButton < 0 ? "Sin asignar" : NativeName(uint32_t(m.nativeButton));
++}
++std::string KeyName(int value) {
++    if (value == PAD_KEY_INVALID) return "Sin asignar";
++    if (value < -1) return "Ratón " + std::to_string(-value - 1);
++    const char* name = value < SDL_SCANCODE_COUNT ? SDL_GetScancodeName(SDL_Scancode(value)) : "";
++    return name && *name ? name : "Sin asignar";
++}
++void PersistButton(uint32_t selectedPort, int row, uint32_t value) {
++    const auto& action = ControllerNames::kGameCubeButtons[row];
++    PADSetButtonMapping(selectedPort, {value, action.padButton});
++    // Keep existing secondary mappings when editing the primary one.
++    const auto configName = [](uint32_t native) {
++        std::string name = ControllerNames::NativeButtonForValue(native).configName;
++        if (PADIsAxisButton(native) && PADAxisButtonThreshold(native) != 50)
++            name += "@" + std::to_string(PADAxisButtonThreshold(native));
++        return name;
++    };
++    std::string config = configName(value);
++    uint32_t count = 0;
++    if (auto* alt = PADGetAltButtonMappings(selectedPort, &count))
++        for (uint32_t i = 0; i < count; ++i)
++            if (alt[i].padButton == action.padButton && alt[i].nativeButton != PAD_NATIVE_BUTTON_INVALID)
++                config += std::string(",") + configName(alt[i].nativeButton);
++    RuntimeConfigFile::SetControllerButton(row, config);
++}
++void Complete(uint32_t value) {
++    const auto c = capture;
++    capture = {};
++    captureGraceFrames = 2;
++    waitForRelease = true;
++    uint32_t count = 0;
++    if (c.kind == CaptureKind::Button) {
++        auto* mappings = PADGetButtonMappings(c.port, &count);
++        if (!mappings || count != PAD_BUTTON_COUNT) return;
++        uint32_t previous = PAD_NATIVE_BUTTON_DISABLED;
++        for (uint32_t i = 0; i < count; ++i)
++            if (mappings[i].padButton == ControllerNames::kGameCubeButtons[c.row].padButton) previous = mappings[i].nativeButton;
++        notice = "Botón guardado.";
++        if (value != PAD_NATIVE_BUTTON_DISABLED)
++            for (int i = 0; i < PAD_BUTTON_COUNT; ++i) {
++                if (i == c.row) continue;
++                for (uint32_t j = 0; j < count; ++j)
++                    if (mappings[j].padButton == ControllerNames::kGameCubeButtons[i].padButton &&
++                        PADAxisButtonIdentity(mappings[j].nativeButton) == PADAxisButtonIdentity(value)) {
++                        PersistButton(c.port, i, previous);
++                        notice = "Se intercambiaron los botones para evitar duplicados.";
++                    }
++            }
++        PersistButton(c.port, c.row, value);
++    } else if (c.kind == CaptureKind::Key) {
++        auto* keys = PADGetKeyButtonBindings(c.port, &count);
++        const auto target = ControllerNames::kGameCubeButtons[c.row].padButton;
++        int previous = PAD_KEY_INVALID;
++        for (uint32_t i = 0; keys && i < count; ++i) if (keys[i].padButton == target) previous = keys[i].scancode;
++        for (uint32_t i = 0; keys && i < count; ++i)
++            if (int(value) != PAD_KEY_INVALID && keys[i].padButton != target && keys[i].scancode == int(value))
++                PADSetKeyButtonBinding(c.port, {previous, keys[i].padButton});
++        PADSetKeyButtonBinding(c.port, {int(value), target});
++        notice = "Tecla guardada; los duplicados se intercambian.";
++    } else if (c.kind == CaptureKind::KeyAxis) {
++        PADSetKeyAxisBinding(c.port, {int(value), uint16_t(c.row), 1});
++        notice = "Dirección guardada.";
++    } else if (c.kind == CaptureKind::Axis) {
++        // Like Dolphin, a stick direction or analog trigger may also come from a plain button.
++        if (PADIsAxisButton(value))
++            PADSetAxisMapping(c.port, {{int(PADAxisButtonAxis(value)), PADAxisButtonNegative(value) ? AXIS_SIGN_NEGATIVE : AXIS_SIGN_POSITIVE},
++                                      int(PAD_NATIVE_BUTTON_INVALID), uint16_t(c.row)});
++        else
++            PADSetAxisMapping(c.port, {{-1, AXIS_SIGN_POSITIVE}, int(value), uint16_t(c.row)});
++        notice = "Dirección guardada.";
++    }
++    PADSerializeMappings();
++}
++void Begin(CaptureKind kind, int row) {
++    capture = {kind, row, uint32_t(port), 0, false, ImGui::GetTime() + 8};
++    int index = PADGetIndexForPort(port);
++    if (auto* pad = index >= 0 ? PADGetSDLGamepadForIndex(index) : nullptr) capture.device = SDL_GetGamepadID(pad);
++}
++// Cancelling also waits for release, so the Esc/Circle that cancelled does not reach the menu.
++void Cancel() { capture = {}; waitForRelease = true; captureGraceFrames = 2; }
++bool Neutral(SDL_Gamepad* pad) {
++    bool neutral = SDL_GetMouseState(nullptr, nullptr) == 0;
++    const bool* keys = SDL_GetKeyboardState(nullptr);
++    for (int i = 0; i < SDL_SCANCODE_COUNT; ++i) neutral &= !keys[i];
++    if (pad) {
++        for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) neutral &= !SDL_GetGamepadButton(pad, SDL_GamepadButton(i));
++        for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i) neutral &= std::abs(int(SDL_GetGamepadAxis(pad, SDL_GamepadAxis(i)))) < 8000;
++    }
++    return neutral;
++}
++void UpdateCapture() {
++    if (captureGraceFrames > 0) --captureGraceFrames;
++    const int index = PADGetIndexForPort(port);
++    if (waitForRelease && Neutral(index >= 0 ? PADGetSDLGamepadForIndex(index) : nullptr)) waitForRelease = false;
++    if (capture.kind == CaptureKind::None) return;
++    if (ImGui::GetTime() > capture.deadline) { Cancel(); notice = "Tiempo agotado; se conserva la asignación."; return; }
++    auto* pad = SDL_GetGamepadFromID(capture.device);
++    if (!pad && (capture.kind == CaptureKind::Button || capture.kind == CaptureKind::Axis)) {
++        Cancel(); notice = "El mando se desconectó. Vuelve a conectarlo."; return;
++    }
++    // Only accept input after the press that started the capture is released.
++    if (Neutral(pad)) capture.released = true;
++}
++// One Dolphin-style row: the GameCube input, then what drives it. Click to
++// capture in place, click again or Esc to cancel, right click to clear.
++void BindingRow(const char* label, CaptureKind kind, int row, const std::string& bound, ImVec4* rect) {
++    ImGui::PushID(int(kind) * 64 + row);
++    ImGui::AlignTextToFramePadding();
++    ImGui::TextUnformatted(label);
++    ImGui::SameLine(ImGui::GetFontSize() * 5.6f);
++    const bool active = capture.kind == kind && capture.row == row;
++    const std::string text = !active ? bound
++        : std::string(capture.released ? "Pulsa la entrada... " : "Suelta... ") +
++              std::to_string(int(std::ceil(std::max(0.0, capture.deadline - ImGui::GetTime()))));
++    if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.78f, .40f, .08f, 1));
++    if (ImGui::Button((text + "###b").c_str(), ImVec2(-FLT_MIN, 0))) {
++        if (active) Cancel();
++        else Begin(kind, row);
++    }
++    if (active) ImGui::PopStyleColor();
++    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
++    if (active) captureRect = {a.x, a.y, b.x, b.y};
++    if (rect) *rect = {a.x, a.y, b.x, b.y};
++    // Axes cannot be left without a source; buttons and keys can.
++    if (!active && kind != CaptureKind::Axis && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
++        Begin(kind, row);
++        Complete(kind == CaptureKind::Button ? PAD_NATIVE_BUTTON_DISABLED : uint32_t(PAD_KEY_INVALID));
++    }
++    ImGui::SetItemTooltip(kind == CaptureKind::Axis ? "Clic: asignar" : "Clic: asignar · Clic derecho: quitar");
++    ImGui::PopID();
++}
++// GameCube-style octagonal gate with the dead zone and the signal MLB receives.
++void DrawGate(const PADStatus& status, bool sub, float deadZone) {
++    const float width = ImGui::GetContentRegionAvail().x;
++    const float size = std::min(width, ImGui::GetFontSize() * 6);
++    const ImVec2 p = ImGui::GetCursorScreenPos();
++    const ImVec2 c(p.x + width * .5f, p.y + size * .5f);
++    ImGui::Dummy(ImVec2(width, size));
++    auto* dl = ImGui::GetWindowDrawList();
++    const float r = size * .46f;
++    std::array<ImVec2, 8> gate;
++    for (int i = 0; i < 8; ++i) gate[i] = ImVec2(c.x + std::cos(i * IM_PI / 4) * r, c.y + std::sin(i * IM_PI / 4) * r);
++    dl->AddConvexPolyFilled(gate.data(), 8, IM_COL32(8, 24, 48, 255));
++    dl->AddPolyline(gate.data(), 8, IM_COL32(170, 210, 250, 255), ImDrawFlags_Closed, 2);
++    dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), IM_COL32(80, 108, 135, 160));
++    dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), IM_COL32(80, 108, 135, 160));
++    if (deadZone > 0) dl->AddCircle(c, r * deadZone, IM_COL32(255, 120, 90, 200), 32, 1.5f);
++    // Same integer hardware-gate conversion as the MLB PAD HLE, then MLB's
++    // 88/64 normalization. This is the actual input signal, not a second curve.
++    const int x = int(sub ? status.substickX : status.stickX) * (sub ? 74 : 87) / 127;
++    const int y = int(sub ? status.substickY : status.stickY) * (sub ? 74 : 87) / 127;
++    const float divisor = sub ? 64.f : 88.f;
++    const ImVec2 aim(c.x + std::clamp(x / divisor, -1.f, 1.f) * r, c.y - std::clamp(y / divisor, -1.f, 1.f) * r);
++    dl->AddCircleFilled(aim, std::max(3.f, size * .045f), IM_COL32(255, 210, 90, 255));
++    ImGui::TextDisabled("Señal del juego: X %d  Y %d", x, y);
++}
++// Groups flow into as many columns as fit, top to bottom, like Dolphin's dialog.
++template <typename F> void Group(const char* title, F&& body) {
++    ImGui::BeginChild(title, ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened);
++    ImGui::TextColored(ImVec4(1, .79f, .35f, 1), "%s", title);
++    ImGui::Separator();
++    body();
++    ImGui::EndChild();
++}
++}
++
++void HandleEvents(const AuroraEvent* events) {
++    LoadPromptStyle();
++    // Test runners are background processes on Windows. Only the opt-in
++    // portable virtual-device probe may exercise the event path without focus.
++    static const bool probeInput = [] {
++        const char* value = std::getenv("WIICOMPILED_LAUNCHER_PROBE");
++        return value && std::string(value) == "1" && RuntimeConfigFile::PortableRootDirectory().has_value();
++    }();
++    if (!events) return;
++    for (auto* ev = events; ev->type != AURORA_NONE; ++ev) {
++        if (ev->type == AURORA_CONTROLLER_ADDED || ev->type == AURORA_CONTROLLER_REMOVED)
++            settings_overlay::PrepareLauncherControllers(true);
++        if (ev->type == AURORA_SDL_EVENT) controller_mapping_wizard::HandleSdlEvent(ev->sdl);
++        if (ev->type != AURORA_SDL_EVENT || (SDL_GetKeyboardFocus() == nullptr && !probeInput)) continue;
++        const auto& e = ev->sdl;
++        if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) gamepad = false;
++        if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
++            (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(e.gaxis.value)) > 16000)) {
++            gamepad = true;
++            lastPad = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ? e.gbutton.which : e.gaxis.which;
++        }
++        if (capture.kind == CaptureKind::None) continue;
++        if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_ESCAPE) { Cancel(); continue; }
++        if (!capture.released) continue;
++        if ((capture.kind == CaptureKind::Key || capture.kind == CaptureKind::KeyAxis) &&
++            e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.scancode != SDL_SCANCODE_F10) Complete(e.key.scancode);
++        else if ((capture.kind == CaptureKind::Key || capture.kind == CaptureKind::KeyAxis) && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
++                 e.button.button > 0 && e.button.button <= 5 &&
++                 (e.button.x < captureRect.x || e.button.x >= captureRect.z || e.button.y < captureRect.y || e.button.y >= captureRect.w))
++            Complete(uint32_t(-int(e.button.button) - 1));
++        else if ((capture.kind == CaptureKind::Button || capture.kind == CaptureKind::Axis) &&
++                 e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.which == capture.device)
++            Complete(e.gbutton.button);
++        else if ((capture.kind == CaptureKind::Button || capture.kind == CaptureKind::Axis) &&
++                 e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && e.gaxis.which == capture.device && std::abs(int(e.gaxis.value)) >= 16384)
++            Complete(PADEncodeAxisButton(e.gaxis.axis, e.gaxis.value < 0));
++    }
++}
++bool UsingGamepad() { return gamepad; }
++bool PlayStationPrompts() {
++    LoadPromptStyle();
++    if (promptStyle != 0) return promptStyle == 1;
++    auto* pad = SDL_GetGamepadFromID(lastPad);
++    const auto type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
++    return type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
++}
++const char* AcceptPrompt() { return !gamepad ? "Enter" : PlayStationPrompts() ? "Cruz" : "A"; }
++const char* BackPrompt() { return !gamepad ? "Esc" : PlayStationPrompts() ? "Círculo" : "B"; }
++const char* TabPrompt() { return !gamepad ? "Q / E" : PlayStationPrompts() ? "L1 / R1" : "LB / RB"; }
++const char* DeviceLabel() { return !gamepad ? "Teclado / ratón" : PlayStationPrompts() ? "Mando PlayStation" : "Mando"; }
++bool Capturing() { return capture.kind != CaptureKind::None || testing || captureGraceFrames > 0 || waitForRelease; }
++
++bool Draw() {
++    UpdateCapture();
++    settings_overlay::PrepareLauncherControllers();
++    const float em = ImGui::GetFontSize();
++    const int padIndex = PADGetIndexForPort(port);
++    const bool keyboard = keyboardView;
++    // Header: player, device, prompt family and defaults, two or four per row.
++    const float width = ImGui::GetContentRegionAvail().x;
++    {
++        const int cols = width >= em * 36 ? 4 : width >= em * 18 ? 2 : 1;
++        const float cell = (width - ImGui::GetStyle().ItemSpacing.x * (cols - 1)) / cols;
++        int cells = 0;
++        const auto next = [&](const char* label) {
++            if (cells) { ImGui::EndGroup(); if (cells % cols) ImGui::SameLine(); }
++            ++cells;
++            ImGui::BeginGroup();
++            ImGui::AlignTextToFramePadding();  // same baseline as the cells beside it
++            ImGui::TextUnformatted(label);
++            ImGui::SetNextItemWidth(cell);
++        };
++        next("Jugador");
++        if (ImGui::Combo("##Jugador", &port, "Jugador 1\0Jugador 2\0Jugador 3\0Jugador 4\0")) Cancel();
++        next("Dispositivo");
++        const char* assigned = PADGetName(port);
++        if (ImGui::BeginCombo("##Dispositivo", keyboard ? "Teclado y ratón" : assigned ? assigned : "Ningún mando")) {
++            for (uint32_t i = 0; i < PADCount(); ++i) {
++                ImGui::PushID(int(i));
++                if (ImGui::Selectable(PADGetNameForControllerIndex(i), !keyboard && padIndex == int(i))) {
++                    PADSetPortForIndex(i, port); PADSerializeMappings(); keyboardView = false;
++                }
++                ImGui::PopID();
++            }
++            if (ImGui::Selectable("Teclado y ratón", keyboard)) {
++                keyboardView = true;
++                uint32_t count = 0;
++                if (!PADGetKeyButtonBindings(port, &count)) { PADSetKeyboardActive(port, true); PADSerializeMappings(); }
++            }
++            ImGui::EndCombo();
++        }
++        next("Nombres de botones");
++        if (ImGui::Combo("##Avisos", &promptStyle, "Automático\0PlayStation\0Xbox\0")) std::ofstream(PromptPath()) << promptStyle;
++        next(" ");
++        if (ImGui::Button("Predeterminado", ImVec2(cell, 0))) {
++            Cancel();
++            if (keyboard) {
++                PADClearKeyBindings(port);
++                PADSetKeyboardActive(port, true);
++            } else {
++                PADRestoreDefaultMapping(port);
++                uint32_t count = 0;
++                if (auto* mappings = PADGetButtonMappings(port, &count))
++                    for (int i = 0; i < PAD_BUTTON_COUNT; ++i)
++                        for (uint32_t j = 0; j < count; ++j)
++                            if (mappings[j].padButton == ControllerNames::kGameCubeButtons[i].padButton) PersistButton(port, i, mappings[j].nativeButton);
++            }
++            PADSerializeMappings();
++            notice = "Asignaciones predeterminadas restauradas.";
++        }
++        ImGui::EndGroup();
++    }
++    controller_mapping_wizard::DrawSetupList();
++    ImGui::PushTextWrapPos(0);
++    ImGui::TextDisabled("Clic o %s en una asignación y pulsa la nueva entrada · Esc cancela · clic derecho quita", AcceptPrompt());
++    if (!notice.empty()) ImGui::TextColored(ImVec4(.6f, 1, .7f, 1), "%s", notice.c_str());
++    ImGui::PopTextWrapPos();
++
++    uint32_t count = 0, axisCount = 0;
++    auto* mappings = keyboard ? nullptr : PADGetButtonMappings(port, &count);
++    auto* keys = keyboard ? PADGetKeyButtonBindings(port, &count) : nullptr;
++    auto* axes = keyboard ? nullptr : PADGetAxisMappings(port, &axisCount);
++    auto* keyAxes = keyboard ? PADGetKeyAxisBindings(port, &axisCount) : nullptr;
++    auto* dead = keyboard ? nullptr : PADGetDeadZones(port);
++    auto* response = PADGetStickResponse(port);
++    if (!mappings && !keys) {
++        ImGui::TextWrapped("Este jugador no tiene mando. Elige uno en Dispositivo o usa Teclado y ratón.");
++        controller_mapping_wizard::Draw();
++        return Capturing() || controller_mapping_wizard::IsActive();
++    }
++    PADStatus statuses[PAD_CHANMAX]{};
++    PADBlockInput(false);
++    PADRead(statuses);
++    InputBindings::SetInputBlocked(false);
++    InputBindings::Apply(statuses);
++    const PADStatus& status = statuses[port];
++
++    const auto button = [&](const char* label, int row) {
++        const auto target = ControllerNames::kGameCubeButtons[row].padButton;
++        std::string bound = "Sin asignar";
++        for (uint32_t j = 0; j < count; ++j) {
++            if (mappings && mappings[j].padButton == target) bound = NativeName(mappings[j].nativeButton, target);
++            if (keys && keys[j].padButton == target) bound = KeyName(keys[j].scancode);
++        }
++        BindingRow(label, keyboard ? CaptureKind::Key : CaptureKind::Button, row, bound, &bindingRects[row]);
++    };
++    const auto axis = [&](const char* label, int padAxis) {
++        std::string bound = "Sin asignar";
++        for (uint32_t j = 0; j < axisCount; ++j) {
++            if (axes && axes[j].padAxis == padAxis) bound = AxisName(axes[j]);
++            if (keyAxes && keyAxes[j].padAxis == padAxis) bound = KeyName(keyAxes[j].scancode);
++        }
++        BindingRow(label, keyboard ? CaptureKind::KeyAxis : CaptureKind::Axis, padAxis, bound, &axisRects[padAxis]);
++    };
++    bool saveResponse = false;
++    const auto slider = [&](const char* label, float& value, float low, float high, const char* format) {
++        ImGui::SetNextItemWidth(-FLT_MIN);
++        const bool changed = ImGui::SliderFloat(label, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp);
++        saveResponse |= ImGui::IsItemDeactivatedAfterEdit();
++        return changed;
++    };
++    const auto stick = [&](bool sub) {
++        const int base = sub ? PAD_AXIS_RIGHT_X_POS : PAD_AXIS_LEFT_X_POS;
++        u16* zone = dead ? (sub ? &dead->substickDeadZone : &dead->stickDeadZone) : nullptr;
++        DrawGate(status, sub, zone && dead->useDeadzones ? *zone / 32767.f : 0);
++        axis("Arriba", base + 2);
++        axis("Abajo", base + 3);
++        axis("Izquierda", base + 1);
++        axis("Derecha", base);
++        if (zone) {
++            float percent = *zone / 327.67f;
++            if (slider(sub ? "##ZonaC" : "##Zona", percent, 0, 40, "Zona muerta %.1f %%")) *zone = u16(percent * 327.67f);
++        }
++        slider(sub ? "##SensC" : "##Sens", sub ? response->subSensitivity : response->mainSensitivity, .5f, 2.f, "Sensibilidad %.2f x");
++    };
++    const auto trigger = [&](int row, int padAxis, u8 value, const char* label, const char* analog) {
++        button(label, row);
++        axis(analog, padAxis);
++        ImGui::ProgressBar(value / 255.f, ImVec2(-FLT_MIN, em * .4f), "");
++    };
++    // Dolphin's dialog, one group per GameCube control, reflowed for the width.
++    const std::array<std::function<void()>, 6> groups{
++        [&] { Group("Botones", [&] {
++            for (int row : {0, 1, 2, 3, 5, 4}) button(std::array{"A", "B", "X", "Y", "START", "Z"}[row], row);
++        }); },
++        [&] { Group("Cruceta", [&] {
++            button("Arriba", 8); button("Abajo", 9); button("Izquierda", 10); button("Derecha", 11);
++        }); },
++        [&] { Group("Stick principal", [&] { stick(false); }); },
++        [&] { Group("Stick C", [&] { stick(true); }); },
++        [&] { Group("Gatillos", [&] {
++            trigger(6, PAD_AXIS_TRIGGER_L, status.triggerLeft, "L", "L analógico");
++            trigger(7, PAD_AXIS_TRIGGER_R, status.triggerRight, "R", "R analógico");
++        }); },
++        [&] { Group("Opciones", [&] {
++            if (dead && ImGui::Checkbox("Aplicar zona muerta", &dead->useDeadzones)) PADSerializeMappings();
++            if (ImGui::Button(testing ? "Terminar prueba" : "Probar sticks", ImVec2(-FLT_MIN, 0))) testing = !testing;
++            ImGui::PushTextWrapPos(0);
++            ImGui::TextDisabled("%s", testing ? "Los sticks ya no mueven el menú. Esc u OPTIONS termina."
++                                              : "Mientras pruebas, los sticks no mueven el menú.");
++            ImGui::TextDisabled("Sensibilidad: menos de 1 da precisión cerca del centro; más de 1, respuesta rápida.");
++            ImGui::PopTextWrapPos();
++        }); },
++    };
++    // Group index -> column for 1..4 columns.
++    const int columns = std::clamp(int(ImGui::GetContentRegionAvail().x / (em * 15)), 1, 4);
++    static constexpr std::array<std::array<int, 6>, 4> layout{{
++        {0, 0, 0, 0, 0, 0}, {0, 0, 1, 1, 0, 1}, {0, 0, 1, 2, 1, 2}, {0, 0, 1, 2, 3, 3}}};
++    if (ImGui::BeginTable("Grupos", columns, ImGuiTableFlags_SizingStretchSame)) {
++        for (int c = 0; c < columns; ++c) {
++            ImGui::TableNextColumn();
++            for (int g = 0; g < 6; ++g)
++                if (layout[columns - 1][g] == c) groups[g]();
++        }
++        ImGui::EndTable();
++    }
++    if (saveResponse) PADSerializeMappings();
++    if (testing && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false))) {
++        testing = false; waitForRelease = true;
++    }
++    controller_mapping_wizard::Draw();
++    return testing || Capturing() || controller_mapping_wizard::IsActive();
++}
++#include "../tests/launcher_controls_probe.inc"
++}
+diff --git a/runtime/src/launcher_settings.inc b/runtime/src/launcher_settings.inc
+new file mode 100644
+index 0000000..b13e247
+--- /dev/null
++++ b/runtime/src/launcher_settings.inc
+@@ -0,0 +1,189 @@
++// Included in launcher::Run: the settings model and callbacks remain shared
++// with the normal launch path. ImGui containers clip and scroll their content.
++auto drawSettings = [&] {
++    static bool popupLastFrame = false;
++    const bool popupProtected = popupLastFrame;
++    const float fit = std::min(w / kArtW, h / kArtH);
++    const ImVec2 artOrigin((w-kArtW*fit)*.5f,(h-kArtH*fit)*.5f);
++    const auto at = [&](float x,float y) { return ImVec2(artOrigin.x+x*fit,artOrigin.y+y*fit); };
++    // The framed artwork only suits windows near its 16:9 shape; other shapes get a
++    // panel that fills the window instead of a letterboxed one.
++    const float aspect = w / h, artAspect = kArtW / kArtH;
++    const bool framed = art.ok && aspect > artAspect * .9f && aspect < artAspect * 1.12f;
++    if (framed) {
++        auto* bg=ImGui::GetBackgroundDrawList();
++        bg->AddImage(art.settingsBlur ? art.settingsBlur : art.settings,ImVec2(0,0),size,ImVec2(0,0),ImVec2(1,1),Rgba(75,100,155));
++        bg->AddImage(art.settings,at(0,0),at(kArtW,kArtH));
++        // Cover the old static separator and keyboard-only footer in the UI;
++        // the original artwork files remain untouched.
++        bg->AddImage(art.settings,at(846,236),at(855,762),ImVec2(837/kArtW,236/kArtH),ImVec2(846/kArtW,762/kArtH));
++        bg->AddRectFilledMultiColor(at(125,787),at(1548,853),Rgba(5,60,169),Rgba(5,85,201),Rgba(5,65,177),Rgba(5,45,145));
++    } else {
++        if (art.ok) ImGui::GetBackgroundDrawList()->AddImage(art.settingsBlur ? art.settingsBlur : art.settings,ImVec2(0,0),size,ImVec2(0,0),ImVec2(1,1),Rgba(75,100,155));
++        else DrawBackground(ImGui::GetBackgroundDrawList(),w,h,u,t,g_title);
++        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(w*.04f,h*.06f),ImVec2(w*.96f,h*.94f),Rgba(15,100,210),20);
++        ImGui::GetBackgroundDrawList()->AddRectFilledMultiColor(ImVec2(w*.04f+6,h*.06f+6),ImVec2(w*.96f-6,h*.94f-6),Rgba(25,140,245),Rgba(25,140,245),Rgba(4,66,177),Rgba(4,66,177));
++        ImGui::GetBackgroundDrawList()->AddRect(ImVec2(w*.04f,h*.06f),ImVec2(w*.96f,h*.94f),IM_COL32_WHITE,20,0,5);
++    }
++    const float scale=std::clamp(framed ? fit : std::min(w/1280.f,h/720.f),.8f,1.5f);
++    const ImVec2 panelPos=framed ? at(123,119) : ImVec2(w*.055f,h*.075f);
++    const ImVec2 panelSize=framed ? ImVec2(1425*fit,735*fit) : ImVec2(w*.89f,h*.85f);
++    ImGui::SetNextWindowPos(panelPos,ImGuiCond_Always);
++    ImGui::SetNextWindowSize(panelSize,ImGuiCond_Always);
++    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * scale, 16 * scale));
++    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16 * scale);
++    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8 * scale);
++    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * scale, 9 * scale));
++    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12 * scale, 8 * scale));
++    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0);
++    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize,2);
++    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0,0,0,0));
++    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.05f,.25f,.65f,1));
++    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(.14f, .34f, .58f, 1));
++    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(.78f, .40f, .08f, 1));
++    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(.27f, .38f, .53f, 1));
++    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(1, .76f, .25f, 1));
++    ImGui::PushStyleColor(ImGuiCol_PopupBg,ImVec4(.03f,.21f,.60f,.99f));
++    ImGui::PushStyleColor(ImGuiCol_FrameBg,ImVec4(.025f,.14f,.43f,1));
++    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,ImVec4(.12f,.39f,.75f,1));
++    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,ImVec4(.20f,.46f,.85f,1));
++    ImGui::PushStyleColor(ImGuiCol_TextDisabled,ImVec4(.70f,.84f,1,1));
++    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.70f,.85f,1,.85f));
++    ImGui::PushFont(g_menu);
++    ImGui::Begin("Ajustes del launcher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
++    ImGui::SetWindowFontScale(scale);
++    if (framed) {
++        const ImVec2 closeA=at(1465,120),closeB=at(1548,200);
++        const auto mouse=ImGui::GetIO().MousePos;
++        if (click && mouse.x>=closeA.x && mouse.x<closeB.x && mouse.y>=closeA.y && mouse.y<closeB.y) settingsOpen=false;
++    }
++    const float available = ImGui::GetContentRegionAvail().x - (framed ? 100*fit : 0);
++    float used = 0;
++    const int firstTab=art.ok && modsOnly ? kModsTab : 0;
++    const int tabCount=art.ok ? (modsOnly ? 2 : kModsTab) : int(tabs.size());
++    for (int i = firstTab; i < firstTab+tabCount; ++i) {
++        const float width = ImGui::CalcTextSize(tabs[i].name).x + ImGui::GetStyle().FramePadding.x * 2;
++        if (i != firstTab && used + width + 10 * scale <= available) { ImGui::SameLine(); used += 10 * scale; }
++        else used = 0;
++        ImGui::PushID(i);
++        const bool active = tab == i;
++        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.78f, .40f, .08f, 1));
++        if (launcher_visuals::PillButton(tabs[i].name,ImVec2(0,0),active)) { tab = i; row = 0; }
++        if (active) ImGui::PopStyleColor();
++        ImGui::PopID();
++        used += width;
++    }
++    if (framed) ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),(236-119)*fit));
++    ImGui::Separator();
++    const float footer = 58 * scale;
++    const float compactInfo = tab != 2 && available < 800 * scale ? 40 * scale : 0;
++    const float height = std::max(60.f, ImGui::GetContentRegionAvail().y - footer - compactInfo);
++    bool controlsBusy = false;
++    if (tab == 2) {
++        ImGui::BeginChild("Controles", ImVec2(0, height));
++        controlsBusy = launcher_controls::Draw();
++        ImGui::Separator();
++        Option& remote = option(2, 0);
++        bool remoteOn = remote.value != 0;
++        if (ImGui::Checkbox(remote.label, &remoteOn)) { remote.value = remoteOn; apply(2, 0); }
++        ImGui::EndChild();
++    } else {
++        const bool wide = available >= 800 * scale;
++        Tab& current = tabs[tab];
++        const int count = int(current.options.size());
++        const float rowHeight = 68 * scale;
++        pageRows = std::max(1, int((height - 60 * scale) / rowHeight));
++        row = std::clamp(row, 0, std::max(0, count - 1));
++        scroll = row / pageRows * pageRows;
++        const int shown = std::min(pageRows, count - scroll);
++        const float listWidth = wide ? available * .53f : available;
++        ImGui::BeginChild("Opciones", ImVec2(listWidth, height));
++        ImGui::BeginChild("Lista", ImVec2(0, height - 56 * scale));
++        for (int i = scroll; i < scroll + shown; ++i) {
++            Option& opt = current.options[i];
++            ImGui::PushID(i);
++            const float width = ImGui::GetContentRegionAvail().x;
++            ImGui::BeginGroup();
++            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width * .51f);
++            ImGui::TextUnformatted(opt.label);
++            ImGui::PopTextWrapPos();
++            ImGui::EndGroup();
++            ImGui::SameLine(width * .55f);
++            if (launcher_visuals::PillButton(opt.choices[opt.value].c_str(), ImVec2(width * .45f, 46 * scale))) { row = i; change(tab, i, 1); }
++            if (ImGui::IsItemFocused() || ImGui::IsItemHovered()) row = i;
++            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { row = i; change(tab, i, -1); }
++            if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) change(tab, i, -1);
++            if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) change(tab, i, -1);
++            ImGui::Separator();
++            ImGui::PopID();
++        }
++        if (!count) ImGui::TextWrapped("Todavía no hay elementos aquí.");
++        ImGui::EndChild();
++        const int pages = std::max(1, (count + pageRows - 1) / pageRows);
++        const int currentPage = scroll / pageRows;
++        if (pages > 1) {
++            ImGui::BeginDisabled(currentPage == 0);
++            if (launcher_visuals::PillButton("<")) row = (currentPage - 1) * pageRows;
++            ImGui::EndDisabled();
++            ImGui::SameLine(); ImGui::Text("%d / %d", currentPage + 1, pages);
++            ImGui::SameLine();
++            ImGui::BeginDisabled(currentPage + 1 >= pages);
++            if (launcher_visuals::PillButton(">")) row = (currentPage + 1) * pageRows;
++            ImGui::EndDisabled();
++            if (listWidth > 410 * scale) {
++                for (int p = std::max(0, currentPage - 2); p <= std::min(pages - 1, currentPage + 2); ++p) {
++                    ImGui::SameLine();
++                    if (p == currentPage) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.78f, .40f, .08f, 1));
++                    if (launcher_visuals::PillButton(std::to_string(p + 1).c_str())) row = p * pageRows;
++                    if (p == currentPage) ImGui::PopStyleColor();
++                }
++            }
++        } else ImGui::TextDisabled("%d ajustes", count);
++        ImGui::EndChild();
++        if (wide) {
++            ImGui::SameLine();
++            ImGui::BeginChild("Ayuda", ImVec2(0, height), ImGuiChildFlags_Borders);
++            ImGui::PushTextWrapPos(0);
++            if (count) {
++                const auto& selected = current.options[row];
++                ImGui::TextColored(ImVec4(1, .79f, .35f, 1), "%s", selected.label);
++                ImGui::Spacing(); ImGui::TextUnformatted(selected.help); ImGui::Spacing();
++                ImGui::TextDisabled("%s", selected.restart ? "Se aplica al iniciar el juego." : "Se aplica al momento.");
++            }
++            if (current.footer) { ImGui::Spacing(); ImGui::TextUnformatted(current.footer); }
++            ImGui::PopTextWrapPos(); ImGui::EndChild();
++        }
++        if (!wide && count) {
++            // Compact windows keep the explanation reachable by keyboard/pad.
++            if (launcher_visuals::PillButton("Información del ajuste")) ImGui::OpenPopup("Información");
++            ImGui::SetNextWindowSize(ImVec2(std::min(520.f, w - 50), std::min(420.f, h - 80)), ImGuiCond_Appearing);
++            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(.5f, .5f));
++            if (ImGui::BeginPopupModal("Información", nullptr, ImGuiWindowFlags_NoResize)) {
++                ImGui::BeginChild("Texto", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
++                ImGui::PushTextWrapPos(0);
++                ImGui::TextUnformatted(current.options[row].help);
++                ImGui::PopTextWrapPos(); ImGui::EndChild();
++                if (launcher_visuals::PillButton("Cerrar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
++                ImGui::EndPopup();
++            }
++        }
++        if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
++            if (KeyPressed(SDL_SCANCODE_PAGEUP) || ImGui::IsKeyPressed(ImGuiKey_GamepadL2)) row = std::max(0, scroll - pageRows);
++            if (KeyPressed(SDL_SCANCODE_PAGEDOWN) || ImGui::IsKeyPressed(ImGuiKey_GamepadR2)) row = std::min(std::max(0, count - 1), scroll + pageRows);
++        }
++    }
++    ImGui::Separator();
++    if (launcher_visuals::PillButton("Volver")) settingsOpen = false;
++    ImGui::SameLine();
++    ImGui::TextWrapped("%s: pestaña · %s: volver · %s", launcher_controls::TabPrompt(), launcher_controls::BackPrompt(),launcher_controls::DeviceLabel());
++    const bool popupNow = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
++    if (!controlsBusy && !popupProtected && !popupNow) {
++        if (Pressed({SDL_SCANCODE_Q}, {ImGuiKey_GamepadL1})) { tab = firstTab+(tab-firstTab+tabCount-1)%tabCount; row = 0; }
++        if (Pressed({SDL_SCANCODE_E}, {ImGuiKey_GamepadR1})) { tab = firstTab+(tab-firstTab+1)%tabCount; row = 0; }
++        if (Back()) settingsOpen = false;
++    }
++    popupLastFrame = popupNow;
++    ImGui::End();
++    ImGui::PopFont(); ImGui::PopStyleColor(12); ImGui::PopStyleVar(7);
++};
++drawSettings();
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index fa4cfa2..5f59b56 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -1580,6 +1580,14 @@ void InitializeRuntimeSettings() noexcept {
+     InputBindings::SetInputBlocked(false);
+ }
+ 
++void PrepareLauncherControllers(bool devicesChanged) noexcept {
++    PADInit();
++    static const bool loaded = [] { controller_mapping_wizard::LoadPersistedMappings(); return true; }();
++    (void)loaded;
++    if (devicesChanged) g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
++    ApplyConfiguredMappings();
++}
++
+ void HandleEvents(const AuroraEvent* events) noexcept {
+     if (!events) {
+         return;
+diff --git a/runtime/tests/launcher_controls_probe.inc b/runtime/tests/launcher_controls_probe.inc
+new file mode 100644
+index 0000000..cba7c72
+--- /dev/null
++++ b/runtime/tests/launcher_controls_probe.inc
+@@ -0,0 +1,135 @@
++// Runs against the real SDL event queue and PADRead, without starting guest code.
++// Set WIICOMPILED_LAUNCHER_PROBE=1 in an isolated portable test directory.
++bool ProbeTick() {
++    static bool enabled = [] { const char* e = std::getenv("WIICOMPILED_LAUNCHER_PROBE"); return e && std::string(e) == "1"; }();
++    if (!enabled) return false;
++    const auto require = [](bool ok, const char* label) {
++        if (!ok) { std::fprintf(stderr, "launcher-probe FAILED: %s (%s)\n", label, SDL_GetError()); std::fflush(stderr); std::_Exit(2); }
++        std::fprintf(stderr, "launcher-probe PASS: %s\n", label);
++    };
++    static int frame = 0;
++    static SDL_JoystickID id = 0;
++    static SDL_Joystick* joystick = nullptr;
++    const auto key = [](SDL_Scancode code) {
++        SDL_Event e{}; e.type = SDL_EVENT_KEY_DOWN; e.key.scancode = code; e.key.down = true; SDL_PushEvent(&e);
++    };
++    if (frame == 0) {
++        require(RuntimeConfigFile::PortableRootDirectory().has_value(), "isolated portable state");
++        if (const char* reload = std::getenv("WIICOMPILED_LAUNCHER_PROBE_RELOAD"); reload && std::string(reload) == "1") {
++            auto* response = PADGetStickResponse(0);
++            require(response && response->mainSensitivity == .5f && response->subSensitivity == 2.f, "response reloads in a new process");
++            const auto& a = RuntimeConfigFile::ControllerButton(0);
++            require(a && *a == "east", "button mapping reloads in a new process");
++            std::fprintf(stderr, "launcher-probe COMPLETE\n"); std::fflush(stderr);
++            return true;
++        }
++        int count = 0;
++        auto** windows = SDL_GetWindows(&count);
++        if (windows && count) SDL_RaiseWindow(windows[0]);
++        SDL_free(windows);
++        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++        SDL_VirtualJoystickDesc desc{}; SDL_INIT_INTERFACE(&desc);
++        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD; desc.vendor_id = 0x054c; desc.product_id = 0x0ce6;
++        desc.naxes = SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
++        desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
++        desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1; desc.name = "Launcher PS integration probe";
++        id = SDL_AttachVirtualJoystick(&desc); require(id != 0, "attach virtual PlayStation pad");
++        joystick = SDL_OpenJoystick(id); require(joystick != nullptr, "open virtual pad");
++    }
++    if (frame == 15) {
++        bool assigned = false;
++        for (uint32_t i = 0; i < PADCount(); ++i) {
++            auto* pad = PADGetSDLGamepadForIndex(i);
++            if (pad && SDL_GetGamepadID(pad) == id) { PADSetPortForIndex(i, 0); assigned = true; }
++        }
++        require(assigned, "assign virtual pad to player one");
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true);
++    }
++    if (frame == 25) {
++        require(UsingGamepad() && PlayStationPrompts() && std::string(AcceptPrompt()) == "Cruz", "PlayStation prompts after pad input");
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, false); key(SDL_SCANCODE_F9);
++    }
++    if (frame == 35) {
++        require(!UsingGamepad() && std::string(AcceptPrompt()) == "Enter", "keyboard prompts after keyboard input");
++        SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 4000);
++    }
++    if (frame == 45) {
++        require(!UsingGamepad(), "resting stick noise keeps keyboard prompts");
++        SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 20000);
++    }
++    if (frame == 55) {
++        require(UsingGamepad(), "stick movement switches prompts");
++        auto* dz = PADGetDeadZones(0); require(dz != nullptr, "dead zone available");
++        dz->useDeadzones = true; dz->stickDeadZone = 3000;
++        *PADGetStickResponse(0) = {.5f, 2.f};
++        PADStatus states[PAD_CHANMAX]{}; PADBlockInput(false); PADRead(states);
++        const auto expected = aurora::pad::ShapeStick(20000, 0, 3000, true, .5f);
++        require(states[0].stickX == expected.x && states[0].stickY == 0, "actual PADRead uses configured response curve");
++        SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 32767);
++    }
++    if (frame == 65) {
++        PADStatus states[PAD_CHANMAX]{}; PADRead(states);
++        require(states[0].stickX == 127, "fine sensitivity retains full stick travel");
++        PADSerializeMappings();
++        std::ifstream saved(RuntimeConfigFile::ResolveConfigPath().parent_path() / "stick_response.txt");
++        int version = 0; float main = 0, sub = 0; saved >> version >> main >> sub;
++        require(version == 1 && main == .5f && sub == 2.f, "response settings persist");
++        SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 0);
++        const auto r=bindingRects[0];
++        require(r.z>r.x && r.w>r.y,"binding rows expose hitboxes");
++        ImGui::GetIO().AddMousePosEvent((r.x+r.z)*.5f,(r.y+r.w)*.5f);
++    }
++    if (frame==66) ImGui::GetIO().AddMouseButtonEvent(0,true);
++    if (frame==67) ImGui::GetIO().AddMouseButtonEvent(0,false);
++    if (frame==75) require(capture.kind==CaptureKind::Button && capture.row==0,"clicking a binding captures in place");
++    if (frame == 85) SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_EAST, true);
++    if (frame == 95) {
++        require(capture.kind == CaptureKind::None, "button capture completes from SDL event");
++        PADStatus states[PAD_CHANMAX]{}; PADRead(states);
++        require((states[0].button & PAD_BUTTON_A) && !(states[0].button & PAD_BUTTON_B), "rebinding swaps duplicate and reaches gameplay PADRead");
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_EAST, false);
++        const auto r=axisRects[PAD_AXIS_LEFT_Y_POS];
++        require(r.z>r.x && r.w>r.y,"stick group exposes direction rows");
++        ImGui::GetIO().AddMousePosEvent((r.x+r.z)*.5f,(r.y+r.w)*.5f);
++    }
++    if (frame==97) ImGui::GetIO().AddMouseButtonEvent(0,true);
++    if (frame==98) ImGui::GetIO().AddMouseButtonEvent(0,false);
++    if (frame==101) {
++        require(capture.kind==CaptureKind::Axis && capture.row==PAD_AXIS_LEFT_Y_POS && !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId),
++                "clicking a stick direction captures in place");
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_NORTH, true);
++    }
++    if (frame==111) {
++        require(capture.kind==CaptureKind::None, "stick direction capture completes from a button");
++        PADStatus states[PAD_CHANMAX]{}; PADRead(states);
++        require(states[0].stickY > 100, "a button can drive a stick direction");
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_NORTH, false);
++        const auto r=bindingRects[0];
++        ImGui::GetIO().AddMousePosEvent((r.x+r.z)*.5f,(r.y+r.w)*.5f);
++    }
++    if (frame==113) ImGui::GetIO().AddMouseButtonEvent(0,true);
++    if (frame==114) ImGui::GetIO().AddMouseButtonEvent(0,false);
++    if (frame==118) {
++        require(capture.kind==CaptureKind::Button, "second capture starts");
++        SDL_Event e{}; e.type = SDL_EVENT_KEY_DOWN; e.key.scancode = SDL_SCANCODE_ESCAPE; e.key.down = true; SDL_PushEvent(&e);
++    }
++    if (frame==122) {
++        require(capture.kind==CaptureKind::None, "Esc cancels the capture");
++        testing = true;
++    }
++    if (frame == 125) {
++        require(testing, "stick test retains its mode");
++        SDL_CloseJoystick(joystick); SDL_DetachVirtualJoystick(id);
++    }
++    if (frame == 140) {
++        bool present = false;
++        for (uint32_t i = 0; i < PADCount(); ++i) {
++            auto* pad = PADGetSDLGamepadForIndex(i); if (pad && SDL_GetGamepadID(pad) == id) present = true;
++        }
++        require(!present, "disconnect handled");
++        std::fprintf(stderr, "launcher-probe COMPLETE\n"); std::fflush(stderr);
++        return true;
++    }
++    ++frame;
++    return false;
++}
+diff --git a/runtime/tests/stick_response_tests.cpp b/runtime/tests/stick_response_tests.cpp
+new file mode 100644
+index 0000000..6f43734
+--- /dev/null
++++ b/runtime/tests/stick_response_tests.cpp
+@@ -0,0 +1,30 @@
++#include "../../aurora-main/include/dolphin/stick_response.hpp"
++#include <cstdlib>
++#include <cmath>
++#include <initializer_list>
++int main() {
++    const auto require = [](bool ok) { if (!ok) std::abort(); };
++    using aurora::pad::ShapeStick;
++    auto center = ShapeStick(1800, 1200, 3000, true, 1.0f);
++    require(center.x == 0 && center.y == 0);
++    auto edge = ShapeStick(3001, 0, 3000, true, 1.0f);
++    require(edge.x == 0 && edge.y == 0);
++    for (float sensitivity : {0.5f, 1.0f, 2.0f}) {
++        require(ShapeStick(32767, 0, 3000, true, sensitivity).x == 127);
++        require(ShapeStick(-32768, 0, 3000, true, sensitivity).x == -127);
++    }
++    auto fine = ShapeStick(16000, 0, 3000, true, 0.5f);
++    auto normal = ShapeStick(16000, 0, 3000, true, 1.0f);
++    auto fast = ShapeStick(16000, 0, 3000, true, 2.0f);
++    require(fine.x < normal.x && normal.x < fast.x);
++    auto diagonal = ShapeStick(23170, 23170, 3000, true, 1.0f);
++    require(diagonal.x == diagonal.y && diagonal.x == 90);
++    int previous = 0;
++    for (int raw = 3000; raw <= 32767; ++raw) {
++        auto next = ShapeStick(raw, 0, 3000, true, 1.5f);
++        require(next.x >= previous && next.x - previous <= 1);
++        previous = next.x;
++    }
++    require(ShapeStick(1000, 0, 3000, false, 1.0f).x > 0);
++    require(ShapeStick(16000, 0, 3000, true, NAN).x == normal.x);
++}
