@@ -160,10 +160,18 @@ def convert_rest(old, original):
 
 def unnamed_2008(fields):
     """2008 bit positions that hold bits PowerUp has no name for."""
+    return unnamed_copied(fields) + [target(name, bit, 1)[0] for name, bit, _ in fields if name.startswith("Bit_")]
+
+
+def unnamed_2007(fields):
+    """The same bits at their 2007 positions, as a PowerUp save holds them."""
+    return unnamed_copied(fields) + [bit for name, bit, _ in fields if name.startswith("Bit_")]
+
+
+def unnamed_copied(fields):
     named = {b for name, bit, count in fields if not name.startswith("Bit_") for b in range(bit, bit + count)}
     # 0x4E..0x5B: after the names (0x02..0x4D, strings PowerUp's regex above does not list).
-    copied = [b for b in [*range(0x4E * 8, 0x5C * 8), *range(0x60 * 8, 0x6F * 8)] if b not in named]
-    return copied + [target(name, bit, 1)[0] for name, bit, _ in fields if name.startswith("Bit_")]
+    return [b for b in [*range(0x4E * 8, 0x5C * 8), *range(0x60 * 8, 0x6F * 8)] if b not in named]
 
 
 VOICE = (0x492, 14)                      # VoiceId, same place in both games
@@ -319,6 +327,11 @@ def emit_cs(repo):
         if place is not None:
             year = "true" if name == "BirthYear" else "false"
             lines.append(f"      (0x{bit:03X}, {count}, 0x{place[0]:03X}, {place[1]}, {year}), // {name}")
+    lines += ["    ];", "",
+              "    /// <summary>2007 bit positions PowerUp has no name for (hidden flags and abilities).</summary>",
+              "    public static readonly int[] Unmodeled =", "    ["]
+    bits = unnamed_2007(load_fields(repo))
+    lines += ["      " + ", ".join(f"0x{b:03X}" for b in bits[i:i + 12]) + "," for i in range(0, len(bits), 12)]
     lines += ["    ];", "  }", "}"]
     print("\n".join(lines))
 

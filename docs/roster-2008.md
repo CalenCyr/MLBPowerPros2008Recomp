@@ -84,7 +84,7 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - Las caras y la piel/ojos se pasan a 2008 con las tablas de arriba.
   - Las voces de 2007 se descartan; los jugadores que también están en 2008 mantienen la suya.
 - Si el `mod.toml` dice `roster_ids = "2008"` (lo escribe la exportación de PowerUp+), voz, cara y piel/ojos ya vienen en números de 2008 y se copian tal cual.
-  - Esa exportación parte de un bloque en ceros, así que sus jugadores nuevos no traen los bits que PowerUp no nombra. Reciben el valor que tiene la mayoría de los jugadores de 2008. Sin ellos (0x4E.1, 0x4E.2, 0x4F.0 y 0x92.0, que todo jugador de 2008 tiene en 1), la pantalla de alineación de Exhibition mostraba barras vacías y todos como "P".
+  - Las exportaciones anteriores a la corrección de PowerUp+ (ver abajo) no traen los bits que PowerUp no nombra. Para que sigan funcionando, sus jugadores nuevos reciben el valor que tiene la mayoría de los jugadores de 2008. Sin ellos (0x4E.1, 0x4E.2, 0x4F.0 y 0x92.0, que todo jugador de 2008 tiene en 1), la pantalla de alineación de Exhibition mostraba barras vacías y todos como "P". Con una exportación nueva el resultado es el mismo con o sin este relleno.
 - **Jugadores nativos o modificados:** launcher → MODS → HERRAMIENTAS → **JUGADORES DEL ROSTER** (`[mods] native_roster` en `Config.toml`).
   - **Nativos** (por defecto): todos entran sin editar (`Unedited` 0x50.3 en 1, `IsEdited` 0x50.4 en 0), como en el roster base de 2008.
   - **Como en el editor:** cada jugador conserva el interruptor *Custom Player* de PowerUp+.
@@ -104,6 +104,7 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - **Números de jugador originales.** Los jugadores que vienen del roster de 2008 conservan su número de jugador y, con él, su hueco y su salario. Los nuevos toman el número que elige PowerUp por salario o el primero libre.
   - **Huecos vacíos y orden.** Los huecos sobrantes quedan vacíos, en vez de llevar jugadores de la partida base de 2007. Los equipos mantienen su orden, con los de grandes ligas primero; la exportación de 2007 los reordenaba con un `OrderBy` encadenado.
   - **Valores sin tocar.** El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado". En cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, se escribe el valor original de 2008.
+  - **Bits sin nombre.** La exportación escribe los bits que PowerUp no modela (`PowerPros2008Fields.Unmodeled`, generado con `--emit-cs`): un jugador que viene de 2008 lleva los suyos y uno nuevo el valor que tiene la mayoría de los jugadores de 2008. Así el `.dat` funciona por sí solo, sin depender de que el juego lo complete.
   - **Caras, piel/ojos y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara o piel sin tocar vuelve a su valor exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
 - **Desde el juego (lo normal):** launcher → MODS → pestaña HERRAMIENTAS → **EDITAR ROSTER (PowerUp+)**.
   - Abre PowerUp+ en el navegador (`http://127.0.0.1:5123`) y se cierra junto con el juego.

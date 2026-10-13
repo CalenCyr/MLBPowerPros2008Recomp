@@ -10,7 +10,9 @@
 #       roster from the player's own project.bin.
 #   tools/powerupplus.ps1 'read-game-save --in-file D:\...\project.bin --name "MLB 2008"' 'list-rosters'
 #       the command line; each argument is one PowerUp+ command.
-param([switch]$Ui, [string]$Publish)
+# -Ui and -Publish are named only; everything else is a PowerUp+ command.
+[CmdletBinding(PositionalBinding = $false)]
+param([switch]$Ui, [string]$Publish, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Commands)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $work = Join-Path $root 'local\powerupplus'
@@ -89,7 +91,7 @@ $cli = "$src\PowerUp\PowerUp.CommandLine"
 Invoke-Checked 'dotnet build'
 # The CLI reads appsettings.json next to the executable.
 @{ DataDirectory = "$run\Data" } | ConvertTo-Json | Set-Content -Encoding utf8 "$work\bin\appsettings.json"
-[IO.File]::WriteAllText("$run\commands.txt", ((@($args) + 'quit') -join "`n") + "`n")
+[IO.File]::WriteAllText("$run\commands.txt", ((@($Commands) + 'quit') -join "`n") + "`n")
 Push-Location $run
 try {
     cmd /c "`"$work\bin\PowerUp.CommandLine.exe`" < commands.txt 2>&1"
