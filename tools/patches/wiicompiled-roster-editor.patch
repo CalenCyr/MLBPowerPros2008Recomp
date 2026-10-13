@@ -1,5 +1,5 @@
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
-index 768fa64..fd90ca0 100644
+index 768fa64..9775dac 100644
 --- a/runtime/src/launcher.cpp
 +++ b/runtime/src/launcher.cpp
 @@ -199,6 +199,7 @@ struct Option {
@@ -109,7 +109,7 @@ index 768fa64..fd90ca0 100644
          if (o.mod >= 0) {
              mods::SetEnabled(installedMods[static_cast<size_t>(o.mod)].id, o.value != 0);
              restart = true;
-@@ -441,11 +520,28 @@ Result Run(int argc, char** argv) {
+@@ -441,11 +520,32 @@ Result Run(int argc, char** argv) {
      bool modsOnly = page != nullptr && std::strcmp(page, "mods") == 0;
      const char* unfocused = std::getenv("WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT");
      const bool unfocusedInput = unfocused != nullptr && std::strcmp(unfocused, "1") == 0;
@@ -122,38 +122,74 @@ index 768fa64..fd90ca0 100644
      int menu = 0;
      int tab = modsOnly ? kModsTab : 0;
      int row = 0;
-+    // Long lists (many mods) scroll: `scroll` is the first row shown, kept so the selected row is
-+    // visible; the mouse wheel moves the selection.
++    // Long lists (many mods) are paged: `scroll` is the first row of the selected row's page and
++    // `pageRows` how many rows a page holds. The mouse wheel moves the selection; on the MODS screen
++    // Q/E (L/R) turn the page.
 +    int scroll = 0;
++    int pageRows = 6;
 +    if (const char* testRow = std::getenv("WIICOMPILED_LAUNCHER_ROW")) row = std::atoi(testRow);
 +    auto visibleRows = [&](int count, int fit) {
++        pageRows = fit;
 +        const float wheel = ImGui::GetIO().MouseWheel;
 +        if (wheel > 0.0f) row = std::max(0, row - 1);
 +        if (wheel < 0.0f) row = std::min(count - 1, row + 1);
-+        if (row < scroll) scroll = row;
-+        if (row >= scroll + fit) scroll = row - fit + 1;
-+        scroll = std::clamp(scroll, 0, std::max(0, count - fit));
-+        return std::min(count, fit);
++        scroll = row / fit * fit;
++        return std::min(fit, count - scroll);
++    };
++    auto pageLabel = [&](int count) {
++        return "Página " + std::to_string(scroll / pageRows + 1) + " de " + std::to_string((count + pageRows - 1) / pageRows);
 +    };
      // Tabs reachable with Q/E: all of them in the procedural look; with the art, the four settings
      // tabs or only MODS.
      auto tabRange = [&](int& first, int& count) {
-@@ -599,9 +695,22 @@ Result Run(int argc, char** argv) {
+@@ -461,11 +561,14 @@ Result Run(int argc, char** argv) {
+         int first = 0;
+         int tabCount = 0;
+         tabRange(first, tabCount);
+-        if (Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1})) {
+-            tab = first + (tab - first + tabCount - 1) % tabCount, row = 0;
+-        }
+-        if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1})) {
+-            tab = first + (tab - first + 1) % tabCount, row = 0;
++        const bool previous = Pressed({SDL_SCANCODE_Q, SDL_SCANCODE_PAGEUP}, {ImGuiKey_GamepadL1});
++        const bool next = Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB, SDL_SCANCODE_PAGEDOWN}, {ImGuiKey_GamepadR1});
++        if (tabCount == 1) {  // a single tab (the MODS screen): Q/E turn its pages
++            if (previous) row = std::max(0, (row / pageRows - 1) * pageRows);
++            if (next && (row / pageRows + 1) * pageRows < count) row = (row / pageRows + 1) * pageRows;
++        } else {
++            if (previous) tab = first + (tab - first + tabCount - 1) % tabCount, row = 0;
++            if (next) tab = first + (tab - first + 1) % tabCount, row = 0;
+         }
+         return Back();
+     };
+@@ -599,9 +702,34 @@ Result Run(int argc, char** argv) {
                  Tab& current = tabs[static_cast<size_t>(tab)];
                  const int count = static_cast<int>(current.options.size());
                  row = std::clamp(row, 0, count - 1);
 -                for (int i = 0; i < count; ++i) {
 +                const int shown = visibleRows(count, 6);  // rows that fit above the footer
-+                const float arrow = 12 * s;  // more rows above / below
-+                if (scroll > 0) {
-+                    const ImVec2 c = at(475, 226);
-+                    dl->AddTriangleFilled(ImVec2(c.x, c.y - arrow), ImVec2(c.x - arrow, c.y + arrow * 0.6f),
-+                                          ImVec2(c.x + arrow, c.y + arrow * 0.6f), IM_COL32_WHITE);
-+                }
-+                if (scroll + shown < count) {
-+                    const ImVec2 c = at(475, 778);
-+                    dl->AddTriangleFilled(ImVec2(c.x, c.y + arrow), ImVec2(c.x + arrow, c.y - arrow * 0.6f),
-+                                          ImVec2(c.x - arrow, c.y - arrow * 0.6f), IM_COL32_WHITE);
++                if (count > pageRows) {  // "◀ Página 1 de 2 ▶"
++                    const std::string label = pageLabel(count);
++                    const float fs = 28 * s;
++                    const ImVec2 size = TextSize(g_bold, fs, label.c_str());
++                    const ImVec2 c = at(640, 161);  // in the header, level with the MODS tab
++                    ShadowedText(dl, g_bold, fs, ImVec2(c.x - size.x * 0.5f, c.y - size.y * 0.5f), IM_COL32_WHITE, label.c_str());
++                    const float a = 10 * s;
++                    const float lx = c.x - size.x * 0.5f - 22 * s;
++                    const float rx = c.x + size.x * 0.5f + 22 * s;
++                    // The arrows turn the page with the mouse too.
++                    auto clicked = [&](float x) {
++                        const ImVec2 m = ImGui::GetIO().MousePos;
++                        return click && std::abs(m.x - x) < 24 * s && std::abs(m.y - c.y) < 24 * s;
++                    };
++                    if (scroll > 0) {
++                        dl->AddTriangleFilled(ImVec2(lx - a, c.y), ImVec2(lx + a * 0.6f, c.y - a), ImVec2(lx + a * 0.6f, c.y + a), IM_COL32_WHITE);
++                        if (clicked(lx)) row = scroll - pageRows;
++                    }
++                    if (scroll + shown < count) {
++                        dl->AddTriangleFilled(ImVec2(rx + a, c.y), ImVec2(rx - a * 0.6f, c.y - a), ImVec2(rx - a * 0.6f, c.y + a), IM_COL32_WHITE);
++                        if (clicked(rx)) row = scroll + pageRows;
++                    }
 +                }
 +                for (int i = scroll; i < scroll + shown; ++i) {
                      Option& opt = current.options[static_cast<size_t>(i)];
@@ -163,13 +199,21 @@ index 768fa64..fd90ca0 100644
                      if (MouseMoved() && hit(r)) row = i;
                      if (hit(r) && click) row = i, change(tab, i, 1);
                      if (hit(r) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
-@@ -807,9 +916,11 @@ Result Run(int argc, char** argv) {
+@@ -807,9 +935,19 @@ Result Run(int argc, char** argv) {
                  const int count = static_cast<int>(current.options.size());
                  row = std::clamp(row, 0, count - 1);
                  const float rowH = 48 * u;
 -                for (int i = 0; i < count; ++i) {
-+                const int fit = std::max(1, static_cast<int>((p1.y - 60 * u - top - 22 * u) / (rowH + 12 * u)));
++                const int fit = std::max(1, static_cast<int>((p1.y - 96 * u - top - 22 * u) / (rowH + 12 * u)));
 +                const int shown = visibleRows(count, fit);
++                if (count > pageRows) {
++                    const std::string label = pageLabel(count);
++                    const float fs = 18 * u;
++                    const ImVec2 size = TextSize(g_bold, fs, label.c_str());
++                    ShadowedText(fg, g_bold, fs,
++                                 ImVec2((p0.x + 30 * u + split - 26 * u - size.x) * 0.5f, p1.y - 92 * u),
++                                 IM_COL32_WHITE, label.c_str());
++                }
 +                for (int i = scroll; i < scroll + shown; ++i) {
                      Option& o = current.options[static_cast<size_t>(i)];
 -                    const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i) * (rowH + 12 * u));
