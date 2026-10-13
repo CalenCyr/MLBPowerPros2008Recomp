@@ -637,3 +637,34 @@ No está validado píxel a píxel contra Dolphin.
 - Arreglo: `0x80664C20`, `0x80664C28`, `0x80664C30` y `0x80664C38` añadidas a `config/wiicompiled/rl8e54-functions.map`. La retraducción pasa de 48.219 a 48.223 funciones.
 - La pantalla se alcanzó con el roster de un mod que ahora muestra nombres (antes la alineación salía vacía).
 - Pendiente: puede haber más funciones así en otras *vtables*. Un rastreo de punteros a mitad de función encontró unos 450 candidatos, pero mezclados con tablas de `switch`. Partir funciones en etiquetas de `switch` rompería el código, así que no se añadieron en bloque.
+
+## Carga de GPU a x4 (13 de octubre de 2026)
+
+- **Parche `wiicompiled-native-efb-snapshot`:** con interpolación desactivada, una copia de color que limpiaba el EFB primero copiaba la fuente a una textura intermedia y después hacía la copia solicitada. El encoder ya ordena la copia solicitada antes del siguiente pase que limpia el EFB; esa instantánea adicional es redundante. Se omite en la ruta nativa y se conserva con interpolación activada. No se cambia la resolución, el filtrado, los efectos, los mods ni el ritmo del juego.
+- Se añadieron contadores acumulados `efbSnapshotCopies`/`efbSnapshotBytes` a `AuroraFrameWaits`. El test gráfico real exige cero instantáneas adicionales en la ruta nativa y su conservación con interpolación. Primero falló con el código anterior; después pasó la comprobación de píxeles independientes y toda la batería existente: copias con limpieza parcial, lecturas síncronas/asíncronas, offscreen, cortes de staging y worker con interpolación.
+- **Medición local, Radeon RX 5500, Direct3D 12, x4 y mismos mods/configuración:** media de las últimas 20 muestras de actividad 3D del proceso, tomadas aproximadamente cada 1,3 s: 75,85 % antes y 69,60 % después. A x1, la referencia fue 34,15 %. Son ventanas de la demo del juego; no son una comparación de una cámara idéntica ni una garantía para todos los partidos. La carga sigue siendo considerable.
+- Las pruebas usan un ejecutable y datos de usuario aislados en `local/analysis/gpu-x4`. Registros y CSV quedan allí. El ejecutable actualizado para jugar está en `local/wiicompiled-mlb/build/WiiCompiled.exe`; la configuración del usuario sigue en x4 y API automática.
+- No se confirmó la hipótesis de renderizado sin límite: los contadores de presentación indican aproximadamente 60 presentaciones/s. El benchmark que filtra por 600 draws recogió demasiado pocos frames para interpretar sus percentiles/FPS como rendimiento del partido; se conservan sus registros, pero no se usan para esa conclusión.
+- El texto del launcher «4x (1440p)» no describe la resolución interna de Aurora: su workspace EFB incluye 640×528 y el modo 16:9 puede expandirlo. No se rebajó x4 para alcanzar 1440p.
+- **Distribución:** este cambio modifica Aurora y amplía `AuroraFrameWaits`; antes de crear un nuevo Setup hay que regenerar `native_prebuilt` y el payload. El Setup/ZIP anterior no se actualizó en esta intervención.
+
+## Prueba de partido directo para medir GPU (13 de octubre de 2026)
+
+- **Parche `wiicompiled-match-benchmark`:** con `WIICOMPILED_MATCH_BENCH=1`, el runtime salta menús y videos y arranca un partido CPU contra CPU (Yankees contra Colorado en Coors Field) con las rutinas originales de inicialización del juego, llamadas desde el gancho de `VIWaitForRetrace`. Sin esa variable el juego no cambia.
+  - Panel en pantalla: x1 a x4, forzar 16:9 y F10, FPS, tiempo GPU y "Medir 30 segundos". Los cambios son temporales: en este modo `Config.toml` no se escribe.
+  - Informe en `UserData/Benchmarks`: CSV por fotograma (dibujos, tiempo GPU, codificación CPU, copias EFB y sus píxeles, lecturas, presentaciones) y resumen con FPS y percentiles.
+  - Tiempo GPU: consultas de *timestamp* de WebGPU alrededor del flujo de render sellado. No incluye el presentador. Si el adaptador no las admite, se informa "no disponible".
+- **Uso:** `tools/benchmark-match.ps1 -Scale 1,4 -Force169 on -Seconds 30` mide sin intervención y guarda además la utilización 3D del proceso según Windows. `tools/benchmark-match.cmd` abre el modo con el panel.
+- **Medición, Radeon RX 5500, Direct3D 12, 16:9, 30 s en el campo** (carpeta aislada `local/analysis/gpu-x4`):
+
+  | | x1 | x4 |
+  |---|---|---|
+  | FPS | 59,5 | 60,0 |
+  | GPU por fotograma | 3,6 ms | 11,7 ms |
+  | Utilización 3D (Windows, últimas 20 muestras) | 31 % | 73 % (máximo 80 %) |
+  | Copias EFB por fotograma | 34,6 | 34,6 |
+  | Píxeles copiados por fotograma | 1,4 M | 22,9 M |
+
+  - El juego no dibuja fotogramas de más: va a 60 por segundo. A x4 la GPU trabaja el 70 % de cada fotograma. Unas 35 copias del EFB por fotograma escalan con la resolución, 16 veces más píxeles a x4.
+  - Las dos sesiones llegaron solas al campo, con los mismos equipos y estadio, y los dibujos variaron entre 208 y 1.012 (el partido se mueve). Es juego automático de la CPU, no una repetición exacta fotograma a fotograma.
+- **Pendiente:** saber qué parte de los 11,7 ms son esas copias y cuál el dibujado en sí.

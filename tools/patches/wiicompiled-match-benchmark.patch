@@ -1,0 +1,620 @@
+diff --git a/aurora-main/include/aurora/gfx.h b/aurora-main/include/aurora/gfx.h
+index e75e259..642ae80 100644
+--- a/aurora-main/include/aurora/gfx.h
++++ b/aurora-main/include/aurora/gfx.h
+@@ -61,9 +61,19 @@ typedef struct {
+   uint64_t textureCreates;     // wgpu textures created (dynamic, static, render, conversion)
+   uint64_t efbSnapshotCopies;  // additional EFB source snapshots before texture copies
+   uint64_t efbSnapshotBytes;
++  uint64_t efbTextureCopies;
++  uint64_t efbCopySourcePixels;
+ } AuroraFrameWaits;
+ void aurora_get_frame_waits(AuroraFrameWaits* waits);
+ 
++// GPU execution between the sealed render stream's timestamp markers. Excludes
++// presenter commands and any demanded EFB prefix submitted before sealing.
++typedef struct {
++  uint64_t totalNs, samples, lastNs, dropped;
++  uint32_t supported;
++} AuroraGpuTiming;
++void aurora_get_gpu_timing(AuroraGpuTiming* timing);
++
+ const AuroraStats* aurora_get_stats();
+ void aurora_get_present_timing(AuroraPresentTiming* timing);
+ 
+diff --git a/aurora-main/lib/aurora.cpp b/aurora-main/lib/aurora.cpp
+index bb5f34c..445a695 100644
+--- a/aurora-main/lib/aurora.cpp
++++ b/aurora-main/lib/aurora.cpp
+@@ -7,6 +7,7 @@
+ #include "gx/shader_info.hpp"
+ #include "imgui.hpp"
+ #include "webgpu/gpu.hpp"
++#include "webgpu/gpu_timing.hpp"
+ #include "webgpu/metalfx.hpp"
+ #include <webgpu/webgpu_cpp.h>
+ #endif
+@@ -1546,6 +1547,7 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame,
+   ZoneScopedN("Encode sealed frame");
+   const gfx::ScopedWaitTimer encodeTimer{gfx::g_frameWaits.encodeNs, &gfx::g_frameWaits.encodedFrames};
+   auto encoder = std::move(ctx.encoder);
++  const int gpuTimingSlot = webgpu::timing::begin(encoder);
+   const auto encoderDescriptor = wgpu::CommandEncoderDescriptor{
+       .label = "Redraw encoder",
+   };
+@@ -1635,6 +1637,7 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame,
+   encode_presentation_snapshot(encoder, ctx.presentSource, *finalImage, true, ctx.metalfxEnabled,
+                                duplicatedMetalFXOutput ? &duplicatedMetalFXOutput : nullptr);
+   auto pendingFrameCapture = encode_frame_capture(encoder, ctx.presentSource);
++  webgpu::timing::end(encoder, gpuTimingSlot);
+   presentationJobs.push_back({
+       .image = std::move(finalImage),
+       .logicalFrame = ctx.logicalFrame,
+@@ -1643,6 +1646,8 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame,
+   });
+   submitEncodedSlot(encoder);
+ 
++  webgpu::timing::submitted(gpuTimingSlot);
++
+   // A group that finished encoding past its anchor slides forward by whole display periods, never
+   // per slot. The cursor keeps two groups off one anchor, which bursts then holds for a period.
+   static PresentClock::time_point s_lastGroupAnchor{};
+@@ -2093,6 +2098,9 @@ bool aurora_flush_efb_copy_to_ram(void* dest) {
+ #endif
+ }
+ AuroraBackend aurora_get_backend() { return aurora::g_config.desiredBackend; }
++void aurora_get_gpu_timing(AuroraGpuTiming* timing) {
++  if (timing) *timing = aurora::webgpu::timing::get();
++}
+ const AuroraBackend* aurora_get_available_backends(size_t* count) {
+   if (count != nullptr) {
+     *count = aurora::PreferredBackendOrder.size();
+diff --git a/aurora-main/lib/gfx/common.cpp b/aurora-main/lib/gfx/common.cpp
+index d13d823..2a99c1e 100644
+--- a/aurora-main/lib/gfx/common.cpp
++++ b/aurora-main/lib/gfx/common.cpp
+@@ -1424,6 +1424,10 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
+                               : tex_copy_conv::SampleFilter::Nearest,
+           .forceOpaqueAlpha = passInfo.resolveForceOpaqueAlpha,
+       };
++      g_frameWaits.efbTextureCopies.fetch_add(1, std::memory_order_relaxed);
++      g_frameWaits.efbCopySourcePixels.fetch_add(
++          static_cast<uint64_t>(passInfo.resolveRect.width) * passInfo.resolveRect.height,
++          std::memory_order_relaxed);
+       if (passInfo.resolveNeedsConversion) {
+         tex_copy_conv::run(cmd, convReq);
+       } else if (passInfo.resolveNeedsShaderSampling) {
+@@ -1800,5 +1804,7 @@ void aurora_get_frame_waits(AuroraFrameWaits* waits) {
+       .textureCreates = c.textureCreates.load(),
+       .efbSnapshotCopies = c.efbSnapshotCopies.load(),
+       .efbSnapshotBytes = c.efbSnapshotBytes.load(),
++      .efbTextureCopies = c.efbTextureCopies.load(),
++      .efbCopySourcePixels = c.efbCopySourcePixels.load(),
+   };
+ }
+diff --git a/aurora-main/lib/gfx/common.hpp b/aurora-main/lib/gfx/common.hpp
+index 18bfb31..d26e412 100644
+--- a/aurora-main/lib/gfx/common.hpp
++++ b/aurora-main/lib/gfx/common.hpp
+@@ -409,7 +409,7 @@ void split_staging_batch();
+ struct FrameWaitCounters {
+   std::atomic<uint64_t> stagingMapWaitNs{0}, stagingSplits{0}, submitNs{0}, submits{0}, presentNs{0}, presents{0},
+       acquireNs{0}, scheduleWaitNs{0}, encodeNs{0}, encodedFrames{0}, efbReadbacks{0}, efbReadbackWaitNs{0}, textureCreates{0},
+-      efbSnapshotCopies{0}, efbSnapshotBytes{0};
++      efbSnapshotCopies{0}, efbSnapshotBytes{0}, efbTextureCopies{0}, efbCopySourcePixels{0};
+ };
+ extern FrameWaitCounters g_frameWaits;
+ // Adds the time since construction to a counter (and bumps an optional event count).
+diff --git a/aurora-main/lib/webgpu/gpu.cpp b/aurora-main/lib/webgpu/gpu.cpp
+index 1f8c924..ce02c57 100644
+--- a/aurora-main/lib/webgpu/gpu.cpp
++++ b/aurora-main/lib/webgpu/gpu.cpp
+@@ -643,6 +643,10 @@ bool initialize(AuroraBackend auroraBackend) {
+         requiredLimits.maxDynamicStorageBuffersPerPipelineLayout, requiredLimits.maxStorageBuffersPerShaderStage,
+         requiredLimits.minUniformBufferOffsetAlignment, requiredLimits.minStorageBufferOffsetAlignment);
+     std::vector<wgpu::FeatureName> requiredFeatures;
++    if (const char* bench = std::getenv("WIICOMPILED_MATCH_BENCH"); bench && *bench == '1' &&
++        g_adapter.HasFeature(wgpu::FeatureName::TimestampQuery)) {
++      requiredFeatures.push_back(wgpu::FeatureName::TimestampQuery);
++    }
+     // Optional native sharing for MetalFX. Devices without either feature keep
+     // the normal renderer; the upscaler checks the enabled pair at runtime.
+     if (backend == wgpu::BackendType::Metal &&
+diff --git a/aurora-main/lib/webgpu/gpu_timing.hpp b/aurora-main/lib/webgpu/gpu_timing.hpp
+new file mode 100644
+index 0000000..048693b
+--- /dev/null
++++ b/aurora-main/lib/webgpu/gpu_timing.hpp
+@@ -0,0 +1,72 @@
++#pragma once
++#include "gpu.hpp"
++#include <aurora/gfx.h>
++#include <array>
++#include <atomic>
++#include <cstring>
++
++// Bounded, nonblocking timestamp readback. Only the encode worker reserves slots;
++// spontaneous map callbacks release them after consuming their own buffers.
++namespace aurora::webgpu::timing {
++struct Slot {
++  std::atomic<bool> busy{false};
++  wgpu::QuerySet queries;
++  wgpu::Buffer resolve, readback;
++};
++inline std::array<Slot, 8> slots;
++inline std::atomic<uint64_t> totalNs{0}, samples{0}, lastNs{0}, dropped{0};
++inline int begin(const wgpu::CommandEncoder& encoder) {
++  if (!g_device.HasFeature(wgpu::FeatureName::TimestampQuery)) return -1;
++  for (size_t i = 0; i < slots.size(); ++i) {
++    auto& slot = slots[i];
++    bool idle = false;
++    if (!slot.busy.compare_exchange_strong(idle, true)) continue;
++    if (!slot.queries) {
++      const wgpu::QuerySetDescriptor q{.label = "Benchmark GPU timestamps", .type = wgpu::QueryType::Timestamp, .count = 2};
++      slot.queries = g_device.CreateQuerySet(&q);
++      const wgpu::BufferDescriptor r{.label = "Benchmark timestamp resolve", .usage = wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc, .size = 256};
++      const wgpu::BufferDescriptor b{.label = "Benchmark timestamp readback", .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst, .size = 256};
++      slot.resolve = g_device.CreateBuffer(&r);
++      slot.readback = g_device.CreateBuffer(&b);
++    }
++    const wgpu::PassTimestampWrites writes{.querySet = slot.queries, .beginningOfPassWriteIndex = 0};
++    const wgpu::ComputePassDescriptor marker{.label = "Benchmark start marker", .timestampWrites = &writes};
++    encoder.BeginComputePass(&marker).End();
++    return static_cast<int>(i);
++  }
++  ++dropped;
++  return -1;
++}
++inline void end(const wgpu::CommandEncoder& encoder, int index) {
++  if (index < 0) return;
++  auto& s = slots[index];
++  const wgpu::PassTimestampWrites writes{.querySet = s.queries, .endOfPassWriteIndex = 1};
++  const wgpu::ComputePassDescriptor marker{.label = "Benchmark end marker", .timestampWrites = &writes};
++  encoder.BeginComputePass(&marker).End();
++  encoder.ResolveQuerySet(s.queries, 0, 2, s.resolve, 0);
++  encoder.CopyBufferToBuffer(s.resolve, 0, s.readback, 0, 16);
++}
++inline void submitted(int index) {
++  if (index < 0) return;
++  slots[index].readback.MapAsync(wgpu::MapMode::Read, 0, 16, wgpu::CallbackMode::AllowSpontaneous,
++    [index](wgpu::MapAsyncStatus status, wgpu::StringView) {
++      auto& s = slots[index];
++      if (status == wgpu::MapAsyncStatus::Success) {
++        uint64_t values[2]{};
++        std::memcpy(values, s.readback.GetConstMappedRange(0, 16), 16);
++        s.readback.Unmap();
++        if (values[1] >= values[0]) {
++          const auto ns = values[1] - values[0];
++          totalNs.fetch_add(ns);
++          lastNs.store(ns);
++          samples.fetch_add(1);
++        }
++      } else { ++dropped; }
++      s.busy.store(false);
++    });
++}
++inline AuroraGpuTiming get() {
++  return {totalNs.load(), samples.load(), lastNs.load(), dropped.load(),
++          g_device && g_device.HasFeature(wgpu::FeatureName::TimestampQuery) ? 1u : 0u};
++}
++}
+diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
+index 1b03f2a..a4bc27b 100644
+--- a/runtime/CMakeLists.txt
++++ b/runtime/CMakeLists.txt
+@@ -386,6 +386,9 @@ target_include_directories(mkw_runtime_config_tests PRIVATE
+     "${CMAKE_CURRENT_LIST_DIR}/third_party/toml11")
+ target_compile_features(mkw_runtime_config_tests PRIVATE cxx_std_20)
+ add_test(NAME mkw_runtime_config_tests COMMAND mkw_runtime_config_tests)
++add_executable(mkw_match_benchmark_tests "${CMAKE_CURRENT_LIST_DIR}/tests/match_benchmark_tests.cpp")
++target_include_directories(mkw_match_benchmark_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
++add_test(NAME mkw_match_benchmark_tests COMMAND mkw_match_benchmark_tests)
+ 
+ add_executable(mkw_nand_save_tests "${CMAKE_CURRENT_LIST_DIR}/tests/nand_save_tests.cpp")
+ target_include_directories(mkw_nand_save_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+diff --git a/runtime/include/match_benchmark.h b/runtime/include/match_benchmark.h
+new file mode 100644
+index 0000000..b07d607
+--- /dev/null
++++ b/runtime/include/match_benchmark.h
+@@ -0,0 +1,15 @@
++#pragma once
++#include <cstdint>
++struct CpuContext;
++namespace match_benchmark {
++enum class BootAction { Wait, LoadData, PrepareMatch };
++constexpr BootAction DecideBoot(uint32_t mode, uint32_t next, bool transition, uint32_t phase) {
++    if ((mode == 1 || mode == 2) && !transition && (phase == 5 || phase == 6)) return BootAction::LoadData;
++    if (mode == 3 && next == 4 && transition) return BootAction::PrepareMatch;
++    return BootAction::Wait;
++}
++bool Enabled();
++uint32_t Scene();
++void OnGuestFrame(CpuContext* cpu);
++void OnHostFrame();
++}
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index 9025436..f94e6bd 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -6,6 +6,7 @@
+ #include <cmath>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstdlib>
+ #include <filesystem>
+ #include <fstream>
+ #include <iomanip>
+@@ -541,7 +542,24 @@ inline RuntimeUserConfig LoadConfigFile() {
+ }
+ 
+ inline const RuntimeUserConfig& Get() {
+-    static RuntimeUserConfig config = LoadConfigFile();
++    static RuntimeUserConfig config = [] {
++        auto result = LoadConfigFile();
++#if defined(WIICOMPILED_GAME_RL8E54)
++        const char* bench = std::getenv("WIICOMPILED_MATCH_BENCH");
++        if (bench && std::string_view(bench) == "1") {
++            if (const char* scale = std::getenv("WIICOMPILED_MATCH_SCALE"); scale && scale[0] >= '1' && scale[0] <= '4' && scale[1] == '\0')
++                result.resolutionMultiplier = static_cast<float>(scale[0] - '0');
++            if (const char* aspect = std::getenv("WIICOMPILED_MATCH_16_9"); aspect && (std::string_view(aspect) == "0" || std::string_view(aspect) == "1"))
++                result.forceAspect169 = *aspect == '1';
++            if (const char* api = std::getenv("WIICOMPILED_MATCH_API"); api && IsSupportedGraphicsApi(api))
++                result.graphicsApi = api;
++            // A benchmark needs complete frames even while new shaders compile.
++            result.skipUnreadyPipelines = false;
++            result.frameInterpolationFps = 0;
++        }
++#endif
++        return result;
++    }();
+     return config;
+ }
+ 
+@@ -561,6 +579,9 @@ inline const std::optional<std::string>& ControllerButton(size_t index) {
+ // Update one TOML value without discarding comments, unrelated settings, or
+ // user-specific paths. This is used by the in-game F10 settings bar.
+ inline bool WriteSetting(std::string_view section, std::string_view key, std::string_view value) {
++#if defined(WIICOMPILED_GAME_RL8E54)
++    if (const char* bench = std::getenv("WIICOMPILED_MATCH_BENCH"); bench && std::string_view(bench) == "1") return true;
++#endif
+     const auto path = ResolveConfigPath();
+     std::ifstream input(path);
+     std::vector<std::string> lines;
+diff --git a/runtime/src/hle/vi.cpp b/runtime/src/hle/vi.cpp
+index 3ed3b1a..23f85fc 100644
+--- a/runtime/src/hle/vi.cpp
++++ b/runtime/src/hle/vi.cpp
+@@ -8,6 +8,7 @@
+ #include "fiber_manager.h"
+ #include "platform/host_platform.h"
+ #include "runtime_log.h"
++#include "match_benchmark.h"
+ 
+ #include <dolphin/vi.h>
+ 
+@@ -898,6 +899,7 @@ PPC_NATIVE_OVERRIDE_VOID(801BAC48, VIGetCurrentLine_HLE_801bac48, (CpuContext* c
+ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
+ {
+     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
++    match_benchmark::OnGuestFrame(cpu);
+     
+     if (Fiber::GuestFiberManager::IsInitialized()) {
+         const int32_t irqState = OS__DisableInterrupts_801a65ac();
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 46a953f..eccc445 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -64,7 +64,7 @@ constexpr std::array<const char*, 3> kDisplayModes{"windowed", "borderless", "ex
+ constexpr std::array<float, 6> kResolutions{1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 0.0f};
+ 
+ bool AutomatedRun() {
+-    for (const char* env : {"WIICOMPILED_SKIP_LAUNCHER", "WIICOMPILED_BENCH", "WIICOMPILED_PAD_SCRIPT",
++    for (const char* env : {"WIICOMPILED_MATCH_BENCH", "WIICOMPILED_SKIP_LAUNCHER", "WIICOMPILED_BENCH", "WIICOMPILED_PAD_SCRIPT",
+                             "WIICOMPILED_KPAD_SCRIPT"}) {
+         const char* value = std::getenv(env);
+         if (value != nullptr && *value != '\0') return true;
+diff --git a/runtime/src/match_benchmark.cpp b/runtime/src/match_benchmark.cpp
+new file mode 100644
+index 0000000..35917ad
+--- /dev/null
++++ b/runtime/src/match_benchmark.cpp
+@@ -0,0 +1,99 @@
++#include "match_benchmark.h"
++#include "memory.h"
++#include "ppc_runtime.h"
++#include <cstdlib>
++#include <cstdio>
++#include <atomic>
++#include "settings_overlay.h"
++
++#if defined(WIICOMPILED_GAME_RL8E54)
++extern "C" void func_80C8BAF0(CpuContext*);
++extern "C" void func_80973828(CpuContext*);
++extern "C" void func_807A8BE8(CpuContext*);
++#endif
++namespace match_benchmark {
++static std::atomic<uint32_t> currentScene{0};
++uint32_t Scene() { return currentScene.load(); }
++void OnHostFrame() {
++#if defined(WIICOMPILED_GAME_RL8E54)
++    if (!Enabled()) return;
++    const uint32_t manager = Memory::Read32(0x81033268u);
++    if (!manager || !Memory::Contains(manager, 1100) || Memory::Read32(manager) != 0x80D4EB88u) return;
++    const uint32_t scene = Memory::Read32(manager + 1024);
++    currentScene.store(Memory::Read32(manager + 1032));
++    if (Scene() == 3 && scene && Memory::Contains(scene, 76) && (Memory::Read32(scene + 56) == 5 || Memory::Read32(scene + 56) == 6) && Memory::Read32(scene + 72) != 0)
++        Memory::Write32(scene + 72, 3);
++#endif
++}
++bool Enabled() {
++#if defined(WIICOMPILED_GAME_RL8E54)
++    static const bool enabled = [] { const char* v = std::getenv("WIICOMPILED_MATCH_BENCH"); return v && *v == '1'; }();
++    return enabled;
++#else
++    return false;
++#endif
++}
++void OnGuestFrame(CpuContext* cpu) {
++#if defined(WIICOMPILED_GAME_RL8E54)
++    if (!Enabled() || !cpu || cpu->gpr[13] != 0x80322060u) return;
++    const uint32_t manager = Memory::Read32(0x81033268u);
++    if (!manager || !Memory::Contains(manager, 1100) || Memory::Read32(manager) != 0x80D4EB88u) return;
++    const uint32_t mode = Memory::Read32(manager + 1032);
++    currentScene.store(mode);
++    const uint32_t next = Memory::Read32(manager + 1028);
++    const uint32_t scene = Memory::Read32(manager + 1024);
++    const uint32_t phase = scene && Memory::Contains(scene, 60) ? Memory::Read32(scene + 56) : 0;
++    const auto action = DecideBoot(mode, next, Memory::Read8(manager + 1040) == 1, phase);
++    static uint32_t last = ~0u;
++    if (mode != last) { std::fprintf(stderr, "[match-bench] scene=%u next=%u phase=%u\n", mode, next, phase); last = mode; }
++    // Scene 3 is the opening movie. Let its own stop/cleanup phase run.
++    if (mode == 3 && (phase == 5 || phase == 6) && Memory::Read32(scene + 72) != 0) {
++        Memory::Write32(scene + 72, 3);
++    }
++    if (action == BootAction::LoadData) {
++        settings_overlay::NotifyStrapInputAccepted();
++        Memory::Write32(manager + 1028, 3);
++        Memory::Write8(manager + 1040, 1);
++        Memory::Write8(manager + 1043, 1);
++    } else if (action == BootAction::PrepareMatch) {
++        static bool prepared = false;
++        if (prepared) {
++            Memory::Write32(manager + 1028, 409);
++            return;
++        }
++        prepared = true;
++        // Call the original game initializer, preserving the suspended guest's ABI.
++        const CpuContext saved = *cpu;
++        Memory::Write32(cpu->gpr[13] - 32744, 0x4D4C4208u);
++        func_80C8BAF0(cpu);
++        const uint32_t config = Memory::Read32(0x8104E1D8u);
++        const uint32_t common = Memory::Read32(0x8103D118u);
++        Memory::Write8(config + 19, 3); // New York Yankees (AL East)
++        Memory::Write8(config + 20, 27); // Colorado Rockies (NL West)
++        for (uint32_t side = 0; side < 2; ++side) {
++            const uint8_t team = side == 0 ? 3 : 27;
++            Memory::Write8(common + 1752 + side * 2204, team);
++            Memory::Write8(common + 1753 + side * 2204, team);
++            cpu->gpr[3] = side;
++            cpu->gpr[4] = team;
++            func_80973828(cpu);
++        }
++        cpu->gpr[3] = 27;
++        func_807A8BE8(cpu);
++        Memory::Write8(config + 31, static_cast<uint8_t>(cpu->gpr[3]));
++        Memory::Write8(common + 4, static_cast<uint8_t>(cpu->gpr[3]));
++        Memory::Write8(config + 18, 0);
++        Memory::Write8(config + 13, 0); // Exhibition, with no human controller mask.
++        Memory::Write8(config + 14, 0);
++        Memory::Write8(config + 26, 3);
++        Memory::Write8(config + 27, 3);
++        Memory::Write16(common + 976, 0);
++        Memory::Write8(common + 978, 0);
++        *cpu = saved;
++        Memory::Write32(manager + 1028, 409);
++        Memory::Write8(manager + 1043, 1);
++        std::fprintf(stderr, "[match-bench] prepared teams=3,27 stadium=%u common=%08x\n", Memory::Read8(config + 31), common);
++    }
++#endif
++}
++}
+diff --git a/runtime/src/match_benchmark_overlay.inc b/runtime/src/match_benchmark_overlay.inc
+new file mode 100644
+index 0000000..bd94b05
+--- /dev/null
++++ b/runtime/src/match_benchmark_overlay.inc
+@@ -0,0 +1,132 @@
++// Included inside settings_overlay's private namespace: reuse its live graphics setters.
++void DrawMatchBenchmark() {
++    if (!match_benchmark::Enabled()) return;
++    using BenchClock = std::chrono::steady_clock;
++    static const auto launched = BenchClock::now();
++    static const unsigned autoSeconds = [] {
++        const char* s = std::getenv("WIICOMPILED_MATCH_SECONDS");
++        unsigned seconds = 0;
++        return s && std::sscanf(s, "%u", &seconds) == 1 ? std::min(seconds, 600u) : 0u;
++    }();
++    static BenchClock::time_point field{}, start{}, last{};
++    static unsigned stable = 0;
++    static bool recording = false, completed = false;
++    static std::vector<double> intervals;
++    static std::ofstream csv;
++    static std::filesystem::path report;
++    static std::string message;
++    static AuroraFrameWaits base{}, previous{};
++    static AuroraGpuTiming gpuBase{}, gpuPrevious{};
++    const auto now = BenchClock::now();
++    AuroraFrameWaits waits{};
++    AuroraGpuTiming gpu{};
++    AuroraPresentTiming present{};
++    aurora_get_frame_waits(&waits);
++    aurora_get_gpu_timing(&gpu);
++    aurora_get_present_timing(&present);
++    const auto* stats = aurora_get_stats();
++    const bool onField = match_benchmark::Scene() == 409 && stats->drawCallCount >= 100;
++    if (field == BenchClock::time_point{}) {
++        stable = onField && aurora_get_queued_pipeline_count() == 0 ? stable + 1 : 0;
++        if (stable >= 60) field = now;
++    }
++    const bool ready = field != BenchClock::time_point{} && now - field >= std::chrono::seconds(5);
++    const auto begin = [&] {
++        const auto id = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
++        const auto folder = RuntimeConfigFile::ApplicationDataDirectory() / "Benchmarks";
++        std::error_code ec;
++        std::filesystem::create_directories(folder, ec);
++        report = folder / ("match-" + std::to_string(id));
++        csv.open(report.string() + ".csv");
++        if (!csv) { message = "No se pudo crear el informe"; return; }
++        csv << "elapsed_s,frame_ms,draws,scale,force_16_9,backend,shader_queue,gpu_render_ms,gpu_samples,cpu_encode_ms,efb_copies,efb_source_pixels,efb_snapshots,efb_readbacks,efb_readback_wait_ms,presents\n";
++        start = last = now;
++        base = previous = waits;
++        gpuBase = gpuPrevious = gpu;
++        intervals.clear();
++        recording = true;
++        message = "Midiendo";
++        std::fprintf(stderr, "[match-bench] recording %s scale=%.0f force169=%d\n", report.string().c_str(), g_resolutionScale, g_forceAspect169);
++    };
++    const auto finish = [&] {
++        recording = false;
++        completed = true;
++        csv.close();
++        auto sorted = intervals;
++        std::sort(sorted.begin(), sorted.end());
++        const double elapsed = std::chrono::duration<double>(now - start).count();
++        const double frames = static_cast<double>(waits.presents - base.presents);
++        const auto percentile = [&](double p) { return sorted.empty() ? 0.0 : sorted[std::min(sorted.size()-1, static_cast<size_t>(p * sorted.size()))]; };
++        std::ofstream summary(report.string() + ".txt");
++        summary << "Yankees vs Colorado; CPU vs CPU; Coors Field; seeded start\n"
++                << "scale=" << g_resolutionScale << " force_16_9=" << g_forceAspect169 << " backend=" << GraphicsApiDisplayName() << '\n'
++                << "seconds=" << elapsed << " presented_frames=" << frames << " fps=" << (elapsed > 0 ? frames/elapsed : 0) << '\n'
++                << "host_frame_p50_ms=" << percentile(.50) << " p95_ms=" << percentile(.95) << " p99_ms=" << percentile(.99) << '\n';
++        const uint64_t samples = gpu.samples - gpuBase.samples;
++        summary << "gpu_supported=" << gpu.supported << " gpu_samples=" << samples << " gpu_dropped=" << gpu.dropped - gpuBase.dropped << '\n';
++        if (samples) summary << "gpu_render_mean_ms=" << double(gpu.totalNs - gpuBase.totalNs)/1e6/samples << '\n';
++        const double encoded = std::max(1.0, double(waits.encodedFrames - base.encodedFrames));
++        summary << "cpu_encode_mean_ms=" << double(waits.encodeNs - base.encodeNs)/1e6/encoded << '\n'
++                << "efb_texture_copies=" << waits.efbTextureCopies - base.efbTextureCopies << " efb_source_pixels=" << waits.efbCopySourcePixels - base.efbCopySourcePixels << '\n'
++                << "efb_snapshots=" << waits.efbSnapshotCopies - base.efbSnapshotCopies << " efb_readbacks=" << waits.efbReadbacks - base.efbReadbacks << '\n'
++                << "GPU markers exclude presenter work and demanded EFB prefixes. CPU autoplay is not a bit-exact replay.\n";
++        summary.close();
++        message = "Informe guardado en UserData/Benchmarks";
++        std::fprintf(stderr, "[match-bench] saved %s.txt\n", report.string().c_str());
++    };
++    if (ready && autoSeconds && !recording && !completed) begin();
++    if (recording) {
++        const double ms = std::chrono::duration<double, std::milli>(now - last).count();
++        intervals.push_back(ms);
++        const uint64_t samples = gpu.samples - gpuPrevious.samples;
++        csv << std::chrono::duration<double>(now - start).count() << ',' << ms << ',' << stats->drawCallCount << ','
++            << g_resolutionScale << ',' << g_forceAspect169 << ',' << GraphicsApiDisplayName() << ',' << aurora_get_queued_pipeline_count() << ',';
++        if (samples) csv << double(gpu.totalNs - gpuPrevious.totalNs)/1e6/samples;
++        csv << ',' << samples << ',' << double(waits.encodeNs - previous.encodeNs)/1e6 << ','
++            << waits.efbTextureCopies - previous.efbTextureCopies << ',' << waits.efbCopySourcePixels - previous.efbCopySourcePixels << ','
++            << waits.efbSnapshotCopies - previous.efbSnapshotCopies << ',' << waits.efbReadbacks - previous.efbReadbacks << ','
++            << double(waits.efbReadbackWaitNs - previous.efbReadbackWaitNs)/1e6 << ',' << waits.presents - previous.presents << '\n';
++        previous = waits; gpuPrevious = gpu; last = now;
++        if (now - start >= std::chrono::seconds(autoSeconds ? autoSeconds : 30)) {
++            finish();
++            if (autoSeconds) std::_Exit(0);
++        }
++    }
++    if (autoSeconds && !completed && now - launched > std::chrono::seconds(120 + autoSeconds)) {
++        std::fprintf(stderr, "[match-bench] timeout: actual field was not ready\n");
++        std::fflush(stderr);
++        std::_Exit(3);
++    }
++    ImGui::SetNextWindowPos(ImVec2(16, 40), ImGuiCond_FirstUseEver);
++    ImGui::SetNextWindowBgAlpha(.90f);
++    if (ImGui::Begin("Prueba GPU - Yankees / Colorado", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
++        ImGui::TextUnformatted(ready ? "Partido automatico de prueba" : "Preparando partido y shaders...");
++        ImGui::BeginDisabled(recording);
++        for (int scale = 1; scale <= 4; ++scale) {
++            if (scale > 1) ImGui::SameLine();
++            char label[8]; std::snprintf(label, sizeof(label), "x%d", scale);
++            if (ImGui::Button(label)) { SetResolutionScale(float(scale)); field = now; stable = 0; completed = false; }
++        }
++        if (ImGui::Checkbox("Forzar 16:9", &g_forceAspect169)) {
++            SetMkwForceAspect169(g_forceAspect169);
++            RuntimeConfigFile::SetForceAspect169(g_forceAspect169);
++            field = now; completed = false;
++        }
++        if (ImGui::Button("Mas opciones (F10)")) g_topBarVisible = !g_topBarVisible;
++        ImGui::EndDisabled();
++        ImGui::Text("FPS %.1f | %s | x%.0f", present.framesPerSecond, GraphicsApiDisplayName(), g_resolutionScale);
++        if (gpu.supported && gpu.samples) ImGui::Text("GPU render: %.2f ms | dibujos: %u", double(gpu.lastNs)/1e6, stats->drawCallCount);
++        else ImGui::TextUnformatted("Tiempo GPU: no disponible");
++        if (!recording) {
++            ImGui::BeginDisabled(!ready);
++            if (ImGui::Button("Medir 30 segundos")) begin();
++            ImGui::EndDisabled();
++        } else {
++            ImGui::Text("Midiendo: %.1f s", std::chrono::duration<double>(now-start).count());
++            if (ImGui::Button("Detener y guardar")) finish();
++        }
++        if (!message.empty()) ImGui::TextUnformatted(message.c_str());
++        ImGui::TextDisabled("Ajustes temporales. Informes: UserData/Benchmarks");
++    }
++    ImGui::End();
++}
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index 6fcbae0..1c91abc 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -1,4 +1,5 @@
+ #include "settings_overlay.h"
++#include "match_benchmark.h"
+ #include "audio_backend.h"
+ #include "aurora_events.h"
+ #include "controller_button_names.h"
+@@ -1160,6 +1161,7 @@ void DrawGraphicsSettings() {
+ }
+ 
+ // WIICOMPILED_BENCH=<minDraws>,<seconds>[,<maxWaitSeconds>]: event-driven benchmark. Waits until a
++#include "match_benchmark_overlay.inc"
+ // frame issues at least minDraws draw calls (the scene under test), then records frame-to-frame
+ // times for the given seconds, prints a summary to stderr and exits. Exits with code 3 if the
+ // scene never shows up within maxWaitSeconds (default 600).
+@@ -1245,6 +1247,7 @@ void RunBenchmarkFrame() {
+ }
+ 
+ void DrawFpsOverlay() {
++    DrawMatchBenchmark();
+     RunBenchmarkFrame();
+     AuroraPresentTiming presentTiming{};
+     aurora_get_present_timing(&presentTiming);
+@@ -1514,7 +1517,7 @@ void PersistDisplayModeIfChanged() {
+ }
+ 
+ void ApplyInputBlockState() {
+-    const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
++    const bool blocked = match_benchmark::Enabled() || controller_mapping_wizard::IsActive() || g_rebind.active ||
+                          g_exitPromptOpen || g_topBarVisible || StartupScreenVisible();
+     PADBlockInput(blocked);
+     InputBindings::SetInputBlocked(blocked);
+@@ -1634,6 +1637,7 @@ void Draw() noexcept {
+     // Wait for the frame worker's DONE phase: it has replayed the previous frame's ImGui draw lists
+     // and started the next ImGui frame, so all overlay callers can now safely issue ImGui commands.
+     aurora_wait_for_frame_worker();
++    match_benchmark::OnHostFrame();
+     // Also drive the Wii Remote rescan from here: PADRead runs it too, but this
+     // runs once per presented frame whatever the game is doing (e.g. sitting in
+     // its "communications interrupted" prompt without polling pads). Same guest
+diff --git a/runtime/tests/match_benchmark_tests.cpp b/runtime/tests/match_benchmark_tests.cpp
+new file mode 100644
+index 0000000..39d9e4e
+--- /dev/null
++++ b/runtime/tests/match_benchmark_tests.cpp
+@@ -0,0 +1,12 @@
++#include "match_benchmark.h"
++#include <cassert>
++int main() {
++    using namespace match_benchmark;
++    static_assert(DecideBoot(1, 1, false, 5) == BootAction::LoadData);
++    static_assert(DecideBoot(1, 1, false, 6) == BootAction::LoadData);
++    static_assert(DecideBoot(2, 2, false, 5) == BootAction::LoadData);
++    static_assert(DecideBoot(1, 1, false, 2) == BootAction::Wait);
++    static_assert(DecideBoot(3, 4, true, 7) == BootAction::PrepareMatch);
++    static_assert(DecideBoot(3, 3, false, 5) == BootAction::Wait);
++    static_assert(DecideBoot(409, 409, false, 5) == BootAction::Wait);
++}

@@ -1,0 +1,110 @@
+diff --git a/aurora-main/CMakeLists.txt b/aurora-main/CMakeLists.txt
+--- a/aurora-main/CMakeLists.txt
++++ b/aurora-main/CMakeLists.txt
+@@ -80,7 +80,7 @@
+   add_subdirectory(examples)
+ endif ()
+ 
+-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT CMAKE_CROSSCOMPILING)
++if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT CMAKE_CROSSCOMPILING) OR AURORA_BUILD_GPU_TESTS)
+   enable_testing()
+   add_subdirectory(tests)
+ endif ()
+diff --git a/aurora-main/include/aurora/gfx.h b/aurora-main/include/aurora/gfx.h
+--- a/aurora-main/include/aurora/gfx.h
++++ b/aurora-main/include/aurora/gfx.h
+@@ -59,6 +59,8 @@
+   uint64_t efbReadbacks;       // synchronous EFB-to-RAM readbacks (CPU waits on the GPU)
+   uint64_t efbReadbackWaitNs;  // time blocked in those readback map waits
+   uint64_t textureCreates;     // wgpu textures created (dynamic, static, render, conversion)
++  uint64_t efbSnapshotCopies;  // additional EFB source snapshots before texture copies
++  uint64_t efbSnapshotBytes;
+ } AuroraFrameWaits;
+ void aurora_get_frame_waits(AuroraFrameWaits* waits);
+ 
+diff --git a/aurora-main/lib/gfx/common.hpp b/aurora-main/lib/gfx/common.hpp
+--- a/aurora-main/lib/gfx/common.hpp
++++ b/aurora-main/lib/gfx/common.hpp
+@@ -408,7 +408,8 @@
+ // Cumulative counters behind aurora_get_frame_waits.
+ struct FrameWaitCounters {
+   std::atomic<uint64_t> stagingMapWaitNs{0}, stagingSplits{0}, submitNs{0}, submits{0}, presentNs{0}, presents{0},
+-      acquireNs{0}, scheduleWaitNs{0}, encodeNs{0}, encodedFrames{0}, efbReadbacks{0}, efbReadbackWaitNs{0}, textureCreates{0};
++      acquireNs{0}, scheduleWaitNs{0}, encodeNs{0}, encodedFrames{0}, efbReadbacks{0}, efbReadbackWaitNs{0}, textureCreates{0},
++      efbSnapshotCopies{0}, efbSnapshotBytes{0};
+ };
+ extern FrameWaitCounters g_frameWaits;
+ // Adds the time since construction to a counter (and bumps an optional event count).
+diff --git a/aurora-main/lib/gfx/common.cpp b/aurora-main/lib/gfx/common.cpp
+--- a/aurora-main/lib/gfx/common.cpp
++++ b/aurora-main/lib/gfx/common.cpp
+@@ -1,6 +1,7 @@
+ #include "common.hpp"
+ #include "staging_map.hpp"
+ #include "../gx/shader_info.hpp"
++#include "../gx/frame_interpolation.hpp"
+ 
+ #include "clear.hpp"
+ #include "depth_peek.hpp"
+@@ -609,7 +610,11 @@
+   prevPass.resolveNeedsShaderSampling = samplingPlan.needsShaderSampling;
+   prevPass.resolveLinearSampling = samplingPlan.usesLinearSampling;
+   prevPass.snapshotColorResolveSource =
+-      !gx::is_depth_format(resolveFormat) && (clearColor || clearAlpha || clearDepth);
++      gx::frame_interpolation_active() && !gx::is_depth_format(resolveFormat) &&
++      (clearColor || clearAlpha || clearDepth);
++  // Native rendering encodes the resolve before the next pass clears the EFB, so it can read
++  // the EFB directly. An extra source snapshot doubles copy traffic at scaled resolutions.
++  // Keep the existing snapshot path for interpolation replays.
+   Vec4<float> uniformSourceRect = sourceRect;
+   float srcW = static_cast<float>(prevPass.targetSize.width);
+   float srcH = static_cast<float>(prevPass.targetSize.height);
+@@ -1400,6 +1405,9 @@
+             .depthOrArrayLayers = 1,
+         };
+         cmd.CopyTextureToTexture(&src, &dst, &size);
++        g_frameWaits.efbSnapshotCopies.fetch_add(1, std::memory_order_relaxed);
++        g_frameWaits.efbSnapshotBytes.fetch_add(static_cast<uint64_t>(size.width) * size.height * 4,
++                                             std::memory_order_relaxed);
+         resolveSourceTexture = passInfo.resolveSourceSnapshot->texture;
+         resolveSourceView = passInfo.resolveSourceSnapshot->sampleTextureView;
+       }
+@@ -1790,5 +1798,7 @@
+       .efbReadbacks = c.efbReadbacks.load(),
+       .efbReadbackWaitNs = c.efbReadbackWaitNs.load(),
+       .textureCreates = c.textureCreates.load(),
+-  };
+-}
++      .efbSnapshotCopies = c.efbSnapshotCopies.load(),
++      .efbSnapshotBytes = c.efbSnapshotBytes.load(),
++  };
++}
+diff --git a/aurora-main/tests/gpu_readback_test.cpp b/aurora-main/tests/gpu_readback_test.cpp
+--- a/aurora-main/tests/gpu_readback_test.cpp
++++ b/aurora-main/tests/gpu_readback_test.cpp
+@@ -244,7 +244,12 @@
+       std::this_thread::sleep_for(std::chrono::milliseconds(1));
+     }
+     std::printf("Actual Aurora completed seeded startup queue (%u observed pending)\n", prewarmQueued);
++    AuroraFrameWaits beforeCopy{}, afterCopy{};
++    aurora_get_frame_waits(&beforeCopy);
+     const auto control = run(0);
++    aurora_get_frame_waits(&afterCopy);
++    require(afterCopy.efbSnapshotCopies == beforeCopy.efbSnapshotCopies,
++            "Native copy-and-clear redundantly snapshots the EFB before copying it again");
+     for (unsigned band = 0; band < 4; ++band) {
+       const auto tile = band * 4 * 64;
+       std::fprintf(stderr, "band=%u ARGB=%u,%u,%u,%u\n", band, control[tile],
+@@ -309,8 +314,12 @@
+                 static_cast<unsigned long long>(gfx::staging_split_count() - beforeBake));
+     gfx::set_staging_capacity_limits_for_testing(physical);
+     aurora_set_frame_interpolation_fps(120);
++    aurora_get_frame_waits(&beforeCopy);
+     for (unsigned frame = 0; frame < 3; ++frame)
+       require(run(0, false, false, 2, false, true) == expected(16), "Perspective warmup changed pixels");
++    aurora_get_frame_waits(&afterCopy);
++    require(afterCopy.efbSnapshotCopies > beforeCopy.efbSnapshotCopies,
++            "Interpolation must retain the source snapshots used by replays");
+     AuroraFrameInterpolationDiagnostics interpolation{};
+     gx::get_frame_interpolation_diagnostics(interpolation);
+     require(interpolation.matchable > 0 && interpolation.activeSamples > 0,
