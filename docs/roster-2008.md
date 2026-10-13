@@ -98,10 +98,18 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - **Huecos vacíos y orden.** Los huecos sobrantes quedan vacíos, en vez de llevar jugadores de la partida base de 2007. Los equipos mantienen su orden, con los de grandes ligas primero; la exportación de 2007 los reordenaba con un `OrderBy` encadenado.
   - **Valores sin tocar.** El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado". En cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, se escribe el valor original de 2008.
   - **Caras, piel/ojos y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara o piel sin tocar vuelve a su valor exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
-- **Abrir el editor:** `tools/powerupplus.ps1 -Ui` compila PowerUp+ con todo dentro de `local\` y lo abre en el navegador (`http://127.0.0.1:5123`).
-  - Usa la versión web de su interfaz, que sirve su propio backend, así que no necesita Electron.
-  - Requiere el SDK de .NET 10 en `local\tools\dotnet10` y Node.
-  - Un roster importado es de solo lectura. Para editarlo se hace *Copy Existing Roster* y se trabaja sobre la copia.
+- **Desde el juego (lo normal):** launcher → MODS → **EDITAR ROSTER (PowerUp+)**.
+  - Abre PowerUp+ en el navegador (`http://127.0.0.1:5123`) y se cierra junto con el juego.
+  - El Setup lo instala ya compilado en `Game\powerupplus\` (autocontenido, no hace falta instalar .NET). Sus datos (base de datos, librerías) quedan en `UserData\PowerUpPlus\`.
+  - Corre en "modo 2008":
+    - el roster base es el de tu `project.bin`;
+    - no usa ni distribuye la partida de 2007 (`BASE.pm2maus.dat`): crea un contenedor vacío;
+    - *Export → MLB Power Pros 2008 Mod* guarda el mod directamente en la carpeta `mods\`, listo para activar en MODS.
+  - El `.dat` del mod lleva solo el bloque del roster; el resto de la partida va vacío, así que no arrastra nada de una partida de 2007.
+  - Un roster importado (también el base) es de solo lectura. Para editarlo se hace *Copy Existing Roster* y se trabaja sobre la copia.
+- **Para desarrollo:**
+  - `tools/powerupplus.ps1 -Ui` compila y abre la misma interfaz con todo dentro de `local\`. Requiere el SDK de .NET 10 en `local\tools\dotnet10` y Node.
+  - `-Publish <carpeta>` hace la versión que va en el Setup.
 - **Línea de comandos:** el mismo script sin `-Ui` ejecuta los comandos de PowerUp+. Ejemplos:
   - `read-game-save --in-file <project.bin> --name "MLB 2008"`
   - `write-game-save --roster-id N --mlb2008-mod --out-dir <carpeta mods>`

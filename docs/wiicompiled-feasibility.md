@@ -612,3 +612,11 @@ No está validado píxel a píxel contra Dolphin.
 
 - **Parche 24, `wiicompiled-mod-saves`:** los mods que cambian el roster (`roster/` o `project/game_data.pack`) llevan la carpeta de partidas del juego a `ModSaves\<mods>`. Así una carrera de MLB Life empezada con un roster no se mezcla con las partidas normales. Detalles en `docs/mods.md`.
 - Se encontró que `CurrentNandDataDir()` deja de valer una vez que el juego corre: lee el código de juego en 0x80000000, que el juego sobrescribe, y cae a `RMCP`. El redireccionador de mods toma la carpeta del título desde la ruta. El de Riivolution conserva su comportamiento.
+
+## Editor de rosters en el launcher (12 de octubre de 2026)
+
+- **Parche 25, `wiicompiled-roster-editor`:**
+  - MODS → **EDITAR ROSTER (PowerUp+)** arranca el PowerUp+ instalado en `powerupplus\` en "modo 2008", con el `project.bin` del jugador y la carpeta `mods\`, dentro de un *job object* para que se cierre con el juego. Abre una página local que espera al servidor y luego lo muestra.
+  - Las listas largas del launcher se desplazan, con flechas de "hay más" y la rueda del mouse; antes, con muchos mods, las filas se salían del panel.
+  - Dos ganchos para pruebas sin teclado: `WIICOMPILED_LAUNCHER_ROW` y `WIICOMPILED_LAUNCHER_ACTION=roster-editor`. Las teclas simuladas con `WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT` también leían el teclado real.
+- **Setup:** `Make-Payload.ps1` incluye PowerUp+ compilado (`tools/powerupplus.ps1 -Publish`, unos 113 MB) con su licencia, el commit y el parche. `LocalBuild.ps1` lo instala en `Game\powerupplus\`. El control de contenido del juego también rechaza `game_data.pack` y los `.dat` de rosters.

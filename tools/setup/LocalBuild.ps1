@@ -142,6 +142,12 @@ foreach ($name in 'dxcompiler.dll', 'dxil.dll', 'libc++.dll', 'libpng16.dll', 'l
 }
 $art = Join-Path $workspace 'launcher'  # MoonInning launcher backdrops (optional)
 if (Test-Path $art) { Copy-Item $art $game -Recurse -Force }
+$editor = Join-Path $workspace 'powerupplus'  # roster editor (launcher > MODS > EDITAR ROSTER)
+if (Test-Path $editor) {
+    $installedEditor = Join-Path $game 'powerupplus'
+    if (Test-Path $installedEditor) { Remove-Item -Recurse -Force $installedEditor }
+    Copy-Item $editor $game -Recurse -Force
+}
 foreach ($name in 'config', 'wii_bootstrap') {
     $dir = Join-Path $build $name
     if (Test-Path $dir) { Copy-Item $dir $game -Recurse -Force }

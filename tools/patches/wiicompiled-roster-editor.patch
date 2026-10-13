@@ -1,0 +1,179 @@
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 768fa64..fd90ca0 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -199,6 +199,7 @@ struct Option {
+ };
+ 
+ constexpr int kOpenModsFolder = -2;
++constexpr int kOpenRosterEditor = -3;
+ constexpr int kModsTab = 4;  // after VIDEO, AUDIO, CONTROLES, INTERFAZ
+ 
+ constexpr const char* kModsHelp =
+@@ -231,6 +232,79 @@ constexpr const char* kModsReadme =
+     "ModSaves junto a los datos del usuario. Sin esos mods vuelven tus partidas normales; los de\r\n"
+     "texturas y uniformes usan las normales.\r\n";
+ 
++constexpr const char* kRosterEditorHelp =
++    "Abre PowerUp+ (editor de rosters) en el navegador, con el roster de tu disco como base.\n\n"
++    "Para editar: Copy Existing Roster, cambia lo que quieras y luego Export Roster > MLB Power Pros "
++    "2008 Mod. El roster queda en la carpeta mods; actívalo aquí en MODS. También abre los .dat de "
++    "PowerUp / PowerUp+ (Import Roster).\n\n"
++    "El editor se cierra junto con el juego.";
++
++// A page that waits for PowerUp+'s server and then goes to it, so the browser never shows an error
++// while the server starts.
++constexpr const char* kRosterEditorPage =
++    "<!doctype html><meta charset=\"utf-8\"><title>PowerUp+</title>"
++    "<body style=\"font-family:sans-serif;background:#0d2c54;color:#fff;text-align:center;padding-top:20vh\">"
++    "<h1>Abriendo PowerUp+...</h1><script>"
++    "const url='http://127.0.0.1:5123/';"
++    "(function poll(){fetch(url,{mode:'no-cors'}).then(()=>location.replace(url),()=>setTimeout(poll,500));})();"
++    "</script></body>";
++
++#if defined(_WIN32)
++std::wstring Quoted(const std::filesystem::path& path) { return L"\"" + path.wstring() + L"\""; }
++#endif
++
++// PowerUp+ ships next to the game in powerupplus/ (tools/powerupplus.ps1 -Publish). It runs in its
++// MLB Power Pros 2008 mode: the base roster comes from the player's project.bin and 2008 mods are
++// written into the game's mods folder. Its data (database, libraries) lives in the user data folder.
++void OpenRosterEditor() {
++#if defined(_WIN32)
++    namespace fs = std::filesystem;
++    const auto exeDir = RuntimeConfigFile::ExecutableDirectory();
++    if (!exeDir) return;
++    const fs::path app = *exeDir / "powerupplus";
++    const fs::path server = app / "PowerUp.ElectronUI.exe";
++    std::error_code ec;
++    if (!fs::is_regular_file(server, ec)) {
++        RT_LOG(RT_TAG_RUNTIME) << "launcher: PowerUp+ is not installed (" << RuntimeConfigFile::PathToUtf8(server) << ")" << std::endl;
++        return;
++    }
++    const fs::path data = RuntimeConfigFile::ApplicationDataDirectory() / "PowerUpPlus";
++    fs::create_directories(data, ec);
++    fs::copy(app / "Data", data / "Data", fs::copy_options::recursive | fs::copy_options::skip_existing, ec);
++
++    // One server per game session, closed with the game through a job object.
++    static HANDLE job = nullptr;
++    static HANDLE process = nullptr;
++    if (process == nullptr || WaitForSingleObject(process, 0) != WAIT_TIMEOUT) {
++        if (job == nullptr) {
++            job = CreateJobObjectW(nullptr, nullptr);
++            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
++            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++            SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
++        }
++        std::wstring command = Quoted(server) + L" --urls http://127.0.0.1:5123 --contentRoot " + Quoted(app) +
++                               L" " + Quoted(L"--DataDirectory=" + (data / "Data").wstring()) +
++                               L" " + Quoted(L"--PowerPros2008ProjectBin=" + (RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin").wstring()) +
++                               L" " + Quoted(L"--PowerPros2008ModsDirectory=" + mods::Directory().wstring());
++        STARTUPINFOW startup{sizeof(startup)};
++        PROCESS_INFORMATION info{};
++        if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
++                            nullptr, data.wstring().c_str(), &startup, &info)) {
++            RT_LOG(RT_TAG_RUNTIME) << "launcher: cannot start PowerUp+ (error " << GetLastError() << ")" << std::endl;
++            return;
++        }
++        if (job != nullptr) AssignProcessToJobObject(job, info.hProcess);
++        ResumeThread(info.hThread);
++        CloseHandle(info.hThread);
++        if (process != nullptr) CloseHandle(process);
++        process = info.hProcess;
++    }
++    const fs::path page = data / "abrir.html";
++    std::ofstream(page, std::ios::binary | std::ios::trunc) << kRosterEditorPage;
++    ShellExecuteW(nullptr, L"open", page.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
++#endif
++}
++
+ void OpenModsFolder() {
+     const std::filesystem::path dir = mods::Directory();
+     std::error_code ec;
+@@ -352,6 +426,7 @@ Result Run(int argc, char** argv) {
+     modHelp.reserve(installedMods.size());
+     Tab modsTab{"MODS", {}, installedMods.empty() ? "Todavía no hay mods instalados." : nullptr};
+     modsTab.options.push_back({"ABRIR CARPETA DE MODS", kModsHelp, {"Abrir"}, 0, false, kOpenModsFolder});
++    modsTab.options.push_back({"EDITAR ROSTER (PowerUp+)", kRosterEditorHelp, {"Abrir"}, 0, false, kOpenRosterEditor});
+     for (size_t i = 0; i < installedMods.size(); ++i) {
+         const mods::Mod& m = installedMods[i];
+         std::string help = m.description.empty() ? std::string("Sin descripción.") : m.description;
+@@ -393,6 +468,10 @@ Result Run(int argc, char** argv) {
+             OpenModsFolder();
+             return;
+         }
++        if (o.mod == kOpenRosterEditor) {
++            OpenRosterEditor();
++            return;
++        }
+         if (o.mod >= 0) {
+             mods::SetEnabled(installedMods[static_cast<size_t>(o.mod)].id, o.value != 0);
+             restart = true;
+@@ -441,11 +520,28 @@ Result Run(int argc, char** argv) {
+     bool modsOnly = page != nullptr && std::strcmp(page, "mods") == 0;
+     const char* unfocused = std::getenv("WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT");
+     const bool unfocusedInput = unfocused != nullptr && std::strcmp(unfocused, "1") == 0;
++    // Scripted tests without key input: WIICOMPILED_LAUNCHER_ROW selects a row of the open page and
++    // WIICOMPILED_LAUNCHER_ACTION=roster-editor presses EDITAR ROSTER once.
++    const char* testAction = std::getenv("WIICOMPILED_LAUNCHER_ACTION");
++    if (testAction != nullptr && std::strcmp(testAction, "roster-editor") == 0) OpenRosterEditor();
+ 
+     constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
+     int menu = 0;
+     int tab = modsOnly ? kModsTab : 0;
+     int row = 0;
++    // Long lists (many mods) scroll: `scroll` is the first row shown, kept so the selected row is
++    // visible; the mouse wheel moves the selection.
++    int scroll = 0;
++    if (const char* testRow = std::getenv("WIICOMPILED_LAUNCHER_ROW")) row = std::atoi(testRow);
++    auto visibleRows = [&](int count, int fit) {
++        const float wheel = ImGui::GetIO().MouseWheel;
++        if (wheel > 0.0f) row = std::max(0, row - 1);
++        if (wheel < 0.0f) row = std::min(count - 1, row + 1);
++        if (row < scroll) scroll = row;
++        if (row >= scroll + fit) scroll = row - fit + 1;
++        scroll = std::clamp(scroll, 0, std::max(0, count - fit));
++        return std::min(count, fit);
++    };
+     // Tabs reachable with Q/E: all of them in the procedural look; with the art, the four settings
+     // tabs or only MODS.
+     auto tabRange = [&](int& first, int& count) {
+@@ -599,9 +695,22 @@ Result Run(int argc, char** argv) {
+                 Tab& current = tabs[static_cast<size_t>(tab)];
+                 const int count = static_cast<int>(current.options.size());
+                 row = std::clamp(row, 0, count - 1);
+-                for (int i = 0; i < count; ++i) {
++                const int shown = visibleRows(count, 6);  // rows that fit above the footer
++                const float arrow = 12 * s;  // more rows above / below
++                if (scroll > 0) {
++                    const ImVec2 c = at(475, 226);
++                    dl->AddTriangleFilled(ImVec2(c.x, c.y - arrow), ImVec2(c.x - arrow, c.y + arrow * 0.6f),
++                                          ImVec2(c.x + arrow, c.y + arrow * 0.6f), IM_COL32_WHITE);
++                }
++                if (scroll + shown < count) {
++                    const ImVec2 c = at(475, 778);
++                    dl->AddTriangleFilled(ImVec2(c.x, c.y + arrow), ImVec2(c.x + arrow, c.y - arrow * 0.6f),
++                                          ImVec2(c.x - arrow, c.y - arrow * 0.6f), IM_COL32_WHITE);
++                }
++                for (int i = scroll; i < scroll + shown; ++i) {
+                     Option& opt = current.options[static_cast<size_t>(i)];
+-                    const ArtRect r{130, 240 + 90.0f * static_cast<float>(i), 820, 312 + 90.0f * static_cast<float>(i)};
++                    const float slot = static_cast<float>(i - scroll);
++                    const ArtRect r{130, 240 + 90.0f * slot, 820, 312 + 90.0f * slot};
+                     if (MouseMoved() && hit(r)) row = i;
+                     if (hit(r) && click) row = i, change(tab, i, 1);
+                     if (hit(r) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) row = i, change(tab, i, -1);
+@@ -807,9 +916,11 @@ Result Run(int argc, char** argv) {
+                 const int count = static_cast<int>(current.options.size());
+                 row = std::clamp(row, 0, count - 1);
+                 const float rowH = 48 * u;
+-                for (int i = 0; i < count; ++i) {
++                const int fit = std::max(1, static_cast<int>((p1.y - 60 * u - top - 22 * u) / (rowH + 12 * u)));
++                const int shown = visibleRows(count, fit);
++                for (int i = scroll; i < scroll + shown; ++i) {
+                     Option& o = current.options[static_cast<size_t>(i)];
+-                    const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i) * (rowH + 12 * u));
++                    const ImVec2 a(p0.x + 30 * u, top + 22 * u + static_cast<float>(i - scroll) * (rowH + 12 * u));
+                     const ImVec2 b(split - 26 * u, a.y + rowH);
+                     if (MouseMoved() && Hovered(a, b)) row = i;
+                     if (Hovered(a, b) && click) row = i, change(tab, i, 1);

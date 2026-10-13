@@ -80,6 +80,11 @@ Copy-Tree "$Source\runtime" "$workspace\src\runtime" @('build', 'out', '.git')
 Copy-Tree "$Source\aurora-main" "$workspace\src\aurora-main" @('build', 'out', '.git')
 Copy-Tree $dependencies "$workspace\Dependencies"
 
+Write-Host 'Roster editor (PowerUp+)...'
+# Self-contained, with PowerUp+'s libraries but not its 2007 saves (game content); the launcher
+# starts it with the player's own project.bin as the base roster.
+& "$root\tools\powerupplus.ps1" -Publish "$workspace\powerupplus" | Out-Host
+
 Write-Host 'Setup window...'
 $setupBuild = Join-Path $root 'local\build\setup'
 $tc = "$tools\llvm-mingw\bin".Replace('\', '/')
@@ -98,6 +103,12 @@ Copy-Item "$root\LICENSE" "$Output\licenses\MLBPowerPros2008Recomp-LICENSE.txt"
 Copy-Item "$root\THIRD_PARTY.md" "$Output\licenses\THIRD_PARTY.md"
 Copy-Item "$Source\LICENSE" "$Output\licenses\Wiicompiled-LICENSE.txt"
 Copy-Item "$Source\THIRD-PARTY-NOTICES.md" "$Output\licenses\Wiicompiled-THIRD-PARTY-NOTICES.md"
+# PowerUp+ (GPLv3): its license, the commit it is built from and our patch, the source of the build.
+Copy-Item "$root\local\vendor\PowerUpPlus\LICENSE" "$Output\licenses\PowerUpPlus-LICENSE.txt"
+Copy-Item "$root\tools\patches\powerupplus-2008.patch" "$Output\licenses\PowerUpPlus-2008.patch"
+Set-Content -Encoding utf8 "$Output\licenses\PowerUpPlus-SOURCE.txt" (
+    "PowerUp+ (https://github.com/ogura-connection/PowerUpPlus, commit eb1a2c2, GPLv3) with PowerUpPlus-2008.patch " +
+    "from the MLB Power Pros 2008 recomp project (tools/patches), built by tools/powerupplus.ps1 -Publish.")
 foreach ($license in 'LICENSE-MIT', 'LICENSE-APACHE') {  # nodtool is MIT OR Apache-2.0
     Invoke-WebRequest -UseBasicParsing -OutFile "$Output\licenses\nodtool-$license.txt" `
         "https://raw.githubusercontent.com/encounter/nod/v2.0.0-alpha.10/$license"
@@ -106,7 +117,8 @@ foreach ($license in 'LICENSE-MIT', 'LICENSE-APACHE') {  # nodtool is MIT OR Apa
 Write-Host 'Checking that no game content is in the payload...'
 $bad = Get-ChildItem $Output -Recurse -File | Where-Object {
     $_.Extension -in '.iso', '.gcm', '.wbfs', '.rvz', '.gcz', '.ciso', '.wia', '.nfs', '.dol', '.rel', '.thp', '.bnr', '.brres', '.tpl', '.arc', '.szs' -or
-    $_.Name -in 'main.dol', 'ovl_main.rel', 'project.bin', 'data_sections_init.cpp', 'data_sections_init_blobs.S', 'base_manifest.json' -or
+    $_.Name -in 'main.dol', 'ovl_main.rel', 'project.bin', 'game_data.pack', 'data_sections_init.cpp', 'data_sections_init_blobs.S', 'base_manifest.json' -or
+    $_.Name -like '*pm2maus*.dat' -or $_.Name -like '*_Rosters.dat' -or
     $_.FullName -match '\\(generated|build_shards)\\'
 }
 if ($bad) { $bad | ForEach-Object { $_.FullName }; throw 'Game content found in the payload.' }

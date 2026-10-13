@@ -3,9 +3,14 @@
 #   tools/powerupplus.ps1 -Ui
 #       the editor in the browser (http://127.0.0.1:5123): Import Roster accepts the game's
 #       project.bin, Export Roster has "MLB Power Pros 2008 Mod". Ctrl+C stops it.
+#   tools/powerupplus.ps1 -Publish <dir>
+#       a self-contained build (no .NET install needed) of the editor for the game's launcher: the
+#       server, its web UI and PowerUp+'s Data folder without the 2007 saves (BASE.pm2maus.dat and
+#       the sample rosters are game content). The launcher starts it in 2008 mode, with the base
+#       roster from the player's own project.bin.
 #   tools/powerupplus.ps1 'read-game-save --in-file D:\...\project.bin --name "MLB 2008"' 'list-rosters'
 #       the command line; each argument is one PowerUp+ command.
-param([switch]$Ui)
+param([switch]$Ui, [string]$Publish)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $work = Join-Path $root 'local\powerupplus'
@@ -41,9 +46,9 @@ if (-not (Test-Path "$src\.git")) {
 # Both front ends share one data folder (base save, libraries, database), a copy of the UI's.
 if (-not (Test-Path "$run\Data")) { Copy-Item -Recurse "$src\PowerUp\PowerUp.ElectronUI\Data" "$run\Data" }
 
-if ($Ui) {
-    # The Electron UI's web build, served by its own ASP.NET backend; no Electron needed.
-    $uiProject = "$src\PowerUp\PowerUp.ElectronUI"
+$uiProject = "$src\PowerUp\PowerUp.ElectronUI"
+function Build-WebUi {
+    # The Electron UI's web build (into wwwroot), served by its own ASP.NET backend.
     Push-Location "$uiProject\electron"
     try {
         if (-not (Test-Path node_modules)) { cmd /c "npm ci --ignore-scripts --no-audit --no-fund 2>&1"; Invoke-Checked 'npm ci' }
@@ -51,6 +56,21 @@ if ($Ui) {
     } finally {
         Pop-Location
     }
+}
+
+if ($Publish) {
+    Build-WebUi
+    & $dotnet publish "$uiProject\PowerUp.ElectronUI.csproj" -c Release -r win-x64 --self-contained true -o $Publish | Select-Object -Last 3 | Out-Host
+    Invoke-Checked 'dotnet publish'
+    $data = Join-Path $Publish 'Data'
+    if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+    Copy-Item -Recurse "$uiProject\Data" $data
+    Get-ChildItem $data -Recurse -Include '*.dat', '*.db', '*.pack' | Remove-Item -Force
+    return
+}
+
+if ($Ui) {
+    Build-WebUi
     & $dotnet build "$uiProject\PowerUp.ElectronUI.csproj" -c Release -o "$work\bin-ui" | Select-Object -Last 3 | Out-Host
     Invoke-Checked 'dotnet build'
     Start-Process 'http://127.0.0.1:5123/'

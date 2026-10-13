@@ -71,6 +71,38 @@ index b24c224..1175f14 100644
      public IFormFile? SourceGameSave { get; set; }
    }
  }
+diff --git a/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterToModsCommand.cs b/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterToModsCommand.cs
+new file mode 100644
+index 0000000..0af4693
+--- /dev/null
++++ b/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterToModsCommand.cs
+@@ -0,0 +1,26 @@
++﻿using PowerUp.Databases;
++using PowerUp.Entities.Rosters;
++using PowerUp.GameSave.Api;
++using PowerUp.GameSave.PowerPros2008;
++
++namespace PowerUp.ElectronUI.Api.Rosters
++{
++  /// <summary>
++  /// Writes the roster as an MLB Power Pros 2008 mod straight into the game's mods folder, when
++  /// PowerUp+ was started by the 2008 launcher (PowerPros2008ModsDirectory); Folder is null otherwise.
++  /// </summary>
++  public class ExportRosterToModsCommand(IRosterExportApi rosterExportApi) : ICommand<ExportRosterRequest, ExportRosterToModsResponse>
++  {
++    public Task<ExportRosterToModsResponse> Execute(ExportRosterRequest request)
++    {
++      var modsDirectory = PowerPros2008Roster.ModsDirectory;
++      if (modsDirectory is null)
++        return Task.FromResult(new ExportRosterToModsResponse(null));
++
++      var roster = DatabaseConfig.Database.Load<Roster>(request.RosterId)!;
++      return Task.FromResult(new ExportRosterToModsResponse(rosterExportApi.WritePowerPros2008Mod(roster, modsDirectory)));
++    }
++  }
++
++  public record ExportRosterToModsResponse(string? Folder);
++}
 diff --git a/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv b/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv
 index 35d04f9..726dea8 100644
 --- a/PowerUp/PowerUp.ElectronUI/Data/data/SpecialSavedName_Library.csv
@@ -87,11 +119,31 @@ index 35d04f9..726dea8 100644
 +Chamberlain,3899
 +S.Rodriguez,3900
 +Lillibridge,3901
+diff --git a/PowerUp/PowerUp.ElectronUI/StartupConfig/CommandConfiguration.cs b/PowerUp/PowerUp.ElectronUI/StartupConfig/CommandConfiguration.cs
+index 99506a4..655d804 100644
+--- a/PowerUp/PowerUp.ElectronUI/StartupConfig/CommandConfiguration.cs
++++ b/PowerUp/PowerUp.ElectronUI/StartupConfig/CommandConfiguration.cs
+@@ -17,6 +17,7 @@ namespace PowerUp.ElectronUI.StartupConfig
+       services.AddSingleton(serviceProvider => new CommandRegistry(type => serviceProvider.GetRequiredService(type)));
+ 
+       services.AddSingleton<ExportRosterCommand>();
++      services.AddSingleton<ExportRosterToModsCommand>();
+       services.AddSingleton<InitializeBaseGameSaveCommand>();
+       services.AddSingleton<LoadExistingRosterCommand>();
+       services.AddSingleton<LoadExistingRosterOptionsCommand>();
+@@ -68,6 +69,7 @@ namespace PowerUp.ElectronUI.StartupConfig
+ 
+       commandRegistry.RegisterCommand(typeof(WriteLogCommand), "WriteLog");
+       commandRegistry.RegisterCommand(typeof(ExportRosterCommand), "ExportRoster");
++      commandRegistry.RegisterCommand(typeof(ExportRosterToModsCommand), "ExportRosterToMods");
+       commandRegistry.RegisterCommand(typeof(InitializeBaseGameSaveCommand), "InitializeBaseGameSave");
+       commandRegistry.RegisterCommand(typeof(LoadExistingRosterCommand), "LoadExistingRoster");
+       commandRegistry.RegisterCommand(typeof(LoadExistingRosterOptionsCommand), "LoadExistingRosterOptions");
 diff --git a/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs b/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs
-index db33617..d277d33 100644
+index db33617..8524142 100644
 --- a/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs
 +++ b/PowerUp/PowerUp.ElectronUI/StartupConfig/Startup.cs
-@@ -35,6 +35,9 @@ namespace PowerUp.ElectronUI
+@@ -35,9 +35,14 @@ namespace PowerUp.ElectronUI
              });
        });
        services.AddControllersWithViews();
@@ -101,6 +153,20 @@ index db33617..d277d33 100644
        services.RegisterCommandsForDI();
  
        var dataDirectory = Configuration["DataDirectory"] ?? "";
++      PowerUp.GameSave.PowerPros2008.PowerPros2008Roster.ProjectBinPath = NullIfEmpty(Configuration["PowerPros2008ProjectBin"]);
++      PowerUp.GameSave.PowerPros2008.PowerPros2008Roster.ModsDirectory = NullIfEmpty(Configuration["PowerPros2008ModsDirectory"]);
+       Log.Information($"Data Directory: {Path.GetFullPath(dataDirectory)}");
+ 
+       var loggerFactory = LoggerFactory.Create(builder => builder.AddSerilog());
+@@ -51,6 +56,8 @@ namespace PowerUp.ElectronUI
+       Log.Debug("ConfigureServices finished successfully");
+     }
+ 
++    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
++
+     // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+     public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+     {
 diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx b/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx
 index 3d5fb22..66ef446 100644
 --- a/PowerUp/PowerUp.ElectronUI/electron/src/app/home/importRosterModal.tsx
@@ -115,7 +181,7 @@ index 3d5fb22..66ef446 100644
        />
      </div>
 diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
-index 966c1eb..a54bd93 100644
+index 966c1eb..45f6b90 100644
 --- a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
 +++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
 @@ -2,6 +2,7 @@ import { CommandFetcher } from "../../utils/commandFetcher";
@@ -126,8 +192,21 @@ index 966c1eb..a54bd93 100644
  }
  
  export class ExportRosterApiClient {
+@@ -16,6 +17,12 @@ export class ExportRosterApiClient {
+     return this.commandFetcher.executeWithFile(this.commandName, request, file);
+   }
+ 
++  // Writes the MLB Power Pros 2008 mod straight into the game's mods folder when PowerUp+ runs from
++  // the 2008 launcher; folder is null otherwise.
++  executeToMods = (request: ExportRosterRequest): Promise<{ folder: string | null }> => {
++    return this.commandFetcher.execute('ExportRosterToMods', request);
++  }
++
+   executeCsv = (request: ExportRosterRequest): Promise<File> => {
+     return this.commandFetcher.execute('ExportCsv', request);
+   }
 diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx
-index ef7adb8..b72b268 100644
+index ef7adb8..b7dea6e 100644
 --- a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx
 +++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/rosterExportModal.tsx
 @@ -32,7 +32,7 @@ interface State {
@@ -155,18 +234,19 @@ index ef7adb8..b72b268 100644
            <RadioButtonWrapper>
              <span>CSV</span>
              <RadioButton 
-@@ -94,6 +103,10 @@ function RosterExportModal(props: RosterExportModalProps) {
+@@ -94,6 +103,11 @@ function RosterExportModal(props: RosterExportModalProps) {
          onSelection={file => setState(p => ({ ...p, selectedGameSaveFile: file }))}
          />
        </>}
 +      {state.exportType === 'mlb-2008-mod' && <p style={{ fontSize: FONT_SIZES._14 }}>
-+        A zip with a mods folder for the MLB Power Pros 2008 recomp: extract it into its mods folder and
-+        turn the roster on in MODS. It applies to every mode, MLB Life included.
++        A roster mod for the MLB Power Pros 2008 recomp: opened from the game's launcher, it is saved
++        straight into its mods folder; otherwise a zip to extract there. Turn it on in MODS; it applies to
++        every mode, MLB Life included.
 +      </p>}
      </div>
      <div style={{ display: 'flex', gap: '4px' }}>
        <Button variant='Outline' size='Small' onClick={closeDialog}>Cancel</Button>
-@@ -104,6 +117,8 @@ function RosterExportModal(props: RosterExportModalProps) {
+@@ -104,6 +118,8 @@ function RosterExportModal(props: RosterExportModalProps) {
    async function exportRoster() {
      if(state.exportType === 'game-save')
        exportRosterAsGameSave();
@@ -175,11 +255,18 @@ index ef7adb8..b72b268 100644
      else
        exportRosterAsCsv();
    }
-@@ -118,6 +133,17 @@ function RosterExportModal(props: RosterExportModalProps) {
+@@ -118,6 +134,24 @@ function RosterExportModal(props: RosterExportModalProps) {
      closeDialog();
    }
  
 +  async function exportRosterAsPowerPros2008Mod() {
++    const saved = await exportApiClientRef.current.executeToMods({ rosterId: rosterId });
++    if(saved?.folder) {
++      window.alert(`Mod saved to ${saved.folder}. Turn it on in the game launcher's MODS tab.`);
++      closeDialog();
++      return;
++    }
++
 +    const response = await exportApiClientRef.current.execute({
 +      rosterId: rosterId,
 +      powerPros2008Mod: true,
@@ -206,8 +293,55 @@ index 6ab259b..4cbcf00 100644
        services.AddTransient<IRosterExportApi, RosterExportApi>();
        services.AddTransient<IPlayerMapper>(provider => new PlayerMapper(provider.GetRequiredService<ISpecialSavedNameLibrary>()));
        services.AddTransient<IPlayerApi>(provider => new PlayerApi());
+diff --git a/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs b/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs
+index 8431233..c1dd6f3 100644
+--- a/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs
++++ b/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs
+@@ -1,6 +1,7 @@
+ ﻿using PowerUp.Databases;
+ using PowerUp.Entities;
+ using PowerUp.Entities.Rosters;
++using PowerUp.GameSave.PowerPros2008;
+ using PowerUp.Libraries;
+ using System.IO;
+ using System.Linq;
+@@ -26,7 +27,16 @@ namespace PowerUp.GameSave.Api
+       _rosterImportApi = rosterImportApi;
+     }
+ 
++    // The UI and other callers may ask at the same time on a first run; only one imports.
++    private static readonly object InitializeLock = new();
++
+     public void Initialize()
++    {
++      lock (InitializeLock)
++        InitializeOnce();
++    }
++
++    private void InitializeOnce()
+     {
+       var baseRoster = DatabaseConfig.Database
+         .LoadAll<Roster>()
+@@ -34,7 +44,16 @@ namespace PowerUp.GameSave.Api
+ 
+       if (baseRoster == null)
+       {
+-        using var stream = new FileStream(_baseGameSavePathProvider.GetPath(), FileMode.Open, FileAccess.Read);
++        // MLB Power Pros 2008 edition: no 2007 base save ships with it, so an empty one serves as
++        // the container and the base roster is the player's own 2008 roster.
++        var basePath = _baseGameSavePathProvider.GetPath();
++        var projectBin = PowerPros2008Roster.ProjectBinPath;
++        if (projectBin is not null && !File.Exists(basePath))
++        {
++          Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
++          File.WriteAllBytes(basePath, new byte[PowerPros2008Roster.SaveSize]);
++        }
++        using var stream = new FileStream(projectBin ?? basePath, FileMode.Open, FileAccess.Read);
+         var parameters = new RosterImportParameters
+         {
+           Stream = stream,
 diff --git a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
-index e06c584..c50a5d8 100644
+index e06c584..8a6757b 100644
 --- a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 +++ b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 @@ -1,10 +1,13 @@
@@ -232,29 +366,32 @@ index e06c584..c50a5d8 100644
  using System.Linq;
  
  namespace PowerUp.GameSave.Api
-@@ -20,6 +24,7 @@ namespace PowerUp.GameSave.Api
+@@ -20,6 +24,8 @@ namespace PowerUp.GameSave.Api
    {
      Stream ExportRoster(RosterExportParameters parameters);
      void WriteRosterToFile(Roster roster, string filePath);
 +    Stream ExportPowerPros2008Mod(Roster roster);
++    string WritePowerPros2008Mod(Roster roster, string modsDirectory);
    }
  
    public class RosterExportApi : IRosterExportApi
-@@ -72,6 +77,231 @@ namespace PowerUp.GameSave.Api
+@@ -72,6 +78,241 @@ namespace PowerUp.GameSave.Api
        WriteRosterToFile(roster, filePath, 0);
      }
  
 +    /// <summary>
 +    /// The roster as an MLB Power Pros 2008 roster mod for the 2008 recomp: a zip holding
-+    /// NAME/mod.toml and NAME/roster/NAME.dat. The .dat is a 2007 save laid out the way 2008 keeps
-+    /// its roster; the game converts it with the player's own disc when the mod loads, so the mod
-+    /// carries no game files. See WritePowerPros2008Roster.
++    /// NAME/mod.toml and NAME/roster/NAME.dat. The .dat is an otherwise empty 2007 save holding the
++    /// roster block the way 2008 keeps it; the game converts it with the player's own disc when the
++    /// mod loads, so the mod carries no game files. See WritePowerPros2008Roster.
 +    /// </summary>
 +    public Stream ExportPowerPros2008Mod(Roster roster)
 +    {
 +      var baseSavePath = _baseGameSavePathProvider.GetPath();
 +      var tempFilePath = Path.GetTempFileName();
-+      File.Copy(baseSavePath, tempFilePath, overwrite: true);
++      // The game reads only the roster block, which is written whole, so the rest of the save stays
++      // empty: the mod carries nothing from a 2007 save.
++      File.WriteAllBytes(tempFilePath, new byte[PowerPros2008Roster.SaveSize]);
 +      var originals = LoadPowerPros2008Originals(baseSavePath);
 +      WritePowerPros2008Roster(roster, tempFilePath, originals);
 +
@@ -273,6 +410,14 @@ index e06c584..c50a5d8 100644
 +      File.Delete(tempFilePath);
 +      zip.Position = 0;
 +      return zip;
++    }
++
++    /// <summary>Writes the 2008 mod folder into the game's mods folder and returns its path.</summary>
++    public string WritePowerPros2008Mod(Roster roster, string modsDirectory)
++    {
++      using var zip = new ZipArchive(ExportPowerPros2008Mod(roster), ZipArchiveMode.Read);
++      zip.ExtractToDirectory(modsDirectory, overwriteFiles: true);
++      return Path.Combine(modsDirectory, zip.Entries[0].FullName.Split('/')[0]);
 +    }
 +
 +    private static string TomlEscape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
@@ -736,10 +881,10 @@ index 0000000..f59942d
 +}
 diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
 new file mode 100644
-index 0000000..ef27754
+index 0000000..07e6142
 --- /dev/null
 +++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,203 @@
 +﻿using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -762,6 +907,17 @@ index 0000000..ef27754
 +    public const int BlockSize = 0x43E80;
 +    public const int SaveBlock2007 = 0x68C74;
 +    public const int PackBlock2008 = 0x20;
++    /// <summary>Size of a 2007 save (pm2maus.dat); an all-zero one is a valid container.</summary>
++    public const int SaveSize = 0xB4000;
++
++    /// <summary>
++    /// MLB Power Pros 2008 edition (settings PowerPros2008ProjectBin / PowerPros2008ModsDirectory,
++    /// passed by the 2008 recomp's launcher): the base roster comes from the player's own
++    /// PROJECT.BIN instead of a 2007 base save, and 2008 mods are written straight into the game's
++    /// mods folder.
++    /// </summary>
++    public static string? ProjectBinPath { get; set; }
++    public static string? ModsDirectory { get; set; }
 +    private const int VoiceBit = 0x492, VoiceBits = 14;
 +    private const int FaceBit = 0x2A4, FaceBits = 8;
 +    private const int SkinBit = 0x2AC, SkinBits = 4;
