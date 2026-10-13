@@ -1,0 +1,31 @@
+diff --git a/runtime/src/hle/os/os_sleep.cpp b/runtime/src/hle/os/os_sleep.cpp
+index 70b73ac..555b70c 100644
+--- a/runtime/src/hle/os/os_sleep.cpp
++++ b/runtime/src/hle/os/os_sleep.cpp
+@@ -83,9 +83,25 @@ void ScheduleSleepTimer(uint32_t threadPtr, uint64_t ticks)
+     using Clock = std::chrono::steady_clock;
+ 
+     const auto duration = TimeBaseContract::TicksToDuration(ticks);
+-    const auto deadline = Clock::now() + duration;
++    const auto now = Clock::now();
++    auto deadline = now + duration;
++
++    // Guest threads are cooperative fibers, so a sleep timer only fires when some thread reaches
++    // the scheduler, typically milliseconds late. A loop that repeats the same sleep (MLB's 5 ms
++    // sound ticker, whose wakes advance the commentary phrase clocks) then runs 15-45% slow and
++    // phrases are stopped late. On hardware the alarm interrupt is on time, so anchor a repeated
++    // sleep to the previous deadline; the lost time is caught up while other threads idle. A sleep
++    // with a different length or long after the last deadline starts from now, as in the SDK.
++    struct LastSleep { uint64_t ticks; Clock::time_point deadline; };
++    static std::unordered_map<uint32_t, LastSleep> lastSleeps;
++    constexpr auto kMaxCatchUp = std::chrono::milliseconds(50);
+ 
+     std::lock_guard<std::mutex> lock(gSleepTimerMutex);
++    LastSleep& last = lastSleeps[threadPtr];
++    if (last.ticks == ticks && now - last.deadline <= kMaxCatchUp && last.deadline <= now) {
++        deadline = last.deadline + duration;
++    }
++    last = {ticks, deadline};
+     std::erase_if(gSleepTimers, [threadPtr](const SleepTimerEntry& entry) {
+         return entry.threadPtr == threadPtr;
+     });
