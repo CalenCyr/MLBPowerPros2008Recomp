@@ -204,7 +204,7 @@ def empty_record(block):
     return bytes(PLAYER)
 
 
-def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAYER), typical=None):
+def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAYER), typical=None, native=True):
     if old[0] == 0 and old[1] == 0:
         return empty
     same = (originals or {}).get(person_2007(old), [])
@@ -239,9 +239,8 @@ def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAY
         # of each bit PowerUp cannot name (0x4E-0x4F and 0x92.0 hold the lineup screen's names).
         for b, value in typical.items():
             set_bits(new, b, 1, value)
-    # game_data.pack is the base roster: nobody is edited (Unedited 0x50.3, IsEdited 0x50.4), and
-    # the game keeps edited players out of MLB Life. PowerUp+ marks every imported player edited.
-    set_bits(new, 0x283, 2, 0b10)
+    if native:
+        set_bits(new, 0x283, 2, 0b10)    # Unedited (0x50.3) set, IsEdited (0x50.4) clear, as in 2008
     return bytes(new)
 
 
@@ -329,6 +328,10 @@ def main(argv):
         repo = Path(__file__).resolve().parents[2] / "local" / "vendor" / "PowerUpPlus"
         (emit_cpp if argv[0] == "--emit-cpp" else emit_cs)(repo)
         return
+    # --editor-flags keeps PowerUp+'s "Custom Player" switch (the launcher's "Como en el editor");
+    # by default every player enters unedited, like [mods] native_roster = true.
+    native = "--editor-flags" not in argv
+    argv = [a for a in argv if a != "--editor-flags"]
     save, original, out = Path(argv[0]), Path(argv[1]), Path(argv[2])
     name = argv[3] if len(argv) > 3 else save.stem
     repo = Path(__file__).resolve().parents[2] / "local" / "vendor" / "PowerUpPlus"
@@ -342,7 +345,7 @@ def main(argv):
     manifest = save.parent.parent / "mod.toml"
     ids_2008 = manifest.is_file() and re.search(r'(?m)^roster_ids\s*=\s*"2008"', manifest.read_text("utf-8")) is not None
     typical = typical_unnamed(pack[PACK_BLOCK_2008:], fields)
-    players = b"".join(convert_player(old_block[i * PLAYER:(i + 1) * PLAYER], fields, originals, ids_2008, empty, typical)
+    players = b"".join(convert_player(old_block[i * PLAYER:(i + 1) * PLAYER], fields, originals, ids_2008, empty, typical, native)
                        for i in range(SLOTS))
     pack[PACK_BLOCK_2008:PACK_BLOCK_2008 + SLOTS * PLAYER] = players
     rest = SLOTS * PLAYER

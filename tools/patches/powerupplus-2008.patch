@@ -1088,3 +1088,17 @@ index 0000000..07e6142
 +    }
 +  }
 +}
+diff --git a/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs b/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs
+index 091a11f..006586b 100644
+--- a/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs
++++ b/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs
+@@ -43,7 +43,8 @@ namespace PowerUp.Mappers.Players
+         SourceType = parameters.IsBase
+           ? EntitySourceType.Base
+           : EntitySourceType.Imported,
+-        IsCustomPlayer = gsPlayer.IsEdited!.Value || !(gsPlayer.Unedited.HasValue && !gsPlayer.Unedited!.Value),
++        // Custom when the save marks it edited or not unedited (was inverted: base players came in as custom).
++        IsCustomPlayer = gsPlayer.IsEdited!.Value || gsPlayer.Unedited == false,
+         LastName = gsPlayer.LastName!,
+         FirstName = gsPlayer.FirstName!,
+         SavedName = gsPlayer.SavedName!.Contains('*')

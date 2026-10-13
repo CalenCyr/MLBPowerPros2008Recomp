@@ -1,5 +1,86 @@
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index 2e07647..9025436 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -54,6 +54,9 @@ struct RuntimeUserConfig {
+     std::optional<bool> launcherOnStartup;
+     // [mods] enabled: folder names under <exe dir>/mods that are switched on (mods.cpp).
+     std::optional<std::vector<std::string>> enabledMods;
++    // [mods] native_roster: roster mods enter as unedited players instead of keeping PowerUp+'s
++    // "Custom Player" switch (mods.cpp, launcher.cpp).
++    std::optional<bool> nativeRoster;
+     std::optional<uint32_t> disabledPostProcessingPaths;
+     std::optional<float> audioVolume;
+     std::optional<float> audioMusicVolume;
+@@ -473,6 +476,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
+     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
+     config.launcherOnStartup = FindConfigValue<bool>(document, "launcher", "show_on_startup");
+     config.enabledMods = FindConfigValue<std::vector<std::string>>(document, "mods", "enabled");
++    config.nativeRoster = FindConfigValue<bool>(document, "mods", "native_roster");
+     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
+     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
+     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
+@@ -722,6 +726,11 @@ inline bool SetEnabledMods(const std::vector<std::string>& ids) {
+     return WriteSetting("mods", "enabled", list + "]");
+ }
+ 
++inline bool SetNativeRoster(bool value) {
++    Mutable().nativeRoster = value;
++    return WriteSetting("mods", "native_roster", value ? "true" : "false");
++}
++
+ inline bool SetDisabledPostProcessingPaths(uint32_t value) {
+     Mutable().disabledPostProcessingPaths = value;
+     std::ostringstream formatted;
+@@ -990,6 +999,10 @@ inline std::vector<std::string> EnabledMods() {
+     return Get().enabledMods.value_or(std::vector<std::string>{});
+ }
+ 
++inline bool NativeRoster(bool fallback = true) {
++    return Get().nativeRoster.value_or(fallback);
++}
++
+ inline std::string GraphicsApi(std::string fallback = "auto") {
+     return Get().graphicsApi.value_or(std::move(fallback));
+ }
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 31e56b7..46a953f 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -284,6 +284,14 @@ constexpr const char* kRosterEditorHelp =
+     "PowerUp / PowerUp+ (Import Roster).\n\n"
+     "El editor se cierra junto con el juego.";
+ 
++constexpr const char* kRosterPlayersLabel = "JUGADORES DEL ROSTER";
++constexpr const char* kRosterPlayersHelp =
++    "Cómo entran los jugadores de los mods de roster.\n\n"
++    "Nativos: todos como jugadores originales del juego, sin editar.\n\n"
++    "Como en el editor: respeta el interruptor Custom Player de PowerUp+. Los marcados quedan como "
++    "jugadores modificados.\n\n"
++    "Nota: según lo observado, los jugadores modificados no aparecen en MLB Life.";
++
+ // A page that waits for PowerUp+'s server and then goes to it, so the browser never shows an error
+ // while the server starts.
+ constexpr const char* kRosterEditorPage =
+@@ -479,6 +487,8 @@ Result Run(int argc, char** argv) {
+     Tab toolsTab{"HERRAMIENTAS", {}};
+     toolsTab.options.push_back({"ABRIR CARPETA DE MODS", kModsHelp, {"Abrir"}, 0, false, kOpenModsFolder});
+     toolsTab.options.push_back({"EDITAR ROSTER (PowerUp+)", kRosterEditorHelp, {"Abrir"}, 0, false, kOpenRosterEditor});
++    toolsTab.options.push_back({kRosterPlayersLabel, kRosterPlayersHelp, {"Nativos", "Como en el editor"},
++                                RuntimeConfigFile::NativeRoster(true) ? 0 : 1});
+     for (size_t i = 0; i < installedMods.size(); ++i) {
+         const mods::Mod& m = installedMods[i];
+         std::string help = m.description.empty() ? std::string("Sin descripción.") : m.description;
+@@ -543,6 +553,7 @@ Result Run(int argc, char** argv) {
+         if (label == mute.label) RuntimeConfigFile::SetAudioMuted(o.value != 0);
+         if (label == wiimote.label) RuntimeConfigFile::SetWiiRemotesEnabled(o.value != 0);
+         if (label == launcherOption.label) RuntimeConfigFile::SetLauncherOnStartup(o.value != 0);
++        if (label == kRosterPlayersLabel) RuntimeConfigFile::SetNativeRoster(o.value == 0);
+         restart = restart || o.restart;
+     };
+     auto change = [&](int tab, int index, int delta) {
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
-index 359eb98..c868c98 100644
+index 359eb98..dcda6e4 100644
 --- a/runtime/src/mods.cpp
 +++ b/runtime/src/mods.cpp
 @@ -183,7 +183,7 @@ namespace {
@@ -7,11 +88,24 @@ index 359eb98..c868c98 100644
  constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
  constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
 -constexpr uint32_t kRosterConverter = 8;
-+constexpr uint32_t kRosterConverter = 9;
++constexpr uint32_t kRosterConverter = 10;
  
  uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
      uint32_t value = 0;
-@@ -255,6 +255,17 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+@@ -220,8 +220,10 @@ uint32_t Skin2008(uint32_t value) {
+ 
+ // ids2008: the .dat's voice, face and skin/eyes values already follow 2008's numbering (mod.toml roster_ids =
+ // "2008", written by PowerUp+'s 2008 export); otherwise 2007 voice ids are dropped (2008 renumbered
+-// the voices) and faces and skin/eyes are moved with Face2008 and Skin2008.
+-bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool ids2008, std::string& error) {
++// the voices) and faces and skin/eyes are moved with Face2008 and Skin2008. native: every player
++// enters unedited, as in 2008's own roster; otherwise each keeps PowerUp+'s "Custom Player" switch.
++bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool ids2008, bool native,
++                   std::string& error) {
+     if (save.size() < kSaveRoster2007 + kRosterBlock) {
+         error = "not an MLB Power Pros 2007 Wii save (pm2maus.dat)";
+         return false;
+@@ -255,6 +257,17 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
              foundEmpty = true;
          }
      }
@@ -29,17 +123,32 @@ index 359eb98..c868c98 100644
      for (size_t i = 0; i < kRosterSlots; ++i) {
          const unsigned char* from = oldBlock + i * kRosterPlayer;
          unsigned char* to = newBlock + i * kRosterPlayer;
-@@ -293,7 +304,13 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+@@ -293,7 +306,10 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
              if (std::memcmp(to + 2, base + 2, 2) == 0 && (to[2] << 8 | to[3]) >= 0xF00) {
                  std::memcpy(to + 4, base + 4, 0x12);
              }
 +        } else if (ids2008) {
 +            for (size_t k = 0; k < std::size(kRosterUnnamed); ++k) SetBits(to, kRosterUnnamed[k], 1, typical[k]);
          }
-+        // game_data.pack is the base roster, where no player is edited (Unedited 0x50.3 set,
-+        // IsEdited 0x50.4 clear): PowerUp+ marks every imported player as edited, and the game keeps
-+        // edited players out of MLB Life.
-+        SetBits(to, 0x283, 2, 0b10);
++        if (native) SetBits(to, 0x283, 2, 0b10);  // Unedited (0x50.3) set, IsEdited (0x50.4) clear
      }
      // Lineups (32 x 18 entries of 4 bytes), free agents (200 x 8) and teams (32 x 40 x 8) come from
      // the save, over 2008's: blank entries get 2008's empty entry, used free agents 2008's filler
+@@ -380,6 +396,8 @@ std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
+     }
+     for (const uint16_t bit : kRosterUnnamed) tableHash = (tableHash ^ bit) * 16777619u;
+     if (mod.rosterIds == "2008") tableHash = (tableHash ^ 2008u) * 16777619u;
++    const bool native = RuntimeConfigFile::NativeRoster(true);
++    if (native) tableHash = (tableHash ^ 0x4E415456u) * 16777619u;
+     char name[32];
+     std::snprintf(name, sizeof(name), "game_data-%08x.pack", tableHash);
+     const fs::path pack = dir / name;
+@@ -391,7 +409,7 @@ std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
+     if (!ReadProjectEntry(RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin", "game_data.pack", packData)) {
+         error = "game_data.pack not found in the disc's PROJECT.BIN";
+     }
+-    if (!error.empty() || !ConvertRoster(saveData, packData, mod.rosterIds == "2008", error)) {
++    if (!error.empty() || !ConvertRoster(saveData, packData, mod.rosterIds == "2008", native, error)) {
+         RT_LOG(RT_TAG_RUNTIME) << "mods: cannot load the roster " << Utf8(save) << ": " << error << std::endl;
+         return {};
+     }
