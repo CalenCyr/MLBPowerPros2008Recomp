@@ -2,9 +2,11 @@
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
 #include "catalog.h"
 #include "categories.h"
+#include "config.h"
 #include "core.h"
 #include "gx.h"
 #include "images.h"
+#include "modfolder.h"
 #include "names.h"
 #include "pack.h"
 #include "projectbin.h"
@@ -12,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 
 namespace tstudio {
 namespace {
@@ -271,6 +274,50 @@ void TestCatalog(const std::filesystem::path& temp) {
     CHECK(c.FindTexture(any) == 1);
     CHECK(IsVideoFrame(video) && !IsVideoFrame(only));
 }
+void TestConfigAndMods(const std::filesystem::path& temp) {
+    const auto config = temp / "Config.toml";
+    std::ofstream(config) << "[paths]\ndvd_root = 'D:\Juegos\MLB\Data'\n\n[video]\nshow_fps = true\n";
+    CHECK(ReadSetting(config, "paths", "dvd_root") == std::optional<std::string>("D:\Juegos\MLB\Data"));
+    CHECK(ReadEnabledMods(config).empty());
+    CHECK(SetModEnabled(config, "HD Menús", true));
+    CHECK(SetModEnabled(config, "Otro", true));
+    CHECK((ReadEnabledMods(config) == std::vector<std::string>{"HD Menús", "Otro"}));
+    CHECK(SetModEnabled(config, "Otro", false));
+    CHECK((ReadEnabledMods(config) == std::vector<std::string>{"HD Menús"}));
+    CHECK(ReadSetting(config, "video", "show_fps") == std::optional<std::string>("true"));  // untouched
+
+    std::string error;
+    CHECK(ValidModName("  HD Menús ñ  ", &error) == std::optional<std::string>("HD Menús ñ"));
+    for (const char* bad : {"", "   ", "a/b", "a\b", "CON", "x:y", "nombre.", "..", "a*b"})
+        CHECK(!ValidModName(bad, &error));
+    const auto mods = temp / "mods";
+    CHECK(CreateMod(mods, "HD Menús ñ", &error));
+    CHECK(!CreateMod(mods, "HD Menús ñ", &error) && error.find("existe") != std::string::npos);
+    CHECK(std::filesystem::exists(mods / PathFromUtf8("HD Menús ñ") / "mod.toml"));
+    const auto list = ListMods(mods, {"HD Menús ñ"});
+    CHECK(list.size() == 1 && list[0].enabled);
+
+    CatalogTexture t{"tex1_8x8_00000000000000aa_9", {}, "Estadios", "Yankees (NYY)"};
+    const auto root = mods / PathFromUtf8("HD Menús ñ");
+    const auto path = ReplacementPath(root, t, t.name);
+    const auto rel = path.lexically_relative(root).generic_u8string();
+    CHECK(std::string(rel.begin(), rel.end()) == "textures/Estadios/Yankees (NYY)/tex1_8x8_00000000000000aa_9.png");
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream(path, std::ios::binary) << "png";
+    std::ofstream(root / "textures" / "nota.txt") << "x";
+    const auto found = FindReplacements(root);
+    CHECK(found.size() == 1 && found.count(t.name));
+
+    const auto zip = temp / "mod.zip";
+    CHECK(WriteZip(root, zip, &error));
+    std::ifstream z(zip, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(z)), {});
+    CHECK(bytes.substr(0, 4) == std::string("PK\x03\x04", 4));
+    CHECK(bytes.find("HD Menús ñ/mod.toml") != std::string::npos);
+    CHECK(bytes.find("tex1_8x8_00000000000000aa_9.png") != std::string::npos);
+    CHECK(bytes.find("nota.txt") == std::string::npos);    // only mod.toml and replacement images
+    CHECK(bytes.find(std::string("PK\x05\x06", 4)) != std::string::npos);
+}
 } // namespace
 
 int RunSelftest() {
@@ -283,6 +330,7 @@ int RunSelftest() {
     TestImages(temp);
     TestCategories();
     TestCatalog(temp);
+    TestConfigAndMods(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
