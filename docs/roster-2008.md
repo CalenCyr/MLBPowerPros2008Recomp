@@ -56,7 +56,7 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 |---|---|---|
 | `0x73.5`/2 | HD 1st Slide (valor 2) | WillSlideHeadFirst, bien |
 | `0x73.7` | Tough Runner | IsToughRunner, bien |
-| `0x74.4` | **Cannon Arm** (en los mensajes de MLB Life, "Laser Beam") | **mal:** lo llama CanBarehandCatch |
+| `0x74.4` | **Cannon Arm** (en los mensajes de MLB Life, "Laser Beam") | lo llama CanBarehandCatch (corregido para 2008) |
 | `0x75.2` | Gd Block | IsGoodBlocker, bien |
 | `0x75.4`/2 con signo | **nada en ninguna pestaña**: rasgo oculto. +1 en pitchers potentes y bateadores corpulentos, −1 en infielders pequeños; podría ser la complexión (sin confirmar) | **mal:** lo llama HasCannonArm |
 | `0x76.2`/2 | Slugger (+1) / Slap Hitter (−1) | SlugOrSlap, bien |
@@ -65,12 +65,15 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 | `0x77.0`/2 | Aggressive Runner (+1) | IsAggressiveBaserunner, bien |
 | `0x77.2`/2 | Aggressive Fielder (+1) | IsAggressiveFielder, bien |
 | `0x77.4` | **Gd Eye**, bit nuevo de 2008 | no existe |
-| `0x77.5` | **Barehand Catch** | **sin nombre** (Bit_77_7) |
+| `0x77.5` | **Barehand Catch** | sin nombre (Bit_77_7); en 2008 lo recibe CanBarehandCatch |
 | `0x78.0`/2, `0x78.2`/2 | Gd/Pr Day Game, Gd/Pr Rain | bien |
 | `0x78.4`/2 | **Gd (+1) / Pr (−1) Night Game**, nueva de 2008 | no existe |
 
-- Los mismos jugadores tienen estos bits en 2007, así que el error de nombres de PowerUp afecta también a 2007: su casilla "Barehand catch" activa el brazo cañón, y "Cannon arm" escribe el valor −2 en el rasgo oculto, un valor que el juego nunca usa.
-- El conversor no se ve afectado: mueve los bits por posición, con o sin nombre.
+- Los mismos jugadores tienen estos bits en 2007, así que en 2007 PowerUp también se equivoca de nombre.
+- **Para 2008 se corrige por significado, y 2007 se deja como está.** Los rosters que genera PowerUp ya usan las casillas por su nombre (su roster 2025 marca "Cannon arm" a Tatis, Arenado, Salvador Pérez y Betts). Por eso la tabla de 2008 (`MOVED` en `powerup_to_2008.py`) lleva "Barehand catch" a `0x77.5` y "Cannon arm" a `0x74.4`. El rasgo oculto se conserva del registro de 2008, o vale 0 en un jugador nuevo, y los restos de la partida base de 2007 ya no se copian.
+- Resultado con el roster 2025: antes, 0 brazos cañón, 117 barehand al azar y 100 rasgos ocultos basura; ahora, los 4 brazos cañón reales y nada más.
+- En PowerUp+, un roster de 2008 importado de nuevo muestra cada casilla con su habilidad real (Rios: Cannon Arm; Eckstein: Barehand). La ida y vuelta sigue idéntica byte a byte. Los rosters de 2008 importados antes de este cambio hay que importarlos de nuevo.
+- Gd Eye y Night Game se conservan al exportar, pero el editor todavía no los muestra.
 
 **Caras:** 2008 insertó caras nuevas, así que los números de 2007 se corren por tramos:
 
@@ -173,6 +176,6 @@ La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicomp
 
 ## Pendiente
 
-- Corregir en PowerUp+ los nombres de Cannon Arm (`0x74.4`) y Barehand Catch (`0x77.5`), y añadir Gd Eye y Night Game. Afecta también a 2007.
+- Añadir Gd Eye y Night Game como casillas del editor de PowerUp+ (solo para rosters de 2008).
 - Averiguar qué controla el rasgo oculto `0x75.4`.
 - Una lista de caras de 2008 para el editor de PowerUp+.

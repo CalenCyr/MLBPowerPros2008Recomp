@@ -15,19 +15,30 @@ index 2305661..ff294a4 100644
      // One server per game session, closed with the game through a job object.
      static HANDLE job = nullptr;
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
-index dcda6e4..46a5e4b 100644
+index dcda6e4..7264965 100644
 --- a/runtime/src/mods.cpp
 +++ b/runtime/src/mods.cpp
-@@ -183,7 +183,7 @@ namespace {
+@@ -183,7 +183,18 @@ namespace {
  // fields are moved with kRosterFields (tools/roster/powerup_to_2008.py, docs/roster-2008.md).
  constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
  constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
 -constexpr uint32_t kRosterConverter = 10;
-+constexpr uint32_t kRosterConverter = 11;  // 11: 2007 voices move with kVoiceRuns
++constexpr uint32_t kRosterConverter = 12;
++
++// kRosterUnnamedRuns expanded to single bit positions.
++const std::vector<uint16_t>& RosterUnnamed() {
++    static const std::vector<uint16_t> bits = [] {
++        std::vector<uint16_t> out;
++        for (const BitRun& run : kRosterUnnamedRuns)
++            for (uint32_t bit = run.first; bit <= run.last; ++bit) out.push_back(static_cast<uint16_t>(bit));
++        return out;
++    }();
++    return bits;
++}  // 11: voices move with kVoiceRuns; 12: abilities by meaning
  
  uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
      uint32_t value = 0;
-@@ -218,9 +218,17 @@ uint32_t Skin2008(uint32_t value) {
+@@ -218,9 +229,17 @@ uint32_t Skin2008(uint32_t value) {
      return value + (value < 2 ? 0 : value < 7 ? 1 : 2);
  }
  
@@ -47,7 +58,16 @@ index dcda6e4..46a5e4b 100644
  // enters unedited, as in 2008's own roster; otherwise each keeps PowerUp+'s "Custom Player" switch.
  bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool ids2008, bool native,
                     std::string& error) {
-@@ -297,6 +305,8 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+@@ -261,7 +280,7 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+     // PowerUp cannot name; they take the value most 2008 players have (0x4E-0x4F and 0x92.0 are set
+     // on every one, and the lineup screen shows blank names without them).
+     std::vector<uint32_t> typical;
+-    for (const uint16_t bit : kRosterUnnamed) {
++    for (const uint16_t bit : RosterUnnamed()) {
+         size_t set = 0, players = 0;
+         for (const auto& [key, records] : originals) {
+             for (const unsigned char* record : records) set += GetBits(record, bit, 1), ++players;
+@@ -297,17 +316,19 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
          } else {
              SetBits(to, 0x2A4, 8, Face2008(GetBits(from, 0x2A4, 8)));
              SetBits(to, 0x2AC, 4, Skin2008(GetBits(from, 0x2AC, 4)));
@@ -56,14 +76,86 @@ index dcda6e4..46a5e4b 100644
          }
          // PowerUp cannot edit the bits it has no name for (it leaves whatever its base save had in
          // that slot), so a known player keeps his 2008 ones; so do the bytes after a long name's
+         // special id (u16 >= 0xF00 at 0x02), which the game does not read.
+         if (base != nullptr) {
+-            for (const uint16_t bit : kRosterUnnamed) SetBits(to, bit, 1, GetBits(base, bit, 1));
++            for (const uint16_t bit : RosterUnnamed()) SetBits(to, bit, 1, GetBits(base, bit, 1));
+             if (std::memcmp(to + 2, base + 2, 2) == 0 && (to[2] << 8 | to[3]) >= 0xF00) {
+                 std::memcpy(to + 4, base + 4, 0x12);
+             }
+         } else if (ids2008) {
+-            for (size_t k = 0; k < std::size(kRosterUnnamed); ++k) SetBits(to, kRosterUnnamed[k], 1, typical[k]);
++            for (size_t k = 0; k < RosterUnnamed().size(); ++k) SetBits(to, RosterUnnamed()[k], 1, typical[k]);
+         }
+         if (native) SetBits(to, 0x283, 2, 0b10);  // Unedited (0x50.3) set, IsEdited (0x50.4) clear
+     }
+@@ -394,7 +415,7 @@ std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
+             tableHash = (tableHash ^ value) * 16777619u;
+         }
+     }
+-    for (const uint16_t bit : kRosterUnnamed) tableHash = (tableHash ^ bit) * 16777619u;
++    for (const uint16_t bit : RosterUnnamed()) tableHash = (tableHash ^ bit) * 16777619u;
+     if (mod.rosterIds == "2008") tableHash = (tableHash ^ 2008u) * 16777619u;
+     const bool native = RuntimeConfigFile::NativeRoster(true);
+     if (native) tableHash = (tableHash ^ 0x4E415456u) * 16777619u;
 diff --git a/runtime/src/roster_fields.inc b/runtime/src/roster_fields.inc
-index aa3b99f..0cb0f9b 100644
+index aa3b99f..c9dee5c 100644
 --- a/runtime/src/roster_fields.inc
 +++ b/runtime/src/roster_fields.inc
-@@ -182,3 +182,42 @@ constexpr uint16_t kRosterUnnamed[] = {
-     0x47F, 0x480, 0x481, 0x482, 0x483, 0x484, 0x485, 0x486, 0x487, 0x488, 0x489, 0x48A,
-     0x48B, 0x48C, 0x48D, 0x48E, 0x48F, 0x490, 0x491,
+@@ -39,13 +39,13 @@ constexpr RosterField kRosterFields[] = {
+     {0x3A3, 1, 0x3A0, 1, false},  // WillBreakupDoublePlay
+     {0x3A4, 2, 0x3A1, 2, false},  // Throwing
+     {0x3A6, 1, 0x3A3, 1, false},  // IsGoldGlover
+-    {0x3A7, 1, 0x3A4, 1, false},  // CanBarehandCatch
++    {0x3A7, 1, 0x3BD, 1, false},  // CanBarehandCatch
+     {0x3A8, 1, 0x3A5, 1, false},  // CanSpiderCatch
+     {0x3A9, 1, 0x3A6, 1, false},  // IsErrorProne
+     {0x3AA, 3, 0x3A7, 3, false},  // Catching
+     {0x3AD, 1, 0x3AA, 1, false},  // IsGoodBlocker
+     {0x3AE, 1, 0x3AB, 1, false},  // IsTrashTalker
+-    {0x3AF, 1, 0x3AC, 1, false},  // HasCannonArm
++    {0x3AF, 1, 0x3A4, 1, false},  // HasCannonArm
+     {0x3B2, 1, 0x3AF, 1, false},  // IsStar
+     {0x3B3, 2, 0x3B0, 2, false},  // SmallBall
+     {0x3B5, 2, 0x3B2, 2, false},  // SlugOrSlap
+@@ -123,11 +123,9 @@ constexpr RosterField kRosterFields[] = {
+     {0x4F8, 5, 0x4F8, 5, false},  // SinkingFastball2Type
+     {0x4FD, 3, 0x4FD, 3, false},  // SinkingFastball2Movement
+     {0x3A1, 1, 0x39E, 1, false},  // Bit_74_1
+-    {0x3B0, 1, 0x3AD, 1, false},  // Bit_76_0
+     {0x3B1, 1, 0x3AE, 1, false},  // Bit_76_1
+     {0x3BB, 1, 0x3B8, 1, false},  // Bit_77_3
+     {0x3BD, 1, 0x3BA, 1, false},  // Bit_77_5
+-    {0x3BF, 1, 0x3BD, 1, false},  // Bit_77_7
+     {0x3C6, 1, 0x3C4, 1, false},  // Bit_78_6
+     {0x3C7, 1, 0x3C5, 1, false},  // Bit_78_7
+     {0x407, 1, 0x405, 1, false},  // Bit_80_7
+@@ -168,17 +166,51 @@ constexpr RosterField kRosterFields[] = {
+     {0x490, 1, 0x490, 1, false},  // Bit_92_0
+     {0x491, 1, 0x491, 1, false},  // Bit_92_1
  };
+-// 2008 bits PowerUp has no name for; a player found in the original 2008 roster keeps his.
+-constexpr uint16_t kRosterUnnamed[] = {
+-    0x270, 0x271, 0x272, 0x273, 0x274, 0x275, 0x276, 0x277, 0x278, 0x279, 0x27A, 0x27B,
+-    0x27C, 0x27D, 0x27E, 0x27F, 0x280, 0x281, 0x282, 0x285, 0x286, 0x287, 0x299, 0x29A,
+-    0x29B, 0x29C, 0x29D, 0x29E, 0x29F, 0x2A0, 0x2A1, 0x2A2, 0x2A3, 0x2B0, 0x2BF, 0x2D2,
+-    0x2D3, 0x2DE, 0x2DF, 0x315, 0x316, 0x318, 0x319, 0x31B, 0x31C, 0x31E, 0x31F, 0x320,
+-    0x321, 0x322, 0x323, 0x324, 0x325, 0x326, 0x327, 0x328, 0x329, 0x32A, 0x32B, 0x32C,
+-    0x32D, 0x32E, 0x32F, 0x330, 0x331, 0x332, 0x333, 0x334, 0x335, 0x336, 0x337, 0x338,
+-    0x339, 0x33A, 0x33F, 0x350, 0x354, 0x35B, 0x35C, 0x35D, 0x35E, 0x35F, 0x39E, 0x3AD,
+-    0x3AE, 0x3B8, 0x3BA, 0x3BD, 0x3C4, 0x3C5, 0x405, 0x46E, 0x46F, 0x470, 0x471, 0x472,
+-    0x473, 0x474, 0x475, 0x476, 0x477, 0x478, 0x479, 0x47A, 0x47B, 0x47C, 0x47D, 0x47E,
+-    0x47F, 0x480, 0x481, 0x482, 0x483, 0x484, 0x485, 0x486, 0x487, 0x488, 0x489, 0x48A,
+-    0x48B, 0x48C, 0x48D, 0x48E, 0x48F, 0x490, 0x491,
++// 2008 bits PowerUp has no name for, as runs {first, last}; a player found in the original
++// 2008 roster keeps his.
++struct BitRun { uint16_t first, last; };
++constexpr BitRun kRosterUnnamedRuns[] = {
++    {0x270, 0x282}, {0x285, 0x287}, {0x299, 0x2A3}, {0x2B0, 0x2B0}, {0x2BF, 0x2BF}, {0x2D2, 0x2D3},
++    {0x2DE, 0x2DF}, {0x315, 0x316}, {0x318, 0x319}, {0x31B, 0x31C}, {0x31E, 0x33A}, {0x33F, 0x33F},
++    {0x350, 0x350}, {0x354, 0x354}, {0x35B, 0x35F}, {0x39E, 0x39E}, {0x3AC, 0x3AE}, {0x3B8, 0x3B8},
++    {0x3BA, 0x3BA}, {0x3C4, 0x3C5}, {0x405, 0x405}, {0x46E, 0x491},
++};
 +// 2007 voice id runs {first, last, offset to 2008's id} (VOICE_RUNS); other ids have no 2008 voice.
 +struct VoiceRun { uint16_t first, last; int16_t offset; };
 +constexpr VoiceRun kVoiceRuns[] = {
@@ -102,4 +194,4 @@ index aa3b99f..0cb0f9b 100644
 +    {2979, 2979, 225}, {2983, 2983, 227}, {2984, 2985, 228}, {2986, 2987, 230}, {2990, 2991, 233}, {2992, 2993, 234},
 +    {2994, 2996, 236}, {2998, 3001, 235}, {3003, 3007, 234}, {3818, 3821, 650}, {3825, 3825, 649}, {3828, 3829, 647},
 +    {3831, 3831, 646}, {4081, 4081, 708},
-+};
+ };

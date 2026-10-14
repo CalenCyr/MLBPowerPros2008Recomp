@@ -361,7 +361,7 @@ Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicom
 - **Caras renumeradas:** +0 / +1 / +2 / +7 / +12 para las caras de 2007 por debajo de 28 / 106 / 161 / 177 / resto. Coinciden 707 de 729 jugadores compartidos.
 - **Piel y ojos:** 2008 inserta un tono en la posición 2, y los ojos marrones suman 6 (en 2007, 5).
 - **Nombres largos nuevos** (IDs especiales): Van Benschoten 3867, Pignatiello 3893, E. Patterson 3895, Saltalamacchia 3896, Sonnanstine 3897, Chamberlain 3899, S. Rodriguez 3900, Lillibridge 3901.
-- La tabla completa de unos 140 campos está en `kRosterFields` (`wiicompiled-mods.patch`) y en `PowerPros2008Fields.cs` (PowerUp+ parcheado). Los 123 bits que PowerUp no nombra están en `kRosterUnnamed`.
+- La tabla completa de unos 140 campos está en `kRosterFields` (`wiicompiled-mods.patch`) y en `PowerPros2008Fields.cs` (PowerUp+ parcheado). Los 127 bits que PowerUp no nombra (incluido el rasgo oculto) están en `kRosterUnnamedRuns`, en tramos.
 
 **Getters del registro en el código (desensamblado).** El juego lee cada campo con una función pequeña: `lwz rX, D(r3)` + extracción del campo + `blr`, una tras otra desde `0x8082B000` (`ovl_main.rel` + `0x2B5A80`) en el orden del registro. Es la lista de campos tal como la ve el juego, con posición, ancho y signo:
 - Coinciden con la tabla de arriba la forma de bateo y la de lanzamiento (9 bits), clutch `0x6F.5`/3, ánimo `0x70.1`/2, todas las habilidades de bateo de `0x70.3` a `0x73.0` (push hitter `0x71.0`, free swinger `0x71.7`…), las de defensa y las de lanzador hasta `0x80.7`, y el nacimiento.
@@ -378,7 +378,7 @@ Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicom
 |---|---|---|
 | `0x73.5`/2 | HD 1st Slide (valor 2) | WillSlideHeadFirst, bien |
 | `0x73.7` | Tough Runner | IsToughRunner, bien |
-| `0x74.4` | **Cannon Arm** (en los mensajes de MLB Life, "Laser Beam") | **mal:** lo llama CanBarehandCatch |
+| `0x74.4` | **Cannon Arm** (en los mensajes de MLB Life, "Laser Beam") | lo llama CanBarehandCatch (corregido para 2008) |
 | `0x75.2` | Gd Block | IsGoodBlocker, bien |
 | `0x75.4`/2 con signo | **nada en ninguna pestaña**: rasgo oculto. +1 en pitchers potentes y bateadores corpulentos, −1 en infielders pequeños; podría ser la complexión (sin confirmar) | **mal:** lo llama HasCannonArm |
 | `0x76.2`/2 | Slugger (+1) / Slap Hitter (−1) | SlugOrSlap, bien |
@@ -387,12 +387,15 @@ Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicom
 | `0x77.0`/2 | Aggressive Runner (+1) | IsAggressiveBaserunner, bien |
 | `0x77.2`/2 | Aggressive Fielder (+1) | IsAggressiveFielder, bien |
 | `0x77.4` | **Gd Eye**, bit nuevo de 2008 | no existe |
-| `0x77.5` | **Barehand Catch** | **sin nombre** (Bit_77_7) |
+| `0x77.5` | **Barehand Catch** | sin nombre (Bit_77_7); en 2008 lo recibe CanBarehandCatch |
 | `0x78.0`/2, `0x78.2`/2 | Gd/Pr Day Game, Gd/Pr Rain | bien |
 | `0x78.4`/2 | **Gd (+1) / Pr (−1) Night Game**, nueva de 2008 | no existe |
 
-- Los mismos jugadores tienen estos bits en 2007, así que el error de nombres de PowerUp afecta también a 2007: su casilla "Barehand catch" activa el brazo cañón, y "Cannon arm" escribe el valor −2 en el rasgo oculto, un valor que el juego nunca usa.
-- El conversor no se ve afectado: mueve los bits por posición, con o sin nombre.
+- Los mismos jugadores tienen estos bits en 2007, así que en 2007 PowerUp también se equivoca de nombre.
+- **Para 2008 se corrige por significado, y 2007 se deja como está.** Los rosters que genera PowerUp ya usan las casillas por su nombre (su roster 2025 marca "Cannon arm" a Tatis, Arenado, Salvador Pérez y Betts). Por eso la tabla de 2008 (`MOVED` en `powerup_to_2008.py`) lleva "Barehand catch" a `0x77.5` y "Cannon arm" a `0x74.4`. El rasgo oculto se conserva del registro de 2008, o vale 0 en un jugador nuevo, y los restos de la partida base de 2007 ya no se copian.
+- Resultado con el roster 2025: antes, 0 brazos cañón, 117 barehand al azar y 100 rasgos ocultos basura; ahora, los 4 brazos cañón reales y nada más.
+- En PowerUp+, un roster de 2008 importado de nuevo muestra cada casilla con su habilidad real (Rios: Cannon Arm; Eckstein: Barehand). La ida y vuelta sigue idéntica byte a byte. Los rosters de 2008 importados antes de este cambio hay que importarlos de nuevo.
+- Gd Eye y Night Game se conservan al exportar, pero el editor todavía no los muestra.
 - La ficha se abre en el juego desde Arrange → crear equipo → Fielder Select (o Pitcher Select) → stick C. Para automatizarlo, `WIICOMPILED_PAD_SCRIPT` acepta los bits `0x10000`–`0x80000` como stick C (parche `wiicompiled-pad-script-cstick`).
 
 **Voces renumeradas.** 2008 conserva el orden de las voces de 2007, pero inserta y quita algunas. Entre dos jugadores presentes en ambos juegos cuyos huecos miden lo mismo, las voces se corresponden una a una, salvo que un nombre conocido de 2008 lo contradiga. Así se ubican 810 de las 968 voces de PowerUp, en 206 tramos (`VOICE_RUNS`). Ocultando el 10 % de los jugadores de referencia, los 739 casos caen en su voz real. Ryan Braun y dos "Great" tienen su voz regrabada en otro sitio.

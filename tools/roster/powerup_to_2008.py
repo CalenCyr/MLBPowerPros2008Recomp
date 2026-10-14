@@ -68,7 +68,17 @@ MOVED = {
     "RunsBattedIn": (0x440, 10),
     "HomeRuns": (0x44A, 10),
     "VoiceId": None,
+    # Checked on 2008's player sheet: the bit PowerUp calls "barehand catch" is the game's Cannon
+    # Arm, the game's Barehand Catch is a bit PowerUp has no name for, and PowerUp's "cannon arm" is
+    # the high bit of a hidden +1/-1 trait the sheet never shows. PowerUp's own rosters use the
+    # boxes by their names, so 2008 gets them by meaning; 2007 saves keep PowerUp's layout.
+    "CanBarehandCatch": (0x3BD, 1),      # 2008 0x77.5 Barehand Catch
+    "HasCannonArm": (0x3A4, 1),          # 2008 0x74.4 Cannon Arm
+    "Bit_76_0": None,                    # low bit of the hidden trait: base-save leftovers in PowerUp
+    "Bit_77_7": None,                    # where 2007 keeps Barehand Catch, which PowerUp cannot edit
 }
+# 2008's hidden +1/-1 trait (0x75.4, 2 bits): kept from the 2008 record, 0 for new players.
+HIDDEN_2008 = [0x3AC, 0x3AD]
 
 
 def target(name, bit, bits):
@@ -160,12 +170,13 @@ def convert_rest(old, original):
 
 def unnamed_2008(fields):
     """2008 bit positions that hold bits PowerUp has no name for."""
-    return unnamed_copied(fields) + [target(name, bit, 1)[0] for name, bit, _ in fields if name.startswith("Bit_")]
+    moved = [target(name, bit, 1) for name, bit, _ in fields if name.startswith("Bit_")]
+    return unnamed_copied(fields) + [place[0] for place in moved if place] + HIDDEN_2008
 
 
 def unnamed_2007(fields):
     """The same bits at their 2007 positions, as a PowerUp save holds them."""
-    return unnamed_copied(fields) + [bit for name, bit, _ in fields if name.startswith("Bit_")]
+    return unnamed_copied(fields) + [bit for name, bit, _ in fields if name.startswith("Bit_") and target(name, bit, 1)]
 
 
 def unnamed_copied(fields):
@@ -358,11 +369,18 @@ def emit_cpp(repo):
             year = "true" if name == "BirthYear" else "false"
             lines.append(f"    {{0x{bit:03X}, {count}, 0x{place[0]:03X}, {place[1]}, {year}}},  // {name}")
     lines.append("};")
-    lines.append("// 2008 bits PowerUp has no name for; a player found in the original 2008 roster keeps his.")
-    lines.append("constexpr uint16_t kRosterUnnamed[] = {")
-    unnamed = unnamed_2008(load_fields(repo))
-    for i in range(0, len(unnamed), 12):
-        lines.append("    " + " ".join(f"0x{b:03X}," for b in unnamed[i:i + 12]))
+    lines.append("// 2008 bits PowerUp has no name for, as runs {first, last}; a player found in the original")
+    lines.append("// 2008 roster keeps his.")
+    lines.append("struct BitRun { uint16_t first, last; };")
+    lines.append("constexpr BitRun kRosterUnnamedRuns[] = {")
+    runs = []
+    for b in sorted(unnamed_2008(load_fields(repo))):
+        if runs and runs[-1][1] == b - 1:
+            runs[-1][1] = b
+        else:
+            runs.append([b, b])
+    for i in range(0, len(runs), 6):
+        lines.append("    " + " ".join(f"{{0x{a:03X}, 0x{b:03X}}}," for a, b in runs[i:i + 6]))
     lines.append("};")
     lines.append("// 2007 voice id runs {first, last, offset to 2008's id} (VOICE_RUNS); other ids have no 2008 voice.")
     lines.append("struct VoiceRun { uint16_t first, last; int16_t offset; };")
