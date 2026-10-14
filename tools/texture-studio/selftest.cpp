@@ -10,6 +10,7 @@
 #include "names.h"
 #include "pack.h"
 #include "projectbin.h"
+#include "transfer.h"
 
 #include <cstdio>
 #include <cstring>
@@ -318,6 +319,54 @@ void TestConfigAndMods(const std::filesystem::path& temp) {
     CHECK(bytes.find("nota.txt") == std::string::npos);    // only mod.toml and replacement images
     CHECK(bytes.find(std::string("PK\x05\x06", 4)) != std::string::npos);
 }
+void TestTransfer(const std::filesystem::path& temp) {
+    Catalog c;
+    SyntheticCatalog(temp, c);
+    if (c.Textures().size() != 3) return;
+    const auto modRoot = temp / "mods" / "Prueba";
+    std::filesystem::create_directories(modRoot / "textures");
+    const CatalogTexture& t = c.Textures()[1];                     // 8x8 C4
+    const auto exportDir = temp / PathFromUtf8("exportación");
+    std::vector<std::string> problems;
+    CHECK(Export(c, {0, 1, 2}, exportDir, &problems) == 3 && problems.empty());
+    const auto exported = exportDir / PathFromUtf8(t.group) / PathFromUtf8(t.subgroup) / PathFromUtf8(t.name + ".png");
+    CHECK(std::filesystem::exists(exported));
+
+    // x4 upscale of the exported image: accepted and written under the mod.
+    Image big{32, 32, std::vector<uint8_t>(32 * 32 * 4, 200)};
+    const auto bigFile = temp / "big.png";
+    CHECK(SavePng(bigFile, big, nullptr));
+    const auto r = ImportOne(c, 1, bigFile, modRoot, false);
+    CHECK(r.ok && std::filesystem::exists(ReplacementPath(modRoot, t, t.name)));
+    // Wrong aspect (32x16 onto the 8x8 texture): rejected.
+    Image wide{32, 16, std::vector<uint8_t>(32 * 16 * 4, 1)};
+    CHECK(SavePng(temp / "wide.png", wide, nullptr));
+    const auto bad = ImportOne(c, 1, temp / "wide.png", modRoot, false);
+    CHECK(!bad.ok && bad.message.find("proporción") != std::string::npos);
+
+    // Folder import: one good file, one unknown tex1 name, one random file, a .png/.dds pair, a "$" name.
+    const auto in = temp / "chainner";
+    std::filesystem::create_directories(in / "sub");
+    const ParsedName& k2 = c.Textures()[2].key;
+    Image ok2{k2.width * 2, k2.height * 2, std::vector<uint8_t>(static_cast<size_t>(k2.width) * k2.height * 16, 9)};
+    CHECK(SavePng(in / "sub" / PathFromUtf8(c.Textures()[2].name + ".png"), ok2, nullptr));
+    std::ofstream(in / PathFromUtf8(c.Textures()[2].name + ".dds"), std::ios::binary) << "dup";
+    CHECK(SavePng(in / "tex1_8x8_0000000000000001_5.png", Image{8, 8, std::vector<uint8_t>(256, 1)}, nullptr));
+    std::ofstream(in / "foto.png", std::ios::binary) << "x";
+    ParsedName any = t.key;                                         // "$" name: every palette of texture 1
+    any.paletteWildcard = true;
+    CHECK(SavePng(in / PathFromUtf8(ReplacementName(any) + ".png"), Image{16, 16, std::vector<uint8_t>(16 * 16 * 4, 3)}, nullptr));
+    const auto report = ImportFolder(c, in, modRoot);
+    int good = 0, unknown = 0, unnamed = 0, duplicate = 0;
+    for (const auto& x : report) {
+        good += x.ok;
+        unknown += x.message.find("ninguna textura") != std::string::npos;
+        unnamed += x.message.find("no reconocido") != std::string::npos;
+        duplicate += x.message.find("Repetido") != std::string::npos;
+    }
+    CHECK(good == 2 && unknown == 1 && unnamed == 1 && duplicate == 1);
+    CHECK(FindReplacements(modRoot).count(ReplacementName(any)) == 1);
+}
 } // namespace
 
 int RunSelftest() {
@@ -331,6 +380,7 @@ int RunSelftest() {
     TestCategories();
     TestCatalog(temp);
     TestConfigAndMods(temp);
+    TestTransfer(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
