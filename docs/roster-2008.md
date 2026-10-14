@@ -47,8 +47,30 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 - "table setter" (0x70.0) no lo tiene ningún jugador de 2008, pero el juego lo sigue usando: tiene su función de lectura, su función de escritura en el modo Edit y dos funciones de juego que lo consultan junto a "rally hitter" (detalle en `docs/ingenieria-inversa.md`, sección 6). El conversor lo escribe en su sitio y funciona si se le da a un jugador.
 
 **Comprobado en el código del juego.** El juego lee cada campo del registro con una función pequeña, todas seguidas y en el orden del registro. Sus posiciones y anchos coinciden con esta tabla en todos los campos movidos. Algunos que PowerUp modela como un solo bit son de 2 bits para el juego. El otro bit viaja como bit sin nombre, así que el valor completo se conserva:
-- "cannon arm" (0x75.4): el juego usa +1 (96 jugadores) y −1 (11). El casillero de PowerUp solo ve el −1. Falta confirmar en pantalla qué significa cada signo.
-- 0x78.4 (2 bits con signo): una habilidad nueva de 2008 que PowerUp no conoce. +1 en Figgins, Cora, Easley…; −1 en Giambi, Kendall, Dellucci…
+- 0x75.4 (2 bits con signo, "cannon arm" para PowerUp): +1 en 96 jugadores y −1 en 11. No es el brazo cañón; ver la tabla siguiente.
+- 0x78.4 (2 bits con signo): una habilidad nueva de 2008 que PowerUp no conoce: partido nocturno, bueno o malo.
+
+**Comprobado en pantalla** (Arrange → un equipo → Fielder Select → stick C, "Player ABL"; capturas de Cora, Varitek, Casey, J.D. Drew, Eckstein y Rios cruzadas con sus bits):
+
+| Bits de 2008 | Lo que muestra el juego | En PowerUp |
+|---|---|---|
+| `0x73.5`/2 | HD 1st Slide (valor 2) | WillSlideHeadFirst, bien |
+| `0x73.7` | Tough Runner | IsToughRunner, bien |
+| `0x74.4` | **Cannon Arm** (en los mensajes de MLB Life, "Laser Beam") | **mal:** lo llama CanBarehandCatch |
+| `0x75.2` | Gd Block | IsGoodBlocker, bien |
+| `0x75.4`/2 con signo | **nada en ninguna pestaña**: rasgo oculto. +1 en pitchers potentes y bateadores corpulentos, −1 en infielders pequeños; podría ser la complexión (sin confirmar) | **mal:** lo llama HasCannonArm |
+| `0x76.2`/2 | Slugger (+1) / Slap Hitter (−1) | SlugOrSlap, bien |
+| `0x76.4`/2 | Aggressive (+1) / Patient Hitter (−1) | bien |
+| `0x76.6`/2 | Aggressive (+1) / Cautious Stealer (−1) | bien |
+| `0x77.0`/2 | Aggressive Runner (+1) | IsAggressiveBaserunner, bien |
+| `0x77.2`/2 | Aggressive Fielder (+1) | IsAggressiveFielder, bien |
+| `0x77.4` | **Gd Eye**, bit nuevo de 2008 | no existe |
+| `0x77.5` | **Barehand Catch** | **sin nombre** (Bit_77_7) |
+| `0x78.0`/2, `0x78.2`/2 | Gd/Pr Day Game, Gd/Pr Rain | bien |
+| `0x78.4`/2 | **Gd (+1) / Pr (−1) Night Game**, nueva de 2008 | no existe |
+
+- Los mismos jugadores tienen estos bits en 2007, así que el error de nombres de PowerUp afecta también a 2007: su casilla "Barehand catch" activa el brazo cañón, y "Cannon arm" escribe el valor −2 en el rasgo oculto, un valor que el juego nunca usa.
+- El conversor no se ve afectado: mueve los bits por posición, con o sin nombre.
 
 **Caras:** 2008 insertó caras nuevas, así que los números de 2007 se corren por tramos:
 
@@ -114,7 +136,9 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - **Huecos vacíos y orden.** Los huecos sobrantes quedan vacíos, en vez de llevar jugadores de la partida base de 2007. Los equipos mantienen su orden, con los de grandes ligas primero; la exportación de 2007 los reordenaba con un `OrderBy` encadenado.
   - **Valores sin tocar.** El modelo de PowerUp no conserva todos los valores exactos: piel y ojos según la cara, color de un pelo que no existe, movimiento de la recta, banderas de "editado". En cada campo que vale lo mismo que daría un viaje de ida y vuelta sin tocar el jugador original, se escribe el valor original de 2008.
   - **Bits sin nombre.** La exportación escribe los bits que PowerUp no modela (`PowerPros2008Fields.Unmodeled`, generado con `--emit-cs`): un jugador que viene de 2008 lleva los suyos y uno nuevo el valor que tiene la mayoría de los jugadores de 2008. Así el `.dat` funciona por sí solo, sin depender de que el juego lo complete.
-  - **Caras, piel/ojos y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara o piel sin tocar vuelve a su valor exacto de 2008, y una elegida en el editor se convierte con la tabla. Los jugadores que no están en 2008 reciben la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
+  - **Caras, piel/ojos y voces.** Se escriben en números de 2008 (`roster_ids = "2008"`). Una cara o piel sin tocar vuelve a su valor exacto de 2008, y una elegida en el editor se convierte con la tabla. La voz elegida en el editor se convierte a 2008 con `VOICE_RUNS`; una sin tocar vuelve a su número exacto de 2008, aunque sea 0 (sin voz). Si la voz elegida es de 2007 y 2008 la quitó, o si un jugador nuevo no tiene voz, recibe la voz de 2008 cuyo nombre suena más parecido, con el mismo método que PowerUp+ usa para 2007.
+  - **Voces en el editor.** Al importar, la voz pasa a la numeración de 2007, la que entiende el editor, igual que las caras. Una voz que solo existe en 2008 recibe el número 10000 + su número de 2008 y el nombre del jugador de 2008 que la usa. En modo 2008 la lista solo ofrece voces que existen en el juego: 1.087. Los 1.003 jugadores de 2008 con voz ven el nombre de su propia voz. Un jugador sin voz muestra "Sin voz".
+  - Los rosters importados antes de este cambio guardan la voz con el número de 2008: se exportan bien sin tocarlos, pero el editor les muestra otro nombre. Hay que volver a importarlos.
 - **Desde el juego (lo normal):** launcher → MODS → pestaña HERRAMIENTAS → **EDITAR ROSTER (PowerUp+)**.
   - Abre PowerUp+ en el navegador (`http://127.0.0.1:5123`) y se cierra junto con el juego.
   - El Setup lo instala ya compilado en `Game\powerupplus\` (autocontenido, no hace falta instalar .NET). Sus datos (base de datos, librerías) quedan en `UserData\PowerUpPlus\`.
@@ -149,6 +173,6 @@ La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicomp
 
 ## Pendiente
 
-- PowerUp+ podría mostrar en su editor el nombre real de la voz de un jugador de 2008 (hoy enseña la lista de 2007 con el número de 2008) y elegir voces entre las 810 ubicadas, no solo entre las del roster.
-- Confirmar en pantalla el significado de +1 y −1 en 0x75.4 y dar nombre a la habilidad nueva 0x78.4.
+- Corregir en PowerUp+ los nombres de Cannon Arm (`0x74.4`) y Barehand Catch (`0x77.5`), y añadir Gd Eye y Night Game. Afecta también a 2007.
+- Averiguar qué controla el rasgo oculto `0x75.4`.
 - Una lista de caras de 2008 para el editor de PowerUp+.

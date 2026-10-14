@@ -368,9 +368,32 @@ Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicom
 - **"Table setter" `0x70.0` sigue vivo en 2008:** getter `0x8082B068` (`srwi 31`), setter del modo Edit en `0x8085EF74` (limita a 0–1) y dos funciones de juego que lo leen junto a "rally hitter": `0x80985E4C` y `0x80A30C54`. Ningún jugador de 2008 lo tiene, pero funciona si se le da a uno.
 - Algunos campos que PowerUp trata como un solo bit son de **2 bits** para el juego. El otro bit viaja como "bit sin nombre", así que el conversor conserva el valor completo:
   - `0x73.5`/2 (deslizarse de cabeza): solo aparecen 0 y 2; el bit que modela PowerUp es el correcto.
-  - `0x75.4`/2 con signo ("cannon arm" para PowerUp): +1 en 96 jugadores (Carpenter, Randy Johnson, Dye…) y −1 en 11 (Furcal, Rollins, Eckstein…). PowerUp solo ve el lado −1. Falta confirmar en pantalla qué significa cada signo.
+  - `0x75.4`/2 con signo ("cannon arm" para PowerUp): +1 en 96 jugadores (Carpenter, Randy Johnson, Dye…) y −1 en 11 (Furcal, Rollins, Eckstein…). No aparece en la ficha del jugador: es un rasgo oculto.
   - `0x77.0`/2 y `0x77.2`/2 con signo (corredor y defensor agresivos): solo 0 y +1.
-  - `0x78.4`/2 con signo: **habilidad nueva de 2008**, ningún jugador de 2007 la tiene. +1 en 11 (Figgins, Cora, Easley…), −1 en 16 (Giambi, Kendall, Dellucci…).
+  - `0x78.4`/2 con signo: **habilidad nueva de 2008, partido nocturno** (Gd/Pr Night Game). +1 en 11 (Figgins, Cora, Easley…), −1 en 16 (Giambi, Kendall, Dellucci…).
+
+**Comprobado en pantalla** (Arrange → un equipo → Fielder Select → stick C, "Player ABL"; capturas de Cora, Varitek, Casey, J.D. Drew, Eckstein y Rios cruzadas con sus bits):
+
+| Bits de 2008 | Lo que muestra el juego | En PowerUp |
+|---|---|---|
+| `0x73.5`/2 | HD 1st Slide (valor 2) | WillSlideHeadFirst, bien |
+| `0x73.7` | Tough Runner | IsToughRunner, bien |
+| `0x74.4` | **Cannon Arm** (en los mensajes de MLB Life, "Laser Beam") | **mal:** lo llama CanBarehandCatch |
+| `0x75.2` | Gd Block | IsGoodBlocker, bien |
+| `0x75.4`/2 con signo | **nada en ninguna pestaña**: rasgo oculto. +1 en pitchers potentes y bateadores corpulentos, −1 en infielders pequeños; podría ser la complexión (sin confirmar) | **mal:** lo llama HasCannonArm |
+| `0x76.2`/2 | Slugger (+1) / Slap Hitter (−1) | SlugOrSlap, bien |
+| `0x76.4`/2 | Aggressive (+1) / Patient Hitter (−1) | bien |
+| `0x76.6`/2 | Aggressive (+1) / Cautious Stealer (−1) | bien |
+| `0x77.0`/2 | Aggressive Runner (+1) | IsAggressiveBaserunner, bien |
+| `0x77.2`/2 | Aggressive Fielder (+1) | IsAggressiveFielder, bien |
+| `0x77.4` | **Gd Eye**, bit nuevo de 2008 | no existe |
+| `0x77.5` | **Barehand Catch** | **sin nombre** (Bit_77_7) |
+| `0x78.0`/2, `0x78.2`/2 | Gd/Pr Day Game, Gd/Pr Rain | bien |
+| `0x78.4`/2 | **Gd (+1) / Pr (−1) Night Game**, nueva de 2008 | no existe |
+
+- Los mismos jugadores tienen estos bits en 2007, así que el error de nombres de PowerUp afecta también a 2007: su casilla "Barehand catch" activa el brazo cañón, y "Cannon arm" escribe el valor −2 en el rasgo oculto, un valor que el juego nunca usa.
+- El conversor no se ve afectado: mueve los bits por posición, con o sin nombre.
+- La ficha se abre en el juego desde Arrange → crear equipo → Fielder Select (o Pitcher Select) → stick C. Para automatizarlo, `WIICOMPILED_PAD_SCRIPT` acepta los bits `0x10000`–`0x80000` como stick C (parche `wiicompiled-pad-script-cstick`).
 
 **Voces renumeradas.** 2008 conserva el orden de las voces de 2007, pero inserta y quita algunas. Entre dos jugadores presentes en ambos juegos cuyos huecos miden lo mismo, las voces se corresponden una a una, salvo que un nombre conocido de 2008 lo contradiga. Así se ubican 810 de las 968 voces de PowerUp, en 206 tramos (`VOICE_RUNS`). Ocultando el 10 % de los jugadores de referencia, los 739 casos caen en su voz real. Ryan Braun y dos "Great" tienen su voz regrabada en otro sitio.
 

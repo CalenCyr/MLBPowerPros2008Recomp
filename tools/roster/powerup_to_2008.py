@@ -224,6 +224,16 @@ def voice_2008(voice):
     return next((voice + d for first, last, d in VOICE_RUNS if first <= voice <= last), 0)
 
 
+ONLY_2008_VOICE = 10000                  # PowerUp+ numbers a voice only 2008 has as this + its 2008 id
+
+
+def voice_2007(voice):
+    """2008 voice id -> 2007's (the runs never overlap in 2008), or ONLY_2008_VOICE + voice."""
+    if voice == 0:
+        return 0
+    return next((voice - d for first, last, d in VOICE_RUNS if first <= voice - d <= last), ONLY_2008_VOICE + voice)
+
+
 def face_2008(face):
     """2007 face id -> 2008's. 2008 inserted faces after 27, 105, 160 and 176 (707 of the 729 players
     in both games match with this; the rest got another face)."""
@@ -308,10 +318,10 @@ def typical_unnamed(block, fields):
 
 
 def revert_player(new, fields, base=None):
-    """2008 record back to the 2007 layout (PowerUp+ imports the 2008 roster this way). The face goes
-    back to 2007's numbering, which PowerUp's editor shows; the voice keeps 2008's id (same place,
-    2008 numbering); the second "versus lefty", which 2008 dropped, comes from `base`, the 2007
-    record of the same player."""
+    """2008 record back to the 2007 layout (PowerUp+ imports the 2008 roster this way). Face and voice
+    go back to 2007's numbering, which PowerUp's editor shows (a voice only 2008 has becomes
+    ONLY_2008_VOICE + its 2008 id); the second "versus lefty", which 2008 dropped, comes from `base`,
+    the 2007 record of the same player."""
     if new[0] == 0 and new[1] == 0:
         return bytes(PLAYER)
     old = bytearray(base or bytes(PLAYER))
@@ -327,7 +337,7 @@ def revert_player(new, fields, base=None):
         if name == "BirthYear" and value:
             value -= 1
         set_bits(old, bit, count, value)
-    set_bits(old, *VOICE, get_bits(new, *VOICE))
+    set_bits(old, *VOICE, voice_2007(get_bits(new, *VOICE)))
     set_bits(old, *FACE, face_2007(get_bits(new, *FACE)))
     set_bits(old, *SKIN, skin_2007(get_bits(new, *SKIN)))
     return bytes(old)
@@ -386,6 +396,10 @@ def emit_cs(repo):
               "    public static readonly int[] Unmodeled =", "    ["]
     bits = unnamed_2007(load_fields(repo))
     lines += ["      " + ", ".join(f"0x{b:03X}" for b in bits[i:i + 12]) + "," for i in range(0, len(bits), 12)]
+    lines += ["    ];", "",
+              "    /// <summary>2007 voice id runs (first, last, offset to 2008's id); other 2007 ids have no 2008 voice.</summary>",
+              "    public static readonly (int First, int Last, int Offset)[] VoiceRuns =", "    ["]
+    lines += ["      " + " ".join(f"({a}, {b}, {d})," for a, b, d in VOICE_RUNS[i:i + 6]) for i in range(0, len(VOICE_RUNS), 6)]
     lines += ["    ];", "  }", "}"]
     print("\n".join(lines))
 
