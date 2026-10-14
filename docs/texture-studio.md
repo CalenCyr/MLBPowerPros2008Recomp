@@ -54,6 +54,33 @@ Muchas texturas del juego usan paleta (16 o 256 colores). No tienes que preocupa
 - Unas 300 texturas tienen la paleta en otro pack. El Studio las muestra **en gris**, pero se pueden exportar y reemplazar igual.
 - Si el juego pinta una misma textura con varias paletas, cada variante es un reemplazo distinto. **Aplicar a todas las paletas** (en la ficha) hace que tu imagen sirva para todas.
 
+## Escalar con IA (opcional, fuera del Studio)
+
+El Studio no escala imágenes: se exporta, se escala con otro programa y se vuelve a importar la carpeta. Todo lo de abajo es gratuito, funciona sin conexión en tu tarjeta gráfica y no viene con el juego (cada uno lo descarga si quiere).
+
+**Programas** (código abierto):
+
+| Herramienta | Para qué | Licencia | Descarga aprox. |
+|---|---|---|---|
+| Real-ESRGAN ncnn-vulkan | motor de escalado en línea de comandos; Vulkan, funciona en AMD, NVIDIA e Intel | MIT (Real-ESRGAN: BSD-3) | ~45 MB |
+| Upscayl | ventana sencilla sobre ese motor; admite modelos propios | AGPL-3.0 | ~150-200 MB |
+| chaiNNer | editor por nodos para lotes; en AMD usa el motor NCNN, no PyTorch (solo NVIDIA) | GPL-3.0 | ~150 MB + motor (~0,5 GB con NCNN) |
+
+**Modelos** (gratuitos, en OpenModelDB; revisa la licencia de cada uno antes de redistribuirlo):
+
+- **4x-AnimeSharp**: menús, logos, letras, estadios y personajes; respeta el estilo de dibujo. CC BY-NC-SA 4.0 (sin uso comercial). ~65 MB (.pth) o ~35 MB (NCNN).
+- **4x-UltraSharp** (misma licencia) o **RealESRGAN x4plus** (BSD): fotos reales, como las cartas de jugador.
+
+**Pasos con chaiNNer:** Load Images (la carpeta exportada, incluidas subcarpetas) → Upscale Image con Load Model → Save Image en otra carpeta, **con el mismo nombre de archivo**. Luego **Importar carpeta...** en el Studio. Con Upscayl: carpeta de entrada, modelo y escala ×4, comprobando que conserve los nombres.
+
+**Consejos:**
+
+- A ×4 casi todo cabe en el máximo de 4096 px.
+- Si ves halos en los bordes transparentes, escala el canal alfa aparte.
+- Las texturas que se repiten (césped, gradas, muros) pueden mostrar costuras: revísalas en el juego y, si se notan, déjalas en el original o a ×2.
+- No escales las que salen en gris (su paleta está en otro pack): se verían grises en el juego.
+- Hazlo por partes: un ×4 multiplica por 16 los píxeles, así que el juego entero en ×4 son varios GB, y la memoria de vídeo crece con lo que haya en pantalla.
+
 ## Capturar en juego
 
 Sirve para encontrar la textura de algo que ves en pantalla.
