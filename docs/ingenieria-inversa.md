@@ -346,7 +346,7 @@ Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicom
 | Fecha de nacimiento | año `0x414` / 11 (2008 = año de 2007 + 1), mes `0x420` / 4, día `0x424` / 5 |
 | Años en las mayores, AVG, RBI, HR | `0x42A` / 5, `0x42F` / 10, `0x440` / 10, `0x44A` / 10 |
 | ERA | `0x460` / 14 |
-| Voz | bit `0x492`, 14 bits (misma posición que 2007, numeración nueva) |
+| Voz | bit `0x492`, 14 bits (misma posición que 2007, numeración nueva; ver "Voces renumeradas") |
 | Repertorio | `0x4A0`-`0x4FF`: 12 lanzamientos de 5 bits de tipo + 3 de movimiento |
 
 **Cambios respecto a 2007:**
@@ -363,7 +363,18 @@ Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicom
 - **Nombres largos nuevos** (IDs especiales): Van Benschoten 3867, Pignatiello 3893, E. Patterson 3895, Saltalamacchia 3896, Sonnanstine 3897, Chamberlain 3899, S. Rodriguez 3900, Lillibridge 3901.
 - La tabla completa de unos 140 campos está en `kRosterFields` (`wiicompiled-mods.patch`) y en `PowerPros2008Fields.cs` (PowerUp+ parcheado). Los 123 bits que PowerUp no nombra están en `kRosterUnnamed`.
 
-Fuentes: `docs/roster-2008.md`, `tools/roster/powerup_to_2008.py`, `wiicompiled-mods.patch`, `wiicompiled-roster-flags.patch`.
+**Getters del registro en el código (desensamblado).** El juego lee cada campo con una función pequeña: `lwz rX, D(r3)` + extracción del campo + `blr`, una tras otra desde `0x8082B000` (`ovl_main.rel` + `0x2B5A80`) en el orden del registro. Es la lista de campos tal como la ve el juego, con posición, ancho y signo:
+- Coinciden con la tabla de arriba la forma de bateo y la de lanzamiento (9 bits), clutch `0x6F.5`/3, ánimo `0x70.1`/2, todas las habilidades de bateo de `0x70.3` a `0x73.0` (push hitter `0x71.0`, free swinger `0x71.7`…), las de defensa y las de lanzador hasta `0x80.7`, y el nacimiento.
+- **"Table setter" `0x70.0` sigue vivo en 2008:** getter `0x8082B068` (`srwi 31`), setter del modo Edit en `0x8085EF74` (limita a 0–1) y dos funciones de juego que lo leen junto a "rally hitter": `0x80985E4C` y `0x80A30C54`. Ningún jugador de 2008 lo tiene, pero funciona si se le da a uno.
+- Algunos campos que PowerUp trata como un solo bit son de **2 bits** para el juego. El otro bit viaja como "bit sin nombre", así que el conversor conserva el valor completo:
+  - `0x73.5`/2 (deslizarse de cabeza): solo aparecen 0 y 2; el bit que modela PowerUp es el correcto.
+  - `0x75.4`/2 con signo ("cannon arm" para PowerUp): +1 en 96 jugadores (Carpenter, Randy Johnson, Dye…) y −1 en 11 (Furcal, Rollins, Eckstein…). PowerUp solo ve el lado −1. Falta confirmar en pantalla qué significa cada signo.
+  - `0x77.0`/2 y `0x77.2`/2 con signo (corredor y defensor agresivos): solo 0 y +1.
+  - `0x78.4`/2 con signo: **habilidad nueva de 2008**, ningún jugador de 2007 la tiene. +1 en 11 (Figgins, Cora, Easley…), −1 en 16 (Giambi, Kendall, Dellucci…).
+
+**Voces renumeradas.** 2008 conserva el orden de las voces de 2007, pero inserta y quita algunas. Entre dos jugadores presentes en ambos juegos cuyos huecos miden lo mismo, las voces se corresponden una a una, salvo que un nombre conocido de 2008 lo contradiga. Así se ubican 810 de las 968 voces de PowerUp, en 206 tramos (`VOICE_RUNS`). Ocultando el 10 % de los jugadores de referencia, los 739 casos caen en su voz real. Ryan Braun y dos "Great" tienen su voz regrabada en otro sitio.
+
+Fuentes: `docs/roster-2008.md`, `tools/roster/powerup_to_2008.py`, `tools/roster/align_2007_2008.py --voices`, `wiicompiled-mods.patch`, `wiicompiled-roster-flags.patch`, `wiicompiled-roster-voices.patch`, desensamblado de `ovl_main.rel`.
 
 ## 7. Escenas, menús y preparación de un partido
 

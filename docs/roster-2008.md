@@ -44,7 +44,11 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
   - "push hitter" (0x71.0): Ichiro, Joe Mauer, Todd Helton, Michael Young, Mark Loretta;
   - "free swinger" (0x71.7): Alfonso Soriano, José Guillén, Iván Rodríguez, Torii Hunter, Garret Anderson;
   - "pull hitter" (0x77.7): Jason Giambi, Alex Rodríguez, Gary Sheffield, Andruw Jones, Carlos Peña.
-- "table setter" (0x70.0) no lo tiene ningún jugador de 2008; el conversor lo escribe en su sitio.
+- "table setter" (0x70.0) no lo tiene ningún jugador de 2008, pero el juego lo sigue usando: tiene su función de lectura, su función de escritura en el modo Edit y dos funciones de juego que lo consultan junto a "rally hitter" (detalle en `docs/ingenieria-inversa.md`, sección 6). El conversor lo escribe en su sitio y funciona si se le da a un jugador.
+
+**Comprobado en el código del juego.** El juego lee cada campo del registro con una función pequeña, todas seguidas y en el orden del registro. Sus posiciones y anchos coinciden con esta tabla en todos los campos movidos. Algunos que PowerUp modela como un solo bit son de 2 bits para el juego. El otro bit viaja como bit sin nombre, así que el valor completo se conserva:
+- "cannon arm" (0x75.4): el juego usa +1 (96 jugadores) y −1 (11). El casillero de PowerUp solo ve el −1. Falta confirmar en pantalla qué significa cada signo.
+- 0x78.4 (2 bits con signo): una habilidad nueva de 2008 que PowerUp no conoce. +1 en Figgins, Cora, Easley…; −1 en Giambi, Kendall, Dellucci…
 
 **Caras:** 2008 insertó caras nuevas, así que los números de 2007 se corren por tramos:
 
@@ -62,7 +66,12 @@ Con esta tabla coinciden 707 de los 729 jugadores comunes; sin ella, solo 26. Lo
 
 El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura como nacido en 1981, es decir, 26 años en el calendario de 2007), y por eso se le suma 1 para 2008.
 
-**Voces:** el campo está en el mismo lugar, pero 2008 renumeró parte de las voces: Erstad sigue con la 2051 y Accardo pasó de la 2056 a la 2057. Por eso un número de voz de 2007 no sirve en 2008.
+**Voces:** el campo está en el mismo lugar, pero 2008 renumeró parte de las voces: Erstad sigue con la 2051 y Accardo pasó de la 2056 a la 2057.
+- 2008 conserva el orden de 2007, pero inserta y quita voces.
+- `align_2007_2008.py --voices <Voice_Library.csv>` reconstruye la correspondencia: 810 de las 968 voces de PowerUp, en 206 tramos (`VOICE_RUNS`).
+- Método: entre dos jugadores presentes en ambos juegos cuyos huecos miden lo mismo, las voces van una a una, salvo que un nombre de 2008 lo contradiga.
+- Ocultando el 10 % de esos jugadores, los 739 casos caen en su voz real.
+- Las otras 158 voces son de jugadores que 2008 quitó o que no se pueden ubicar con seguridad: esos jugadores quedan sin voz (0).
 
 ## Usarlo
 
@@ -82,7 +91,7 @@ El año de nacimiento de PowerUp está calculado desde la edad (Crochet figura c
   - las entradas de un mismo jugador conservan los bits que PowerUp no modela.
 - Un `.dat` de 2007 (como `2025_MLB_Rosters.dat`) trae caras y voces con números de 2007.
   - Las caras y la piel/ojos se pasan a 2008 con las tablas de arriba.
-  - Las voces de 2007 se descartan; los jugadores que también están en 2008 mantienen la suya.
+  - Las voces de 2007 se pasan a 2008 con `VOICE_RUNS`; los jugadores que también están en 2008 mantienen la suya. Con el roster 2025 de PowerUp, los jugadores sin voz bajan de 1.280 de 1.281 a 199.
 - Si el `mod.toml` dice `roster_ids = "2008"` (lo escribe la exportación de PowerUp+), voz, cara y piel/ojos ya vienen en números de 2008 y se copian tal cual.
   - Las exportaciones anteriores a la corrección de PowerUp+ (ver abajo) no traen los bits que PowerUp no nombra. Para que sigan funcionando, sus jugadores nuevos reciben el valor que tiene la mayoría de los jugadores de 2008. Sin ellos (0x4E.1, 0x4E.2, 0x4F.0 y 0x92.0, que todo jugador de 2008 tiene en 1), la pantalla de alineación de Exhibition mostraba barras vacías y todos como "P". Con una exportación nueva el resultado es el mismo con o sin este relleno.
 - **Jugadores nativos o modificados:** launcher → MODS → HERRAMIENTAS → **JUGADORES DEL ROSTER** (`[mods] native_roster` en `Config.toml`).
@@ -140,5 +149,6 @@ La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicomp
 
 ## Pendiente
 
-- Elegir voces con la tabla real de voces de 2008: nombres de los clips, que hoy salen del roster.
+- PowerUp+ podría mostrar en su editor el nombre real de la voz de un jugador de 2008 (hoy enseña la lista de 2007 con el número de 2008) y elegir voces entre las 810 ubicadas, no solo entre las del roster.
+- Confirmar en pantalla el significado de +1 y −1 en 0x75.4 y dar nombre a la habilidad nueva 0x78.4.
 - Una lista de caras de 2008 para el editor de PowerUp+.
