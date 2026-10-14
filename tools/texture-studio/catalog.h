@@ -41,8 +41,7 @@ private:
     std::unordered_map<std::string, int> byName_;
     std::unordered_map<std::string, int> byTexture_;  // name without palette -> first texture with those pixels
     std::mutex packMutex_;
-    uint32_t cachedEntry_ = UINT32_MAX;
-    std::vector<uint8_t> cachedPack_;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> packs_;  // most recent first, a few packs
     const std::vector<uint8_t>& Pack(uint32_t entry);
 };
 

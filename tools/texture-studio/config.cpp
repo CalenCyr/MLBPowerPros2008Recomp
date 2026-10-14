@@ -39,9 +39,38 @@ size_t KeyLine(const std::vector<std::string>& lines, std::pair<size_t, size_t> 
     }
     return lines.size();
 }
-std::string Unquote(std::string v) {
-    if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front()) return v.substr(1, v.size() - 2);
-    return v;
+// The value after '=': a basic "string" (escapes resolved), a literal 'string', an [array] (kept raw for
+// ReadEnabledMods) or a bare value; a trailing # comment outside quotes is dropped.
+std::string Value(std::string_view v) {
+    const std::string t = Trim(v);
+    if (t.empty()) return t;
+    if (t.front() == '"') {
+        std::string out;
+        for (size_t i = 1; i < t.size() && t[i] != '"'; ++i) {
+            if (t[i] == '\\' && i + 1 < t.size()) {
+                const char e = t[++i];
+                out += e == 'n' ? '\n' : e == 't' ? '\t' : e;
+            } else {
+                out += t[i];
+            }
+        }
+        return out;
+    }
+    if (t.front() == '\'') return t.substr(1, t.find('\'', 1) == std::string::npos ? std::string::npos : t.find('\'', 1) - 1);
+    size_t end = t.size();
+    char quote = 0;
+    for (size_t i = 0; i < t.size(); ++i) {  // first # outside quotes
+        if (quote) {
+            if (t[i] == '\\' && quote == '"') ++i;
+            else if (t[i] == quote) quote = 0;
+        } else if (t[i] == '"' || t[i] == '\'') {
+            quote = t[i];
+        } else if (t[i] == '#') {
+            end = i;
+            break;
+        }
+    }
+    return Trim(std::string_view(t).substr(0, end));
 }
 } // namespace
 
@@ -49,9 +78,7 @@ std::optional<std::string> ReadSetting(const std::filesystem::path& config, std:
     const auto lines = Lines(config);
     const size_t i = KeyLine(lines, Section(lines, section), key);
     if (i == lines.size()) return std::nullopt;
-    std::string value = Trim(std::string_view(lines[i]).substr(lines[i].find('=') + 1));
-    if (const size_t hash = value.find(" #"); hash != std::string::npos) value = Trim(value.substr(0, hash));
-    return Unquote(value);
+    return Value(std::string_view(lines[i]).substr(lines[i].find('=') + 1));
 }
 
 std::vector<std::string> ReadEnabledMods(const std::filesystem::path& config) {
@@ -95,9 +122,23 @@ bool SetModEnabled(const std::filesystem::path& config, const std::string& id, b
     const size_t i = KeyLine(lines, range, "enabled");
     if (i == lines.size()) lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(range.second), "enabled = " + value);
     else lines[i] = "enabled = " + value;
-    std::ofstream out(config, std::ios::binary | std::ios::trunc);
-    for (const auto& line : lines) out << line << "\r\n";
-    return static_cast<bool>(out);
+    // Written to a temporary file and renamed, so a failure never leaves the game's config half-written.
+    auto temp = config;
+    temp += ".tmp";
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        for (const auto& line : lines) out << line << "\r\n";
+        if (!out) return false;
+    }
+    std::error_code ec;
+    std::filesystem::rename(temp, config, ec);
+    if (ec) {
+        ec.clear();
+        std::filesystem::remove(config, ec);
+        std::filesystem::rename(temp, config, ec);
+    }
+    if (ec) std::filesystem::remove(temp, ec);
+    return !ec;
 }
 
 } // namespace tstudio

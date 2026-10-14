@@ -235,7 +235,8 @@ void SyntheticCatalog(const std::filesystem::path& temp, Catalog& c) {
         put32(0x208 + 8 * i, i + 1); put32(0x20C + 8 * i, i);
     }
     for (int i = 0; i < 3; ++i) d.insert(d.end(), pack.begin(), pack.end()), d.resize(0x800 + 0x800 * (i + 1), 0);
-    d[0x800 + 2 * 0x800 + 0x100] = 0x55;  // env_mainmenu: different pixels for the C8 texture
+    d[0x800 + 2 * 0x800 + 0x100] = 0x55;  // env_mainmenu: different pixels for the C8 texture...
+    for (int i = 0; i < 4; ++i) d[0x800 + 2 * 0x800 + 0x6C + i] = 0;  // ...and no palette (exports in grey)
     const auto file = temp / "catalog.bin";
     std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(d.data()), d.size());
     std::string error;
@@ -278,8 +279,13 @@ void TestCatalog(const std::filesystem::path& temp) {
 }
 void TestConfigAndMods(const std::filesystem::path& temp) {
     const auto config = temp / "Config.toml";
-    std::ofstream(config) << "[paths]\ndvd_root = 'D:\Juegos\MLB\Data'\n\n[video]\nshow_fps = true\n";
-    CHECK(ReadSetting(config, "paths", "dvd_root") == std::optional<std::string>("D:\Juegos\MLB\Data"));
+    std::ofstream(config) << R"([paths]
+dvd_root = 'D:\Juegos\MLB\Data'
+
+[video]
+show_fps = true
+)";
+    CHECK(ReadSetting(config, "paths", "dvd_root") == std::optional<std::string>(R"(D:\Juegos\MLB\Data)"));
     CHECK(ReadEnabledMods(config).empty());
     CHECK(SetModEnabled(config, "HD Menús", true));
     CHECK(SetModEnabled(config, "Otro", true));
@@ -445,6 +451,56 @@ void TestReviewFixes(const std::filesystem::path& temp) {
     Progress exported;
     CHECK(Export(c, {0, 1, 2}, temp / "rev-export", nullptr, &exported) == 3 && exported.done == 3 && exported.total == 3);
 }
+// Polish before calling the tool finished.
+void TestPolish(const std::filesystem::path& temp) {
+    std::string error;
+    for (const char* bad : {"COM7", "lpt9", "con.txt", "Nul.png", "AUX.mod"}) CHECK(!ValidModName(bad, &error));
+    CHECK(ValidModName("Console", &error) && ValidModName("COM10", &error));
+
+    // Config.toml values: basic strings with escapes and " #" inside quotes, trailing comments.
+    const auto config = temp / "Polish.toml";
+    std::ofstream(config, std::ios::binary) << R"([paths]
+dvd_root = "D:\\Juegos #1\\Data" # comentario
+other = 'C:\Lit #2' # otro
+[mods]
+enabled = ["A \"B\"", 'C']
+)";
+    CHECK(ReadSetting(config, "paths", "dvd_root") == std::optional<std::string>(R"(D:\Juegos #1\Data)"));
+    CHECK(ReadSetting(config, "paths", "other") == std::optional<std::string>(R"(C:\Lit #2)"));
+    CHECK((ReadEnabledMods(config) == std::vector<std::string>{"A \"B\"", "C"}));
+    CHECK(SetModEnabled(config, "D", true));
+    CHECK((ReadEnabledMods(config) == std::vector<std::string>{"A \"B\"", "C", "D"}));
+    CHECK(!std::filesystem::exists(PathFromUtf8(Utf8(config) + ".tmp")));
+
+    // Category folders are cleaned the same way for exports and mods.
+    CatalogTexture odd{"tex1_8x8_00000000000000aa_5", {}, "Me:nús", "a/b"};
+    const auto rel = CategoryPath(odd).generic_u8string();
+    CHECK(std::string(rel.begin(), rel.end()) == "Me_nús/a_b");
+
+    // Thumbnails of big replacements are scaled down (averaging), small ones stay as they are.
+    Image big{512, 256, std::vector<uint8_t>(512 * 256 * 4, 0)};
+    for (size_t i = 0; i < big.rgba.size(); i += 8) big.rgba[i] = 200;  // every other pixel red 200
+    const Image small = Downscale(big, 256);
+    CHECK(small.width == 256 && small.height == 128 && small.rgba[0] == 100);
+    CHECK(Downscale(small, 256).width == 256);
+
+    // Export says how many textures come out grey (palette in another pack).
+    Catalog c;
+    SyntheticCatalog(temp, c);
+    size_t grey = 0;
+    CHECK(Export(c, {0, 1, 2}, temp / "grey-export", nullptr, nullptr, &grey) == 3 && grey == 1);
+
+    // Duplicates in two subfolders: the message names the file that was used.
+    const auto in = temp / "dups";
+    std::filesystem::create_directories(in / "a");
+    std::filesystem::create_directories(in / "b");
+    const std::string name = c.Textures()[1].name;
+    for (const char* sub : {"a", "b"}) std::ofstream(in / sub / PathFromUtf8(name + ".dds"), std::ios::binary) << "x";
+    const auto report = ImportFolder(c, in, temp / "mods" / "Dups");
+    bool named = false;
+    for (const auto& r : report) named |= r.message.find("Repetido") != std::string::npos && r.message.find(".dds") != std::string::npos;
+    CHECK(named);
+}
 } // namespace
 
 int RunSelftest() {
@@ -461,6 +517,7 @@ int RunSelftest() {
     TestTransfer(temp);
     TestCapture(temp);
     TestReviewFixes(temp);
+    TestPolish(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }

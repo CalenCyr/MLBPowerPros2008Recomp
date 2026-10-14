@@ -11,6 +11,8 @@ struct ModInfo { std::string id; std::filesystem::path root; bool enabled = fals
 std::optional<std::string> ValidModName(std::string_view name, std::string* error);   // trimmed name or error
 std::vector<ModInfo> ListMods(const std::filesystem::path& modsDir, const std::vector<std::string>& enabled);
 bool CreateMod(const std::filesystem::path& modsDir, const std::string& name, std::string* error);
+// <group>/<subgroup> as folder names (same cleaning for exports and mods).
+std::filesystem::path CategoryPath(const CatalogTexture& t);
 std::filesystem::path ReplacementPath(const std::filesystem::path& modRoot, const CatalogTexture& t, std::string_view name);
 std::unordered_map<std::string, std::filesystem::path> FindReplacements(const std::filesystem::path& modRoot);  // stem -> file
 bool WriteZip(const std::filesystem::path& modRoot, const std::filesystem::path& zip, std::string* error);

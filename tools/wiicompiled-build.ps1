@@ -58,6 +58,11 @@ if ($text -match '(?m)^dvd_root\s*=') {
 }
 [IO.File]::WriteAllText($config, $text)
 
+# Texture Studio next to the game, so the launcher's EDITOR DE TEXTURAS works in this build too.
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\texture-studio\build.ps1') | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Warning 'Texture Studio build failed (tools\texture-studio\build.ps1)' }
+else { Copy-Item (Join-Path $root 'local\build\texture-studio\TextureStudio.exe') $build -Force }
+
 if ($RunSeconds -gt 0) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $root "local\analysis\wiicompiled-run-$stamp"

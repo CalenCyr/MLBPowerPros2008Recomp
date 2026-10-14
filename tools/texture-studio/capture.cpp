@@ -71,6 +71,7 @@ std::pair<int, std::vector<std::filesystem::path>> Capture::Collect(const std::f
         if (ec) {
             ec.clear();
             std::filesystem::copy_file(f, target, ec);
+            if (ec) continue;  // left in the dump folder; not part of this session
             std::filesystem::remove(f, ec);
         }
         moved.push_back(target);

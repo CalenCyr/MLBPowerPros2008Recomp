@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -61,6 +62,26 @@ bool SavePng(const std::filesystem::path& file, const Image& image, std::string*
     if (!ok && error) *error = std::string("No se puede guardar el PNG: ") + SDL_GetError();
     if (s) SDL_DestroySurface(s);
     return ok;
+}
+
+Image Downscale(const Image& image, uint32_t maxSide) {
+    const uint32_t longer = std::max(image.width, image.height);
+    if (longer <= maxSide || maxSide == 0) return image;
+    const uint32_t k = (longer + maxSide - 1) / maxSide;  // whole-pixel box filter
+    Image out{std::max(1u, image.width / k), std::max(1u, image.height / k), {}};
+    out.rgba.resize(static_cast<size_t>(out.width) * out.height * 4);
+    for (uint32_t y = 0; y < out.height; ++y) {
+        for (uint32_t x = 0; x < out.width; ++x) {
+            uint32_t sum[4] = {};
+            for (uint32_t dy = 0; dy < k; ++dy)
+                for (uint32_t dx = 0; dx < k; ++dx) {
+                    const uint8_t* p = &image.rgba[(static_cast<size_t>(y * k + dy) * image.width + x * k + dx) * 4];
+                    for (int c = 0; c < 4; ++c) sum[c] += p[c];
+                }
+            for (int c = 0; c < 4; ++c) out.rgba[(static_cast<size_t>(y) * out.width + x) * 4 + c] = static_cast<uint8_t>(sum[c] / (k * k));
+        }
+    }
+    return out;
 }
 
 SizeCheck CheckReplacementSize(uint32_t ow, uint32_t oh, uint32_t w, uint32_t h) {

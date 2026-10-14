@@ -22,6 +22,7 @@ ImportResult ImportOne(Catalog& c, int texture, const std::filesystem::path& ima
 std::vector<ImportResult> ImportFolder(Catalog& c, const std::filesystem::path& folder, const std::filesystem::path& modRoot,
                                        Progress* progress = nullptr);
 // Original images as PNG under <out>/<group>/<subgroup>/<name>.png. Returns how many were written.
+// grey: how many came out grey because their palette lives in another pack.
 size_t Export(Catalog& c, const std::vector<int>& textures, const std::filesystem::path& out, std::vector<std::string>* problems,
-              Progress* progress = nullptr);
+              Progress* progress = nullptr, size_t* grey = nullptr);
 } // namespace tstudio

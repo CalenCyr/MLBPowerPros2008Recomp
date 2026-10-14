@@ -37,23 +37,36 @@ inline bool Pill(const char* label, ImU32 top, ImU32 bottom, bool small = false,
     return clicked;
 }
 
-// Panel = child window with the calm colours and a header strip.
+// Panel = child window with the calm colours and a header strip. With a header, the content scrolls in
+// its own region below it, so rows never slide under the header.
+inline std::vector<bool>& PanelStack() {
+    static std::vector<bool> stack;
+    return stack;
+}
 inline bool BeginPanel(const char* id, const char* header, ImVec2 size, ImGuiWindowFlags flags = 0) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(kPanel));
     ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(kPanelBorder));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
-    const bool open = ImGui::BeginChild(id, size, ImGuiChildFlags_Borders, flags);
-    if (header) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const ImVec2 p = ImGui::GetWindowPos();
-        const float h = ImGui::GetFontSize() + 12;
-        dl->AddRectFilled(p, ImVec2(p.x + ImGui::GetWindowWidth(), p.y + h), kPanelHeader, 12.0f, ImDrawFlags_RoundCornersTop);
-        dl->AddText(ImVec2(p.x + 12, p.y + 6), kHeaderText, header);
-        ImGui::SetCursorPosY(h + 6);
+    if (!header) {
+        PanelStack().push_back(false);
+        return ImGui::BeginChild(id, size, ImGuiChildFlags_Borders, flags);
     }
+    const bool open = ImGui::BeginChild(id, size, ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetWindowPos();
+    const float h = ImGui::GetFontSize() + 12;
+    dl->AddRectFilled(p, ImVec2(p.x + ImGui::GetWindowWidth(), p.y + h), kPanelHeader, 12.0f, ImDrawFlags_RoundCornersTop);
+    dl->AddText(ImVec2(p.x + 12, p.y + 6), kHeaderText, header);
+    ImGui::SetCursorPosY(h + 6);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##body", ImVec2(0, 0), ImGuiChildFlags_None, flags);
+    ImGui::PopStyleColor();
+    PanelStack().push_back(true);
     return open;
 }
 inline void EndPanel() {
+    if (PanelStack().back()) ImGui::EndChild();
+    PanelStack().pop_back();
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);

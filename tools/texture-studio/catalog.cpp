@@ -41,6 +41,7 @@ bool Catalog::Build(const std::filesystem::path& projectBin, std::atomic<float>*
     textures_.clear();
     byName_.clear();
     byTexture_.clear();
+    packs_.clear();
     for (uint32_t e = 0; e < entries_.size(); ++e) {
         if (progress) *progress = static_cast<float>(e) / static_cast<float>(entries_.size());
         if (!entries_[e].name.ends_with(".pack")) continue;
@@ -75,11 +76,14 @@ bool Catalog::Build(const std::filesystem::path& projectBin, std::atomic<float>*
 }
 
 const std::vector<uint8_t>& Catalog::Pack(uint32_t entry) {  // caller holds packMutex_
-    if (entry != cachedEntry_) {
-        cachedPack_ = ReadEntry(project_, entries_[entry]);
-        cachedEntry_ = entry;
+    const auto it = std::find_if(packs_.begin(), packs_.end(), [entry](const auto& p) { return p.first == entry; });
+    if (it != packs_.end()) {
+        std::rotate(packs_.begin(), it, it + 1);
+    } else {
+        if (packs_.size() >= 8) packs_.pop_back();
+        packs_.insert(packs_.begin(), {entry, ReadEntry(project_, entries_[entry])});
     }
-    return cachedPack_;
+    return packs_.front().second;
 }
 
 Image Catalog::Original(const CatalogTexture& t) {

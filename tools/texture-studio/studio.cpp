@@ -159,7 +159,9 @@ struct Thumbs {
     std::unordered_map<std::string, Entry> map;
     std::list<std::string> order;
     int budget = 0;
-    SDL_Texture* Get(SDL_Renderer* r, const std::string& key, const std::function<Image()>& load, int* w, int* h) {
+    // maxSide: thumbnails are scaled down to it (0: full size, for the zoom view); *w/*h are the source size.
+    SDL_Texture* Get(SDL_Renderer* r, const std::string& key, const std::function<Image()>& load, int* w, int* h,
+                     uint32_t maxSide = 256) {
         if (auto it = map.find(key); it != map.end()) {
             order.splice(order.begin(), order, it->second.lru);
             *w = it->second.w;
@@ -168,22 +170,23 @@ struct Thumbs {
         }
         if (budget <= 0) return nullptr;
         --budget;
-        const Image img = load();
-        if (img.Empty()) return nullptr;
+        const Image source = load();
+        if (source.Empty()) return nullptr;
+        const Image img = maxSide ? Downscale(source, maxSide) : source;
         SDL_Texture* tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, static_cast<int>(img.width),
                                              static_cast<int>(img.height));
         if (!tex) return nullptr;
         SDL_UpdateTexture(tex, nullptr, img.rgba.data(), static_cast<int>(img.width * 4));
         SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
         order.push_front(key);
-        map[key] = {tex, static_cast<int>(img.width), static_cast<int>(img.height), order.begin()};
+        map[key] = {tex, static_cast<int>(source.width), static_cast<int>(source.height), order.begin()};
         while (map.size() > 600) {
             SDL_DestroyTexture(map[order.back()].tex);
             map.erase(order.back());
             order.pop_back();
         }
-        *w = static_cast<int>(img.width);
-        *h = static_cast<int>(img.height);
+        *w = static_cast<int>(source.width);
+        *h = static_cast<int>(source.height);
         return tex;
     }
     void Clear() {
@@ -551,13 +554,13 @@ void DrawDetail(App& a, SDL_Renderer* r, ImVec2 size) {
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const ImVec2 left(o.x + 8, o.y + 8), right(o.x + 8 + box + 46, o.y + 8);
     ImGui::SetCursorScreenPos(left);
-    if (ImGui::InvisibleButton("##orig", ImVec2(box, box))) { a.zoomReplacement = false; a.openZoom = true; }
+    if (ImGui::InvisibleButton("##orig", ImVec2(box, box))) { a.zoomReplacement = false; a.openZoom = true; a.thumbs.Forget("zoom"); }
     DrawThumb(a, r, dl, a.selected, left, box, false);
     dl->AddRect(left, ImVec2(left.x + box, left.y + box), IM_COL32_WHITE, 8, 0, 2);
     dl->AddTriangleFilled(ImVec2(left.x + box + 12, left.y + box / 2 - 12), ImVec2(left.x + box + 34, left.y + box / 2),
                           ImVec2(left.x + box + 12, left.y + box / 2 + 12), ui::kYellow);
     ImGui::SetCursorScreenPos(right);
-    if (ImGui::InvisibleButton("##repl", ImVec2(box, box)) && replaced) { a.zoomReplacement = true; a.openZoom = true; }
+    if (ImGui::InvisibleButton("##repl", ImVec2(box, box)) && replaced) { a.zoomReplacement = true; a.openZoom = true; a.thumbs.Forget("zoom"); }
     DrawThumb(a, r, dl, a.selected, right, box, true);
     if (!replaced) dl->AddText(ImVec2(right.x + 30, right.y + box / 2 - 10), ui::kMuted, "Sin reemplazo");
     dl->AddRect(right, ImVec2(right.x + box, right.y + box), IM_COL32_WHITE, 8, 0, 2);
@@ -700,20 +703,24 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
     case Pending::ImportOne: {
         const auto r = ImportOne(a.catalog, a.selected, path, ModRoot(a), a.allPalettes);
         a.thumbs.Forget("r:" + a.catalog.Textures()[a.selected].name);
+        a.thumbs.Forget("zoom");
         a.replacements = FindReplacements(ModRoot(a));
         Toast(a, r.ok ? r.message : r.file + ": " + r.message, !r.ok);
         break;
     }
     case Pending::ExportCategory: {
-        auto result = std::make_shared<std::pair<size_t, std::vector<std::string>>>();
+        struct Result { size_t n = 0, grey = 0; std::vector<std::string> problems; };
+        auto result = std::make_shared<Result>();
         StartJob(
             a, "Exportando texturas...",
-            [&a, path, result, textures = a.visible](Progress& p) { result->first = Export(a.catalog, textures, path, &result->second, &p); },
+            [&a, path, result, textures = a.visible](Progress& p) {
+                result->n = Export(a.catalog, textures, path, &result->problems, &p, &result->grey);
+            },
             [&a, path, result] {
-                const auto& [n, problems] = *result;
-                Toast(a, std::to_string(n) + " texturas exportadas en " + Utf8(path) +
-                             (problems.empty() ? "" : " (" + std::to_string(problems.size()) + " no se pudieron exportar)"),
-                      !problems.empty() && n == 0);
+                std::string text = std::to_string(result->n) + " texturas exportadas en " + Utf8(path);
+                if (result->grey) text += " · " + std::to_string(result->grey) + " en gris (su paleta está en otro pack)";
+                if (!result->problems.empty()) text += " · " + std::to_string(result->problems.size()) + " no se pudieron exportar";
+                Toast(a, text, !result->problems.empty() && result->n == 0);
             });
         break;
     }
@@ -831,12 +838,14 @@ void DrawPopups(App& a, SDL_Renderer* r) {
             const CatalogTexture& t = a.catalog.Textures()[a.selected];
             int w = 0, h = 0;
             a.thumbs.budget = std::max(a.thumbs.budget, 1);
-            SDL_Texture* tex = a.zoomReplacement
-                                   ? a.thumbs.Get(r, "r:" + t.name, [&] {
-                                         const auto files = Replacements(a, t);
-                                         return files.empty() ? Image{} : LoadImage(files.front(), nullptr).value_or(Image{});
-                                     }, &w, &h)
-                                   : a.thumbs.Get(r, "o:" + t.name, [&] { return a.catalog.Original(t); }, &w, &h);
+            SDL_Texture* tex = a.thumbs.Get(
+                r, "zoom",
+                [&] {
+                    if (!a.zoomReplacement) return a.catalog.Original(t);
+                    const auto files = Replacements(a, t);
+                    return files.empty() ? Image{} : LoadImage(files.front(), nullptr).value_or(Image{});
+                },
+                &w, &h, 0);
             if (tex) {
                 SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
                 const auto [i0, i1] = ui::Fit(ImVec2(p.x + 16, p.y + 16), ImVec2(p.x + s.x - 16, p.y + s.y - 16), static_cast<float>(w),
@@ -912,6 +921,7 @@ int main(int, char**) {
     if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
     SDL_Window* window = SDL_CreateWindow("Power Pros Wii 2008 Texture Studio", 1400, 860,
                                           SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_SetWindowMinimumSize(window, 1100, 700);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     SDL_SetRenderVSync(renderer, 1);
     ImGui::CreateContext();

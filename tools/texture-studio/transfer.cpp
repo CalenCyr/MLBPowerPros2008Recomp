@@ -145,10 +145,12 @@ std::vector<ImportResult> ImportFolder(Catalog& c, const std::filesystem::path& 
         }
         auto [pos, inserted] = byName.emplace(stem, it->path());
         if (inserted) continue;
-        const bool newIsPng = ext == ".png";
-        const auto loser = newIsPng ? pos->second : it->path();
-        if (newIsPng) pos->second = it->path();
-        out.push_back({Utf8(loser.filename()), stem, false, "Repetido: se usó el .png."});
+        // Same name twice: a .png beats a .dds, otherwise the first one found stays.
+        const bool replace = ext == ".png" && Lower(Utf8(pos->second.extension())) != ".png";
+        const auto loser = replace ? pos->second : it->path();
+        if (replace) pos->second = it->path();
+        out.push_back({Utf8(loser.lexically_relative(folder)), stem, false,
+                       "Repetido: se usó " + Utf8(pos->second.lexically_relative(folder)) + "."});
     }
     if (progress) progress->total = byName.size();
     Found found = FindReplacements(modRoot);  // scanned once for the whole folder
@@ -170,7 +172,7 @@ std::vector<ImportResult> ImportFolder(Catalog& c, const std::filesystem::path& 
 }
 
 size_t Export(Catalog& c, const std::vector<int>& textures, const std::filesystem::path& out, std::vector<std::string>* problems,
-              Progress* progress) {
+              Progress* progress, size_t* grey) {
     if (progress) progress->total = textures.size();
     size_t written = 0;
     for (int i : textures) {
@@ -180,8 +182,11 @@ size_t Export(Catalog& c, const std::vector<int>& textures, const std::filesyste
         if (img.Empty()) {
             if (problems) problems->push_back(t.name + ": formato no soportado para exportar");
         } else {
-            const auto file = out / PathFromUtf8(t.group) / PathFromUtf8(t.subgroup) / PathFromUtf8(t.name + ".png");
-            if (SavePng(file, img, &error)) ++written;
+            const auto file = out / CategoryPath(t) / PathFromUtf8(t.name + ".png");
+            if (SavePng(file, img, &error)) {
+                ++written;
+                if (grey && t.key.hasPalette && t.key.paletteWildcard) ++*grey;
+            }
             else if (problems) problems->push_back(t.name + ": " + error);
         }
         if (progress) ++progress->done;

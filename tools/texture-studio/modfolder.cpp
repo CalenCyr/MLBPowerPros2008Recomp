@@ -57,10 +57,11 @@ std::optional<std::string> ValidModName(std::string_view raw, std::string* error
         if (static_cast<unsigned char>(c) < 32 || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos)
             return fail("El nombre no puede llevar < > : \" / \\ | ? *");
     if (name.back() == '.') return fail("El nombre no puede terminar en punto.");
-    std::string upper = name;
+    std::string upper = Trim(name.substr(0, name.find('.')));
     for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    for (const char* reserved : {"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "LPT1", "LPT2", "LPT3"})
-        if (upper == reserved) return fail("Windows no permite ese nombre de carpeta.");
+    const bool numbered = upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '1' && upper[3] <= '9';
+    if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" || numbered)
+        return fail("Windows no permite ese nombre de carpeta.");
     return name;
 }
 
@@ -101,9 +102,10 @@ bool CreateMod(const std::filesystem::path& modsDir, const std::string& rawName,
     return true;
 }
 
+std::filesystem::path CategoryPath(const CatalogTexture& t) { return PathFromUtf8(Safe(t.group)) / PathFromUtf8(Safe(t.subgroup)); }
+
 std::filesystem::path ReplacementPath(const std::filesystem::path& modRoot, const CatalogTexture& t, std::string_view name) {
-    return modRoot / "textures" / PathFromUtf8(Safe(t.group)) / PathFromUtf8(Safe(t.subgroup)) /
-           PathFromUtf8(std::string(name) + ".png");
+    return modRoot / "textures" / CategoryPath(t) / PathFromUtf8(std::string(name) + ".png");
 }
 
 std::unordered_map<std::string, std::filesystem::path> FindReplacements(const std::filesystem::path& modRoot) {
