@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
+#include "catalog.h"
 #include "categories.h"
 #include "core.h"
 #include "gx.h"
@@ -213,6 +214,63 @@ void TestCategories() {
     CHECK(is("raro.pack", "Otros", "raro"));
     CHECK(GroupOrder().front() == "Menús");
 }
+// Fills `c` from a synthetic project.bin (Catalog holds a mutex: not movable, so filled in place):
+// stadium_nyy.pack and stadium_season.pack (same synthetic pack) and env_mainmenu.pack (C8 pixels changed).
+void SyntheticCatalog(const std::filesystem::path& temp, Catalog& c) {
+    const auto pack = SyntheticPack();
+    std::vector<uint8_t> d(0x800, 0);
+    auto put32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; ++i) d[o + i] = (v >> (24 - 8 * i)) & 0xFF; };
+    put32(0x14, 0x100); put32(0x28, 0x200); put32(0x2C, 0x300); put32(0x34, 0x800);
+    const char names[] = "\0/stadium_nyy.pack\0/stadium_season.pack\0/env_mainmenu.pack\0";
+    std::memcpy(&d[0x300], names, sizeof(names));
+    const uint32_t nameOff[] = {1, 19, 40};
+    for (uint32_t i = 0; i < 3; ++i) {
+        const size_t rec = 0x100 + 0x1C * (i + 1);
+        put32(rec + 4, nameOff[i]); put32(rec + 8, 1); put32(rec + 24, static_cast<uint32_t>(pack.size()));
+        put32(0x208 + 8 * i, i + 1); put32(0x20C + 8 * i, i);
+    }
+    for (int i = 0; i < 3; ++i) d.insert(d.end(), pack.begin(), pack.end()), d.resize(0x800 + 0x800 * (i + 1), 0);
+    d[0x800 + 2 * 0x800 + 0x100] = 0x55;  // env_mainmenu: different pixels for the C8 texture
+    const auto file = temp / "catalog.bin";
+    std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(d.data()), d.size());
+    std::string error;
+    std::atomic<float> progress{0};
+    CHECK(c.Build(file, &progress, &error));
+    CHECK(progress == 1.0f);
+}
+
+void TestCatalog(const std::filesystem::path& temp) {
+    Catalog c;
+    SyntheticCatalog(temp, c);
+    CHECK(c.Textures().size() == 3);   // C8 (nyy+season), C4 (all three), C8 (mainmenu)
+    if (c.Textures().size() != 3) return;
+    const int shared = c.Find(c.Textures()[0].name);
+    CHECK(shared == 0 && c.Textures()[0].locations.size() == 2 && c.Textures()[0].group == "Estadios");
+    const auto& c4 = c.Textures()[1];
+    CHECK(c4.key.format == 8 && c4.locations.size() == 3 && c4.key.hasPalette && !c4.key.paletteWildcard);
+    const Image img = c.Original(c4);
+    CHECK(img.width == 8 && img.height == 8);
+
+    // A capture: one exact match, one palette variant of the C4 texture, one game-only texture, one video frame.
+    const auto session = temp / "captures" / "1";
+    std::filesystem::create_directories(session);
+    ParsedName variant = c4.key;
+    variant.paletteHash ^= 1;
+    ParsedName only{16, 16, 5, 0x1234};
+    ParsedName video{512, 448, 1, 0x99};
+    const std::vector<std::filesystem::path> files{session / (c4.name + ".dds"), session / (ReplacementName(variant) + ".dds"),
+                                                   session / (ReplacementName(only) + ".dds"), session / (ReplacementName(video) + ".dds")};
+    c.AddCapture(1, files);
+    CHECK(c.Textures()[1].seenIn == std::vector<int>{1});
+    CHECK(c.Textures()[1].paletteVariants.size() == 1);
+    const int game = c.Find(ReplacementName(only));
+    CHECK(game >= 0 && c.Textures()[game].group == "Solo vistas en juego" && !c.Textures()[game].captureFile.empty());
+    CHECK(c.Find(ReplacementName(video)) == -1);
+    ParsedName any = c.Textures()[1].key;
+    any.paletteWildcard = true;
+    CHECK(c.FindTexture(any) == 1);
+    CHECK(IsVideoFrame(video) && !IsVideoFrame(only));
+}
 } // namespace
 
 int RunSelftest() {
@@ -224,6 +282,7 @@ int RunSelftest() {
     TestProjectAndNames(temp);
     TestImages(temp);
     TestCategories();
+    TestCatalog(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }

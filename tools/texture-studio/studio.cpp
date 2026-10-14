@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Power Pros Wii 2008 Texture Studio.
+#include "catalog.h"
 #include "gx.h"
 #include "names.h"
 #include "pack.h"
@@ -7,6 +8,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -26,6 +28,17 @@ int main(int argc, char** argv) {
             std::printf("%#x %u %u %u %#x %016llx\n", t.offset, t.width, t.height, t.format, t.paletteEntries ? t.paletteData : 0,
                         static_cast<unsigned long long>(tstudio::TextureHash(
                             std::span<const uint8_t>(d.data() + t.data, d.size() - t.data), t.width, t.height, t.format)));
+        return 0;
+    }
+    if (argc == 3 && std::strcmp(argv[1], "--catalog") == 0) {
+        tstudio::Catalog c;
+        std::string error;
+        const auto start = std::chrono::steady_clock::now();
+        if (!c.Build(argv[2], nullptr, &error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+        size_t wildcard = 0;
+        for (const auto& t : c.Textures()) wildcard += t.key.paletteWildcard;
+        std::printf("%zu textures, %zu with unknown palette, %.1f s\n", c.Textures().size(), wildcard,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
         return 0;
     }
     if (argc == 3 && std::strcmp(argv[1], "--list-entries") == 0) {
