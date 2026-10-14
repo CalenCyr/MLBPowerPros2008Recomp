@@ -1,0 +1,160 @@
+diff --git a/runtime/include/match_benchmark.h b/runtime/include/match_benchmark.h
+index b07d607..7753a8c 100644
+--- a/runtime/include/match_benchmark.h
++++ b/runtime/include/match_benchmark.h
+@@ -10,6 +10,7 @@ constexpr BootAction DecideBoot(uint32_t mode, uint32_t next, bool transition, u
+ }
+ bool Enabled();
+ uint32_t Scene();
++bool GameplayReady();
+ void OnGuestFrame(CpuContext* cpu);
+ void OnHostFrame();
+ }
+diff --git a/runtime/src/match_benchmark.cpp b/runtime/src/match_benchmark.cpp
+index 35917ad..e848c1c 100644
+--- a/runtime/src/match_benchmark.cpp
++++ b/runtime/src/match_benchmark.cpp
+@@ -10,10 +10,13 @@
+ extern "C" void func_80C8BAF0(CpuContext*);
+ extern "C" void func_80973828(CpuContext*);
+ extern "C" void func_807A8BE8(CpuContext*);
++extern "C" void func_80898674(CpuContext*);
+ #endif
+ namespace match_benchmark {
+ static std::atomic<uint32_t> currentScene{0};
++static std::atomic<bool> gameplayReady{false};
+ uint32_t Scene() { return currentScene.load(); }
++bool GameplayReady() { return gameplayReady.load(); }
+ void OnHostFrame() {
+ #if defined(WIICOMPILED_GAME_RL8E54)
+     if (!Enabled()) return;
+@@ -21,6 +24,21 @@ void OnHostFrame() {
+     if (!manager || !Memory::Contains(manager, 1100) || Memory::Read32(manager) != 0x80D4EB88u) return;
+     const uint32_t scene = Memory::Read32(manager + 1024);
+     currentScene.store(Memory::Read32(manager + 1032));
++    if (Scene() == 409) {
++        const uint32_t gameRoot = Memory::Read32(0x8103D048u);
++        if (gameRoot && Memory::Contains(gameRoot, 64) && Memory::Read32(gameRoot) == 0x80E5BF30u) {
++            const uint32_t match = Memory::Read32(gameRoot + 60);
++            if (match && Memory::Contains(match, 15040) && Memory::Read32(match) == 0x80E5E350u) {
++                const uint32_t phase = Memory::Read32(match + 14964);
++                static uint32_t lastPhase = ~0u;
++                if (phase != lastPhase) {
++                    std::fprintf(stderr, "[match-bench] gameplay phase=%u status=%u\n", phase, Memory::Read32(match + 80));
++                    lastPhase = phase;
++                }
++                if (phase >= 4 && phase <= 15 && Memory::Read32(match + 80) == 2) gameplayReady.store(true);
++            }
++        }
++    } else gameplayReady.store(false);
+     if (Scene() == 3 && scene && Memory::Contains(scene, 76) && (Memory::Read32(scene + 56) == 5 || Memory::Read32(scene + 56) == 6) && Memory::Read32(scene + 72) != 0)
+         Memory::Write32(scene + 72, 3);
+ #endif
+@@ -40,6 +58,16 @@ void OnGuestFrame(CpuContext* cpu) {
+     if (!manager || !Memory::Contains(manager, 1100) || Memory::Read32(manager) != 0x80D4EB88u) return;
+     const uint32_t mode = Memory::Read32(manager + 1032);
+     currentScene.store(mode);
++    if (mode == 409) {
++        const uint32_t intro = Memory::Read32(0x8103D0C8u);
++        if (intro && Memory::Contains(intro, 60) && Memory::Read32(intro) == 0x80E5EA70u && Memory::Read32(intro + 56) == 5) {
++            const CpuContext saved = *cpu;
++            cpu->gpr[3] = intro;
++            func_80898674(cpu); // Original skip: fade out and clean up the lineup/flyover.
++            *cpu = saved;
++            std::fprintf(stderr, "[match-bench] skipped match introduction\n");
++        }
++    }
+     const uint32_t next = Memory::Read32(manager + 1028);
+     const uint32_t scene = Memory::Read32(manager + 1024);
+     const uint32_t phase = scene && Memory::Contains(scene, 60) ? Memory::Read32(scene + 56) : 0;
+diff --git a/runtime/src/match_benchmark_overlay.inc b/runtime/src/match_benchmark_overlay.inc
+index ddea8de..1213519 100644
+--- a/runtime/src/match_benchmark_overlay.inc
++++ b/runtime/src/match_benchmark_overlay.inc
+@@ -103,6 +103,10 @@ void DrawMatchBenchmark() {
+     static BenchClock::time_point field{}, start{}, last{};
+     static unsigned stable = 0;
+     static bool recording = false, completed = false;
++    static bool valid = true;
++    static float recordedScale = 1;
++    static bool recordedAspect = false;
++    static uint32_t recordedEffects = 0, recordedInterpolation = 0;
+     static std::vector<double> intervals;
+     static std::ofstream csv;
+     static std::filesystem::path report;
+@@ -124,7 +128,7 @@ void DrawMatchBenchmark() {
+     aurora_get_gpu_timing(&gpu);
+     aurora_get_present_timing(&present);
+     const auto* stats = aurora_get_stats();
+-    const bool onField = match_benchmark::Scene() == 409 && stats->drawCallCount >= 100;
++    const bool onField = match_benchmark::GameplayReady();
+     if (field == BenchClock::time_point{}) {
+         stable = onField && aurora_get_queued_pipeline_count() == 0 ? stable + 1 : 0;
+         if (stable >= 60) field = now;
+@@ -138,12 +142,17 @@ void DrawMatchBenchmark() {
+         report = folder / ("match-" + std::to_string(id));
+         csv.open(report.string() + ".csv");
+         if (!csv) { message = "No se pudo crear el informe"; return; }
+-        csv << "elapsed_s,frame_ms,draws,scale,force_16_9,backend,shader_queue,gpu_render_ms,gpu_samples,cpu_encode_ms,efb_copies,efb_source_pixels,efb_snapshots,efb_readbacks,efb_readback_wait_ms,presents,process_cpu_pct,gpu_3d_pct,process_ram_mb,vram_mb,system_ram_used_gb\n";
++        csv << "utc_unix_ms,elapsed_s,frame_ms,draws,scale,force_16_9,backend,shader_queue,gpu_render_ms,gpu_samples,cpu_encode_ms,efb_copies,efb_source_pixels,efb_snapshots,efb_readbacks,efb_readback_wait_ms,presents,process_cpu_pct,gpu_3d_pct,process_ram_mb,vram_mb,system_ram_used_gb\n";
+         loadSum = {}; loadPeak = {}; loadCount = {};
+         start = last = now;
+         base = previous = waits;
+         gpuBase = gpuPrevious = gpu;
+         intervals.clear();
++        valid = true;
++        recordedScale = g_resolutionScale;
++        recordedAspect = g_forceAspect169;
++        recordedEffects = g_disabledPostProcessingPaths;
++        recordedInterpolation = aurora_get_frame_interpolation_fps();
+         recording = true;
+         message = "Midiendo";
+         std::fprintf(stderr, "[match-bench] recording %s scale=%.0f force169=%d\n", report.string().c_str(), g_resolutionScale, g_forceAspect169);
+@@ -160,6 +169,7 @@ void DrawMatchBenchmark() {
+         std::ofstream summary(report.string() + ".txt");
+         summary << "Yankees vs Colorado; CPU vs CPU; Coors Field; seeded start\n"
+                 << device << '\n'
++                << "valid=" << valid << " start_unix_ms=" << report.filename().string().substr(6) << '\n'
+                 << "scale=" << g_resolutionScale << " force_16_9=" << g_forceAspect169 << " backend=" << GraphicsApiDisplayName() << '\n'
+                 << "seconds=" << elapsed << " presented_frames=" << frames << " fps=" << (elapsed > 0 ? frames/elapsed : 0) << '\n'
+                 << "host_frame_p50_ms=" << percentile(.50) << " p95_ms=" << percentile(.95) << " p99_ms=" << percentile(.99) << '\n';
+@@ -182,11 +192,20 @@ void DrawMatchBenchmark() {
+         std::fprintf(stderr, "[match-bench] saved %s.txt\n", report.string().c_str());
+     };
+     if (ready && autoSeconds && !recording && !completed) begin();
++    if (recording && (recordedScale != g_resolutionScale || recordedAspect != g_forceAspect169 ||
++        recordedEffects != g_disabledPostProcessingPaths || recordedInterpolation != aurora_get_frame_interpolation_fps())) {
++        valid = false;
++        finish();
++        message = "Ajustes cambiados: repite la medicion";
++        field = now;
++        if (autoSeconds) std::_Exit(4);
++    }
+     if (recording) {
+         const double ms = std::chrono::duration<double, std::milli>(now - last).count();
+         intervals.push_back(ms);
+         const uint64_t samples = gpu.samples - gpuPrevious.samples;
+-        csv << std::chrono::duration<double>(now - start).count() << ',' << ms << ',' << stats->drawCallCount << ','
++        csv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ','
++            << std::chrono::duration<double>(now - start).count() << ',' << ms << ',' << stats->drawCallCount << ','
+             << g_resolutionScale << ',' << g_forceAspect169 << ',' << GraphicsApiDisplayName() << ',' << aurora_get_queued_pipeline_count() << ',';
+         if (samples) csv << double(gpu.totalNs - gpuPrevious.totalNs)/1e6/samples;
+         csv << ',' << samples << ',' << double(waits.encodeNs - previous.encodeNs)/1e6 << ','
+@@ -216,6 +235,17 @@ void DrawMatchBenchmark() {
+         std::fflush(stderr);
+         std::_Exit(3);
+     }
++    if (!match_benchmark::GameplayReady()) {
++        const auto* viewport = ImGui::GetMainViewport();
++        ImGui::SetNextWindowPos(viewport->Pos);
++        ImGui::SetNextWindowSize(viewport->Size);
++        ImGui::SetNextWindowBgAlpha(1.0f);
++        if (ImGui::Begin("Preparando benchmark", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings)) {
++            ImGui::SetCursorPos(ImVec2(viewport->Size.x * .35f, viewport->Size.y * .48f));
++            ImGui::TextUnformatted("Preparando Yankees - Colorado...");
++        }
++        ImGui::End();
++    }
+     ImGui::SetNextWindowPos(ImVec2(16, 40), ImGuiCond_FirstUseEver);
+     ImGui::SetNextWindowBgAlpha(.90f);
+     if (ImGui::Begin("Prueba GPU - Yankees / Colorado", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
