@@ -1,0 +1,171 @@
+diff --git a/runtime/src/hle/esp.cpp b/runtime/src/hle/esp.cpp
+index 1211ea6..9ed83c8 100644
+--- a/runtime/src/hle/esp.cpp
++++ b/runtime/src/hle/esp.cpp
+@@ -2,6 +2,7 @@
+ // ESP functions communicate with /dev/es to get title information.
+ // We stub these to return Mario Kart Wii's title ID directly.
+ 
++#include "game_profile.h"
+ #include "hle_stubs.h"
+ #include "memory.h"
+ #include "runtime_log.h"
+@@ -12,7 +13,7 @@
+ #include <cctype>
+ 
+ static constexpr uint32_t MKW_TITLE_ID_HI = 0x00010004;
+-static constexpr uint32_t MKW_TITLE_ID_LO = 0x524D4350; // "RMCP" fallback
++static constexpr uint32_t MKW_TITLE_ID_LO = GameProfile::kDiscGameCode; // fallback game code
+ 
+ static bool IsValidEspTitleCode(uint32_t code) {
+     for (int shift = 24; shift >= 0; shift -= 8) {
+diff --git a/runtime/src/hle/net/network_deferred.cpp b/runtime/src/hle/net/network_deferred.cpp
+index 8ed5e0e..be4b7c2 100644
+--- a/runtime/src/hle/net/network_deferred.cpp
++++ b/runtime/src/hle/net/network_deferred.cpp
+@@ -1,6 +1,7 @@
+ #include "network_internal.h"
+ 
+ #include "fiber_manager.h"
++#include "hle/os/os_internal.h"
+ #include "hle/net/network.h"
+ #include "ppc_runtime.h"
+ #include "runtime_log.h"
+@@ -626,11 +627,9 @@ static bool InitializeDeferredSyncRoute(DeferredNetworkRoute& route, uint32_t wa
+     // OSSleepThread uses the running OSThread, or the SDK default thread during
+     // early scheduler setup. Capture its identity before yielding so a late
+     // resolver result cannot wake a stale/reused stack queue after cancellation.
+-    constexpr uint32_t kOSRunningContextAddr = 0x800000E4u;
+-    constexpr uint32_t kDefaultThreadContextAddr = 0x80347498u;
+-    uint32_t expectedThread = Memory::Read32(kOSRunningContextAddr);
++    uint32_t expectedThread = Memory::Read32(0x800000E4u);  // OS running thread
+     if (expectedThread == 0) {
+-        expectedThread = kDefaultThreadContextAddr;
++        expectedThread = OsHleInternal::kDefaultThreadContextAddr;  // rebound per game (os_internal.h)
+     }
+     if (!Memory::Contains(expectedThread + 0x2C8u, 0x20u) ||
+         !Memory::Contains(waitQueue, 16u)) {
+diff --git a/runtime/src/hle/os/os_interrupt.cpp b/runtime/src/hle/os/os_interrupt.cpp
+index a7805ba..a151fd6 100644
+--- a/runtime/src/hle/os/os_interrupt.cpp
++++ b/runtime/src/hle/os/os_interrupt.cpp
+@@ -511,13 +511,19 @@ PPC_NATIVE_OVERRIDE(80193010, IPCReadReg_80193010, uint32_t, (uint32_t index), (
+ // ----------------------------------------------------------------------------
+ extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
+ {
++    // The SDK's IPCCltInit only initialises once (flag 32 bytes after the buffer lo); a second
++    // call must not advance the buffer again.
++    if (Memory::Read32(ctx->gpr[13] + -25588) != 0) {
++        return 0;
++    }
++    Memory::Write32(ctx->gpr[13] + -25588, 1);
+     RT_LOG(RT_TAG_OS) << "IPCCltInit_80193478 called: calling IPCInit for buffer setup" << std::endl;
+     
+-    // Sets 0x803867EC/F0/E8 (IPC buffer lo/hi + init flag) from __OSGetIPCBufferLo/Hi.
++    // Sets the IPC buffer lo/hi from __OSGetIPCBufferLo/Hi.
+     InvokeIndirectCpu(0x80192F7Cu, ctx);
+ 
+     // Advance the buffer lo pointer by 0x1000 (iosHeap size), matching real IPCCltInit.
+-    uint32_t bufferLo = Memory::Read32(ctx->gpr[13] + -25620); // 0x803867EC at r13-0x6414
++    uint32_t bufferLo = Memory::Read32(ctx->gpr[13] + -25620); // IPC buffer lo
+     uint32_t newBufLo = bufferLo + 0x1000; // Advance by 4KB for iosHeap
+     Memory::Write32(ctx->gpr[13] + -25620, newBufLo);
+     
+diff --git a/runtime/src/hle/storage/dvd.cpp b/runtime/src/hle/storage/dvd.cpp
+index 13dc225..8f4c9b4 100644
+--- a/runtime/src/hle/storage/dvd.cpp
++++ b/runtime/src/hle/storage/dvd.cpp
+@@ -2,6 +2,7 @@
+ #include "isa/big_endian.h"
+ #include "hle/dvd_contract.h"
+ #include "hle/runtime_parse_helpers.h"
++#include "game_profile.h"
+ #include "memory.h"
+ 
+ // Defined in hle/gx/gx_objects.cpp. DVD reads are DMA-class writes to guest
+@@ -44,7 +45,14 @@ static fs::path g_dvdRoot;
+ static std::once_flag g_dvdRootOnce;
+ 
+ static uint32_t CurrentDiscGameCode() {
+-    return RuntimeHle::CurrentGameCode(0x524D4350u); // RMCP
++    return RuntimeHle::CurrentGameCode(GameProfile::kDiscGameCode);
++}
++
++// Bytes 4-7 of the disc header (maker code, disc number, version) for the game being run.
++static void WriteDiscMakerId(uint32_t address) {
++    Memory::Write16(address + 0x04, static_cast<uint16_t>(GameProfile::kDiscMakerId >> 16));
++    Memory::Write8(address + 0x06, static_cast<uint8_t>(GameProfile::kDiscMakerId >> 8));
++    Memory::Write8(address + 0x07, static_cast<uint8_t>(GameProfile::kDiscMakerId));
+ }
+ 
+ // ============================================================================
+@@ -806,8 +814,7 @@ extern "C" void DVDInit_8015EA1C()
+     // Publish the current disc's game code in the low-memory header.
+     uint32_t diskHeader = 0x80000000;
+     Memory::Write32(diskHeader + 0x00, CurrentDiscGameCode());
+-    Memory::Write16(diskHeader + 0x04, 0x3031);     // '01' (Maker)
+-    Memory::Write8(diskHeader + 0x06, 0x01);        // Disk #1
++    WriteDiscMakerId(diskHeader);
+     // 4. Scan Files
+     const fs::path& rootPath = GetDvdRoot();
+     
+@@ -1046,8 +1053,7 @@ PPC_NATIVE_OVERRIDE(80165A30, DVDLowInquiry_80165A30, int32_t, (uint32_t b, uint
+ extern "C" int32_t DVDLowReadDiskID_80164AAC(uint32_t diskIdPtr, uint32_t callback) {
+     if (diskIdPtr) {
+         Memory::Write32(diskIdPtr + 0x00, CurrentDiscGameCode());
+-        Memory::Write16(diskIdPtr + 0x04, 0x3031);
+-        Memory::Write8 (diskIdPtr + 0x06, 0x01);
++        WriteDiscMakerId(diskIdPtr);
+     }
+     CompleteDvdCancelState();
+     return 1; // Success
+@@ -1076,7 +1082,7 @@ extern "C" int32_t DVDLowRead_80166330(uint32_t buffer, uint32_t length, uint32_
+             return finish(false);
+         }
+         Memory::Write32(buffer + 0x00, CurrentDiscGameCode());
+-        Memory::Write16(buffer + 0x04, 0x3031);     // 01
++        WriteDiscMakerId(buffer);
+         GxNotifyGuestRamDmaWrite(buffer, length);
+         return finish(true);
+     }
+diff --git a/runtime/src/hle/storage/nand_internal.h b/runtime/src/hle/storage/nand_internal.h
+index 9d2ea11..79f5082 100644
+--- a/runtime/src/hle/storage/nand_internal.h
++++ b/runtime/src/hle/storage/nand_internal.h
+@@ -45,7 +45,7 @@
+ // Title namespace for the active game; the disc code is resolved at runtime.
+ namespace {
+ constexpr uint32_t kNandTitleIdHi = GameProfile::kTitleIdHi;
+-constexpr uint32_t kNandTitleIdLo = 0x524D4350; // "RMCP" fallback
++constexpr uint32_t kNandTitleIdLo = GameProfile::kDiscGameCode; // fallback while low memory holds no game code
+ } // anonymous namespace
+ 
+ // ============================================================================
+diff --git a/runtime/src/hle/storage/riivolution.cpp b/runtime/src/hle/storage/riivolution.cpp
+index 7fddf83..1ae4bec 100644
+--- a/runtime/src/hle/storage/riivolution.cpp
++++ b/runtime/src/hle/storage/riivolution.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "hle/riivolution_contract.h"
+ #include "hle/runtime_parse_helpers.h"
++#include "game_profile.h"
+ #include "memory.h"
+ #include "nand_path.h"
+ #include "recomp_mod_loader.h"
+@@ -46,11 +47,11 @@ std::optional<std::string> RiivoReadFile(const fs::path& path) {
+     return buffer.str();
+ }
+ 
+-// Six-character game ID ("RMCP01") from guest low memory, with the same RMCP
+-// fallback the rest of the storage HLE uses for boots that have not written
+-// the disc header yet.
++// Six-character game ID ("RMCP01") from guest low memory, with the same fallback
++// (the game profile's disc code) the rest of the storage HLE uses for boots that
++// have not written the disc header yet.
+ std::string RiivoGameId() {
+-    const uint32_t code = RuntimeHle::CurrentGameCode(0x524D4350u); // "RMCP"
++    const uint32_t code = RuntimeHle::CurrentGameCode(GameProfile::kDiscGameCode);
+     std::string id(6, '\0');
+     id[0] = static_cast<char>((code >> 24) & 0xffu);
+     id[1] = static_cast<char>((code >> 16) & 0xffu);

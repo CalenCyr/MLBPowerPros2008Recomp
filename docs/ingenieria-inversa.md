@@ -150,7 +150,8 @@ Fuentes: `docs/wiicompiled-feasibility.md`, `config/wiicompiled/rl8e54-data.csv`
 | `OSWakeupThread` | `0x800A5068` |
 | `OSSleepTicks` | `0x800A526C` |
 
-- **Espera de la biblioteca de Miis (RFL):** `RFLWaitAsync` (`0x800876A0`) gira sobre `RFLiIsWorking` (`0x80087B94`), que lee el indicador `+0x1B34` del gestor (puntero en `0x8031B168`).
+- **Espera de la biblioteca de Miis (RFL):** `RFLWaitAsync` (`0x800876A0`) gira sobre `RFLiIsWorking` (`0x80087B94`), que lee el indicador `+0x1B34` del gestor (puntero en `0x8031B168`). Hasta el 14 de octubre de 2026 el HLE de `RFLiIsWorking` leía el puntero en la dirección de Mario Kart Wii (`0x80386298`, memoria libre en MLB); ahora usa la de MLB (parche `wiicompiled-mlb-disc-identity`).
+- **IPC:** `IPCCltInit` (`0x800CC534`) solo inicializa una vez: comprueba y pone a 1 la bandera `r13-26876` (`0x8031B764`), llama a `IPCInit` (`0x800CC038`) y reserva `0x1000` bytes desde el búfer bajo (`r13-26908`; el alto está en `r13-26904`). Desensamblado, `RL8E54`.
 - **Para portarlo:** el juego da por hecho que los temporizadores llegan a tiempo y que las interrupciones cortan cualquier cálculo. Con hilos cooperativos hay que ofrecer puntos de cambio (tras `GXCopyDisp` y al reactivar interrupciones) y recuperar los periodos perdidos.
 
 Fuentes: desensamblado de `0x80027A54`/`0x80027BF8`; `wiicompiled-preemption-point.patch`, `wiicompiled-periodic-sleep.patch`, `docs/wiicompiled-feasibility.md`.
@@ -539,6 +540,7 @@ Fuentes: `wiicompiled-mlb-pad-stick-range.patch`, `config/wiicompiled/rl8e54-dat
 ## 10. Partidas guardadas, NAND, SYSCONF y ES
 
 - **Título:** `00010000/524c3845` (título de disco). La partida es `title/00010000/524c3845/data/pm3usma.dat`.
+- **Cabecera del disco en memoria baja:** `0x80000000` = `RL8E`, `0x80000004` = `0x35340001` (editor «54», disco 0, versión 1). El runtime escribía el editor «01» y el disco 1 de Mario Kart Wii, y usaba «RMCP» como código de respaldo; desde el parche `wiicompiled-mlb-disc-identity` usa los de MLB.
 - MLB Life, Season y League escriben partida.
 - **NAND:** el juego usa las bibliotecas NAND/ISFS del SDK sobre IOS.
   - `NANDInit` `0x800D0640`, `libState` `0x8031B778`.

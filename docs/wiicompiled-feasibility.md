@@ -470,7 +470,7 @@ No está validado píxel a píxel contra Dolphin.
   - `tools/sample_host_thread.cpp` acepta `RANK`;
   - `tools/wiicompiled-build.ps1` ya no sobrescribe `Config.toml` en cada compilación, solo actualiza `dvd_root`.
 
-**Pendiente:** el `IPCCltInit` HLE usa `r13-26908`, que en MLB coincide con `IPCInit`. Quedan por auditar los demás HLE que usen offsets de r13 o r2 de MKW.
+**Pendiente:** el `IPCCltInit` HLE usa `r13-26908`, que en MLB coincide con `IPCInit`. Quedan por auditar los demás HLE que usen offsets de r13 o r2 de MKW. *(Resuelto el 14 de octubre: ver «Restos de Mario Kart Wii en el runtime».)*
 
 ## Launcher al arrancar (11 de octubre de 2026)
 
@@ -738,3 +738,16 @@ No está validado píxel a píxel contra Dolphin.
 - **Captura en juego:** `WIICOMPILED_TEXTURE_DUMPS=1` activa el volcado de texturas solo para esa ejecución, sin tocar `Config.toml`.
 - **Verificado en el juego:** el atlas de etiquetas del menú principal y dos texturas de Coors Field (vallas y marcador) escaladas ×4 con el Studio se ven en el menú y durante un partido.
 - **Ingeniería inversa:** las cabeceras de textura de los `.pack` guardan el alto antes que el ancho (ver `docs/ingenieria-inversa.md`, sección 5).
+
+## Restos de Mario Kart Wii en el runtime (14 de octubre de 2026)
+
+Auditoría de todo el runtime buscando direcciones, desplazamientos de `r13`/`r2` e identidad de Mario Kart Wii que sigan activos en MLB.
+
+- **Arreglado (parche `wiicompiled-mlb-disc-identity` y `config/wiicompiled/rl8e54-data.csv`):**
+  - `RFLiIsWorking` leía el puntero del gestor de Miis en `0x80386298` (Mario Kart; memoria libre en MLB). Una fila `ignore` del CSV ganaba a la fila `range` correcta; se quitó y ahora lee `0x8031B168`.
+  - El disco se identificaba con el editor «01» y el disco 1 de Mario Kart sobre el `0x35340001` de MLB; y si `0x80000000` no tenía un código válido, la NAND, ES y Riivolution caían a «RMCP». Ahora usan `GameProfile::kDiscGameCode` y `kDiscMakerId`.
+  - Las llamadas de red diferidas usaban el hilo por defecto de Mario Kart (`0x80347498`); ahora el de MLB (`0x802B7078`).
+  - `IPCCltInit` no marcaba la bandera de "ya inicializado" (`r13-26876`): una segunda llamada habría vuelto a avanzar el búfer. Ahora la comprueba y la marca, como el original.
+- **Comprobado:** 8 de 8 arranques sin cierre, `IPCCltInit` una sola vez, NAND solo en `title/00010000/524c3845`, el partido automático llega a jugarse y las pruebas del launcher pasan. Antes se habían visto 2 cierres silenciosos en 9 arranques; si el puntero de Miis era la causa no está demostrado.
+- **Sin efecto en MLB** (código no enlazado o desactivado): mezcla de audio, ISFS, EGG/GX, SC, ES, hilos del sistema de Mario Kart, cargador de mods de Retro Rewind.
+- **Pendiente de revisar:** pantalla panorámica por defecto en 16:9; versión de IOS declarada (IOS36, la de Mario Kart); los deslizadores de volumen de efectos, interfaz y voces no hacen nada en MLB (estaban atados al sonido de Mario Kart).
