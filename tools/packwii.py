@@ -6,9 +6,9 @@ entry table, u32 0x20 (header size), then objects. A pointer is 0x40000000 | fil
 is {u32 0, u32 id, pointer}. Most packs have no table: the game reaches their objects through a
 root structure. Textures come in two header layouts (docs/ingenieria-inversa.md, section 5):
 
-  model   u16 w, u16 h, u8 type (0x80 RGBA8, 0x81 RGB5A3, 0x82 C8, 0x84 C4), ..., +0x08 pixels,
+  model   u16 h, u16 w, u8 type (0x80 RGBA8, 0x81 RGB5A3, 0x82 C8, 0x84 C4), ..., +0x08 pixels,
           four 0x82000000 words; a C4/C8 texture is followed (+0x24) by its palette header.
-  layout  u16 w, u16 h, u32 GX format, +0x08 pixels, +0x14 1, +0x18 1; +0x24 u16 palette size,
+  layout  u16 h, u16 w, u32 GX format, +0x08 pixels, +0x14 1, +0x18 1; +0x24 u16 palette size,
           +0x28 u32 palette format, +0x2C palette data (0 when the palette lives elsewhere).
   palette u16 entries (16 or 256), u16 0, u8 0x81, u8 0, u16 0x6000, +0x08 RGB5A3 data.
 
@@ -168,13 +168,13 @@ def new_palette(rgba, entries):
 def find_textures(d):
     texs, pals = [], {}
     for o in range(0x20, len(d) - 12, 4):
-        w, h = struct.unpack_from(">HH", d, o)
+        h, w = struct.unpack_from(">HH", d, o)      # height first (checked against the runtime's dumps)
         p = ptr(d, o + 8)
         if p is None or p >= len(d):
             continue
         kind_byte = d[o + 4]
-        if h == 0 and kind_byte == 0x81 and w in (16, 256) and p + 2 * w <= len(d):
-            pals[o] = (w, p)
+        if w == 0 and kind_byte == 0x81 and h in (16, 256) and p + 2 * h <= len(d):   # entries, 0
+            pals[o] = (h, p)
             continue
         if w not in POW2 or h not in POW2:
             continue

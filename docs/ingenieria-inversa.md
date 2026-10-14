@@ -314,8 +314,8 @@ Big-endian, un grafo de objetos con punteros. Verificado sobre las 2.356 entrada
 
 | Tipo | Cabecera |
 |---|---|
-| Modelo | u16 ancho, u16 alto, u8 tipo (`0x80` RGBA8, `0x81` RGB5A3, `0x82` C8, `0x84` C4), `+0x08` puntero a los píxeles, cuatro palabras `0x82000000`. En C4/C8 la cabecera de paleta va en `+0x24`. |
-| Interfaz | u16 ancho, u16 alto, u32 formato GX, `+0x08` píxeles, `+0x14` 1, `+0x18` 1, `+0x24` u16 entradas de paleta, `+0x28` u32 formato de paleta (2 = RGB5A3), `+0x2C` puntero a la paleta (0 si está en otro sitio). |
+| Modelo | u16 **alto**, u16 **ancho**, u8 tipo (`0x80` RGBA8, `0x81` RGB5A3, `0x82` C8, `0x84` C4), `+0x08` puntero a los píxeles, cuatro palabras `0x82000000`. En C4/C8 la cabecera de paleta va en `+0x24`. |
+| Interfaz | u16 **alto**, u16 **ancho**, u32 formato GX, `+0x08` píxeles, `+0x14` 1, `+0x18` 1, `+0x24` u16 entradas de paleta, `+0x28` u32 formato de paleta (2 = RGB5A3), `+0x2C` puntero a la paleta (0 si está en otro sitio). |
 | Paleta | u16 entradas (16 o 256), u16 0, u8 `0x81`, u8 0, u16 `0x6000`, `+0x08` puntero a los colores RGB5A3. |
 
 - **Conjuntos de texturas:** {u32 n, → n texturas, u32 m, → m paletas}. Hay una paleta para todas o una por textura.
@@ -325,12 +325,15 @@ Big-endian, un grafo de objetos con punteros. Verificado sobre las 2.356 entrada
   - Por posición: los colores de la paleta van justo después de los píxeles. La cabecera de paleta que hay justo antes de una textura es la de la textura anterior, no la suya.
   - Las demás reciben la paleta de otro pack.
 - **Comprobado contra el juego** (14 de octubre de 2026, volcado de texturas del runtime hasta el menú principal):
-  - El hash XXH64 de los píxeles calculado desde el pack coincide con el del juego: el juego usa los bytes del pack tal cual.
+  - El hash XXH64 de los píxeles calculado desde el pack coincide con el del juego: el juego usa los bytes del pack tal cual. Con la orientación corregida (abajo), Texture Studio calcula el nombre exacto de 37 de los 39 volcados que vienen de packs.
   - De 38 texturas del pack vistas con paleta, 36 tienen la misma paleta que la emparejada aquí. Las otras dos: una paleta suelta de `env_common.pack` sin puntero conocido, y `env_mainmenu.pack` `0x163A0`, que el juego dibuja con una paleta distinta de la que apunta su cabecera (cambio de paleta en ejecución).
   - El resto del volcado no viene de packs: fotogramas de vídeo THP (I8 de 512×448 y 256×224) y unas pocas texturas de tamaño no potencia de dos (texto generado en ejecución, por confirmar).
 - **Atlas de etiquetas del menú principal:** `env_mainmenu.pack` `0x2A920` (512×512, C8) tiene las 12 etiquetas en sus colores; la mitad superior es la normal y la inferior la seleccionada. Un recuadro pintado sobre «Exhibition» se ve en el juego.
 - **Al importar** `packwii.py` deja fija la paleta de las texturas emparejadas por posición y conserva el índice exacto de los píxeles no editados, porque el juego puede dibujar una textura con otra paleta.
-- **Sin resolver:** en `env_mainmenu.pack`, `0x12140`, `0x9B6E0` y `0xBB940` salen con rayas horizontales; puede que alternen paletas por línea o vayan entrelazadas.
+- **Alto antes que ancho** (14 de octubre de 2026): las cabeceras de textura guardan primero el alto y luego el ancho.
+  - Los 19 volcados no cuadrados del menú tienen las dimensiones al revés de lo que se leía (por ejemplo `env_mainmenu.pack` `0x12140`: el juego la usa como 256×64).
+  - Medido además por suavidad de la imagen en 1.600 texturas no cuadradas de packs: 1.585 se ven bien leyendo alto y ancho, también las de modelo.
+  - Era la causa de las texturas «rayadas» de `env_mainmenu.pack` (`0x12140`, `0x9B6E0`, `0xBB940`): ahora se decodifican bien (`0x9B6E0` es el arte del menú del Wii Remote).
 
 **Funciones DVD:**
 
@@ -605,7 +608,7 @@ Fuentes: `wiicompiled-mlb-nand-es.patch`, `hle/mlb/sc_check_status.cpp`, `docs/m
 - **Diagnóstico de audio:** `WIICOMPILED_AUDIO_DUMP=<archivo>` guarda la mezcla final para medir chasquidos.
 - **Pendiente de investigar:**
   - objetos de los `.pack` aparte de las texturas: modelos, capas `SURF`/`SURG` y movimientos
-  - texto de los `.dat` `PCD`/`TCD`/`SID` y las texturas rayadas de `env_mainmenu.pack`
+  - texto de los `.dat` `PCD`/`TCD`/`SID`
   - estructura de los equipos y las alineaciones más allá de lo mapeado
   - lógica de MLB Life
   - los ~450 candidatos de getters en mitad de funciones

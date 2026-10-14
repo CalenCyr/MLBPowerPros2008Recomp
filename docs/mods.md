@@ -82,7 +82,6 @@ python tools/packwii.py import pack/env_mainmenu.pack png mimod/project/env_main
   - Si la comparten varias texturas, o la paleta se encontró solo por su posición en el archivo, los colores no cambian: el juego puede dibujar la textura con otra paleta. Los píxeles editados toman el color más parecido y los demás conservan su índice exacto.
 - **Texturas que no se pueden importar:**
   - Unas 400 tienen la paleta en otro pack: salen en gris y `import` las rechaza.
-  - Tres del menú principal salen rayadas y aún no se entienden.
 - **Comprobado en el juego:** un recuadro pintado sobre «Exhibition» en `env_mainmenu.pack` aparece en el menú principal y el resto de botones no cambia.
 
 No subas ni compartas los PNG exportados ni los `.pack` del juego. Un mod reparte solo los `.pack` que modificó, igual que con los uniformes.
