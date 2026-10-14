@@ -58,4 +58,7 @@ foreach ($pass in 1..3) {
     }
   } finally { $process.Dispose() }
 }
+# Passed: drop the ~130 MB copy of the game binaries, keep only the small logs and config.
+Get-ChildItem -LiteralPath $probe -Force | Where-Object { $_.Name -notlike '*.log' -and $_.Name -ne 'UserData' } |
+    Remove-Item -Recurse -Force
 Write-Output "Launcher integration, reload and pad navigation passed. Logs: $probe"
