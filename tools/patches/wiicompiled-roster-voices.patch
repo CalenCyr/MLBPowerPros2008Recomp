@@ -15,7 +15,7 @@ index 2305661..ff294a4 100644
      // One server per game session, closed with the game through a job object.
      static HANDLE job = nullptr;
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
-index dcda6e4..7264965 100644
+index dcda6e4..dfc0e9e 100644
 --- a/runtime/src/mods.cpp
 +++ b/runtime/src/mods.cpp
 @@ -183,7 +183,18 @@ namespace {
@@ -23,7 +23,7 @@ index dcda6e4..7264965 100644
  constexpr size_t kRosterPlayer = 0xB0, kRosterSlots = 1500, kRosterBlock = 0x43E80;
  constexpr size_t kSaveRoster2007 = 0x68C74, kPackRoster2008 = 0x20;
 -constexpr uint32_t kRosterConverter = 10;
-+constexpr uint32_t kRosterConverter = 12;
++constexpr uint32_t kRosterConverter = 13;  // 11: voices; 12: abilities by meaning; 13: 2008-only abilities
 +
 +// kRosterUnnamedRuns expanded to single bit positions.
 +const std::vector<uint16_t>& RosterUnnamed() {
@@ -34,7 +34,7 @@ index dcda6e4..7264965 100644
 +        return out;
 +    }();
 +    return bits;
-+}  // 11: voices move with kVoiceRuns; 12: abilities by meaning
++}
  
  uint32_t GetBits(const unsigned char* record, uint32_t bit, uint32_t count) {
      uint32_t value = 0;
@@ -67,7 +67,7 @@ index dcda6e4..7264965 100644
          size_t set = 0, players = 0;
          for (const auto& [key, records] : originals) {
              for (const unsigned char* record : records) set += GetBits(record, bit, 1), ++players;
-@@ -297,17 +316,19 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
+@@ -297,17 +316,24 @@ bool ConvertRoster(const std::vector<char>& save, std::vector<char>& pack, bool
          } else {
              SetBits(to, 0x2A4, 8, Face2008(GetBits(from, 0x2A4, 8)));
              SetBits(to, 0x2AC, 4, Skin2008(GetBits(from, 0x2AC, 4)));
@@ -86,10 +86,15 @@ index dcda6e4..7264965 100644
          } else if (ids2008) {
 -            for (size_t k = 0; k < std::size(kRosterUnnamed); ++k) SetBits(to, kRosterUnnamed[k], 1, typical[k]);
 +            for (size_t k = 0; k < RosterUnnamed().size(); ++k) SetBits(to, RosterUnnamed()[k], 1, typical[k]);
++        }
++        // Abilities only 2008 has, which PowerUp+'s 2008 export writes into two 2007-layout slots.
++        if (ids2008) {
++            for (const RosterField& field : kRosterMod2008Fields)
++                SetBits(to, field.to, field.toBits, GetBits(from, field.from, field.bits));
          }
          if (native) SetBits(to, 0x283, 2, 0b10);  // Unedited (0x50.3) set, IsEdited (0x50.4) clear
      }
-@@ -394,7 +415,7 @@ std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
+@@ -394,7 +420,7 @@ std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
              tableHash = (tableHash ^ value) * 16777619u;
          }
      }
@@ -99,7 +104,7 @@ index dcda6e4..7264965 100644
      const bool native = RuntimeConfigFile::NativeRoster(true);
      if (native) tableHash = (tableHash ^ 0x4E415456u) * 16777619u;
 diff --git a/runtime/src/roster_fields.inc b/runtime/src/roster_fields.inc
-index aa3b99f..c9dee5c 100644
+index aa3b99f..43a02be 100644
 --- a/runtime/src/roster_fields.inc
 +++ b/runtime/src/roster_fields.inc
 @@ -39,13 +39,13 @@ constexpr RosterField kRosterFields[] = {
@@ -130,7 +135,7 @@ index aa3b99f..c9dee5c 100644
      {0x3C6, 1, 0x3C4, 1, false},  // Bit_78_6
      {0x3C7, 1, 0x3C5, 1, false},  // Bit_78_7
      {0x407, 1, 0x405, 1, false},  // Bit_80_7
-@@ -168,17 +166,51 @@ constexpr RosterField kRosterFields[] = {
+@@ -168,17 +166,57 @@ constexpr RosterField kRosterFields[] = {
      {0x490, 1, 0x490, 1, false},  // Bit_92_0
      {0x491, 1, 0x491, 1, false},  // Bit_92_1
  };
@@ -155,6 +160,12 @@ index aa3b99f..c9dee5c 100644
 +    {0x2DE, 0x2DF}, {0x315, 0x316}, {0x318, 0x319}, {0x31B, 0x31C}, {0x31E, 0x33A}, {0x33F, 0x33F},
 +    {0x350, 0x350}, {0x354, 0x354}, {0x35B, 0x35F}, {0x39E, 0x39E}, {0x3AC, 0x3AE}, {0x3B8, 0x3B8},
 +    {0x3BA, 0x3BA}, {0x3C4, 0x3C5}, {0x405, 0x405}, {0x46E, 0x491},
++};
++// Abilities only 2008 has, in 2007-layout slots PowerUp+'s 2008 export fills (MOD_2008); only
++// a mod with roster_ids = "2008" carries them.
++constexpr RosterField kRosterMod2008Fields[] = {
++    {0x3BF, 1, 0x3BC, 1, false},  // HasGoodEye2008
++    {0x3C6, 2, 0x3C4, 2, false},  // GoodOrPoorNightGame2008
 +};
 +// 2007 voice id runs {first, last, offset to 2008's id} (VOICE_RUNS); other ids have no 2008 voice.
 +struct VoiceRun { uint16_t first, last; int16_t offset; };

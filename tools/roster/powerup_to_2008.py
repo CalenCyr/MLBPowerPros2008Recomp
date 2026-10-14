@@ -79,6 +79,13 @@ MOVED = {
 }
 # 2008's hidden +1/-1 trait (0x75.4, 2 bits): kept from the 2008 record, 0 for new players.
 HIDDEN_2008 = [0x3AC, 0x3AD]
+# Abilities only 2008 has, which PowerUp+ (GSPlayer *2008 fields) writes into 2007-layout slots the
+# 2008 conversion leaves unused: (name, 2007 bit, bits, 2008 bit, bits). Only a mod with
+# roster_ids = "2008" (PowerUp+'s 2008 export) carries them; other saves keep 2008's own values.
+MOD_2008 = [
+    ("HasGoodEye2008", 0x3BF, 1, 0x3BC, 1),             # Gd Eye (0x77.4, the bit 2008 inserted)
+    ("GoodOrPoorNightGame2008", 0x3C6, 2, 0x3C4, 2),    # Gd/Pr Night Game (0x78.4)
+]
 
 
 def target(name, bit, bits):
@@ -176,7 +183,9 @@ def unnamed_2008(fields):
 
 def unnamed_2007(fields):
     """The same bits at their 2007 positions, as a PowerUp save holds them."""
-    return unnamed_copied(fields) + [bit for name, bit, _ in fields if name.startswith("Bit_") and target(name, bit, 1)]
+    mod = {b for _, frm, bits, _, _ in MOD_2008 for b in range(frm, frm + bits)}
+    return unnamed_copied(fields) + [bit for name, bit, _ in fields
+                                     if name.startswith("Bit_") and target(name, bit, 1) and bit not in mod]
 
 
 def unnamed_copied(fields):
@@ -316,6 +325,9 @@ def convert_player(old, fields, originals=None, ids_2008=False, empty=bytes(PLAY
         # of each bit PowerUp cannot name (0x4E-0x4F and 0x92.0 hold the lineup screen's names).
         for b, value in typical.items():
             set_bits(new, b, 1, value)
+    if ids_2008:
+        for _, frm, bits, to, to_bits in MOD_2008:
+            set_bits(new, to, to_bits, get_bits(old, frm, bits))
     if native:
         set_bits(new, 0x283, 2, 0b10)    # Unedited (0x50.3) set, IsEdited (0x50.4) clear, as in 2008
     return bytes(new)
@@ -349,6 +361,8 @@ def revert_player(new, fields, base=None):
             value -= 1
         set_bits(old, bit, count, value)
     set_bits(old, *VOICE, voice_2007(get_bits(new, *VOICE)))
+    for _, frm, bits, to, to_bits in MOD_2008:
+        set_bits(old, frm, bits, get_bits(new, to, to_bits))
     set_bits(old, *FACE, face_2007(get_bits(new, *FACE)))
     set_bits(old, *SKIN, skin_2007(get_bits(new, *SKIN)))
     return bytes(old)
@@ -382,6 +396,12 @@ def emit_cpp(repo):
     for i in range(0, len(runs), 6):
         lines.append("    " + " ".join(f"{{0x{a:03X}, 0x{b:03X}}}," for a, b in runs[i:i + 6]))
     lines.append("};")
+    lines.append("// Abilities only 2008 has, in 2007-layout slots PowerUp+'s 2008 export fills (MOD_2008); only")
+    lines.append("// a mod with roster_ids = \"2008\" carries them.")
+    lines.append("constexpr RosterField kRosterMod2008Fields[] = {")
+    for name, frm, bits, to, to_bits in MOD_2008:
+        lines.append(f"    {{0x{frm:03X}, {bits}, 0x{to:03X}, {to_bits}, false}},  // {name}")
+    lines.append("};")
     lines.append("// 2007 voice id runs {first, last, offset to 2008's id} (VOICE_RUNS); other ids have no 2008 voice.")
     lines.append("struct VoiceRun { uint16_t first, last; int16_t offset; };")
     lines.append("constexpr VoiceRun kVoiceRuns[] = {")
@@ -414,6 +434,10 @@ def emit_cs(repo):
               "    public static readonly int[] Unmodeled =", "    ["]
     bits = unnamed_2007(load_fields(repo))
     lines += ["      " + ", ".join(f"0x{b:03X}" for b in bits[i:i + 12]) + "," for i in range(0, len(bits), 12)]
+    lines += ["    ];", "",
+              "    /// <summary>Abilities only 2008 has: 2007-layout slot -> 2008 bits (GSPlayer *2008 fields).</summary>",
+              "    public static readonly (int From, int Bits, int To, int ToBits)[] Mod2008 =", "    ["]
+    lines += [f"      (0x{frm:03X}, {bits}, 0x{to:03X}, {to_bits}), // {name}" for name, frm, bits, to, to_bits in MOD_2008]
     lines += ["    ];", "",
               "    /// <summary>2007 voice id runs (first, last, offset to 2008's id); other 2007 ids have no 2008 voice.</summary>",
               "    public static readonly (int First, int Last, int Offset)[] VoiceRuns =", "    ["]

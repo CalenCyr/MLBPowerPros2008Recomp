@@ -73,7 +73,12 @@ Los bits que PowerUp no nombra viajan con su zona; el conversor los copia como c
 - **Para 2008 se corrige por significado, y 2007 se deja como está.** Los rosters que genera PowerUp ya usan las casillas por su nombre (su roster 2025 marca "Cannon arm" a Tatis, Arenado, Salvador Pérez y Betts). Por eso la tabla de 2008 (`MOVED` en `powerup_to_2008.py`) lleva "Barehand catch" a `0x77.5` y "Cannon arm" a `0x74.4`. El rasgo oculto se conserva del registro de 2008, o vale 0 en un jugador nuevo, y los restos de la partida base de 2007 ya no se copian.
 - Resultado con el roster 2025: antes, 0 brazos cañón, 117 barehand al azar y 100 rasgos ocultos basura; ahora, los 4 brazos cañón reales y nada más.
 - En PowerUp+, un roster de 2008 importado de nuevo muestra cada casilla con su habilidad real (Rios: Cannon Arm; Eckstein: Barehand). La ida y vuelta sigue idéntica byte a byte. Los rosters de 2008 importados antes de este cambio hay que importarlos de nuevo.
-- Gd Eye y Night Game se conservan al exportar, pero el editor todavía no los muestra.
+- **Gd Eye y Night Game se editan en PowerUp+** (sección General, marcadas "(2008)"). Una importación de 2008 los lee del registro original.
+  - La exportación de 2008 los escribe en dos huecos del formato de 2007 que la conversión ya no usa (`MOD_2008`: `0x77.7` → `0x77.4` y `0x78.6`/2 → `0x78.4`/2).
+  - El conversor del juego solo los toma de un mod con `roster_ids = "2008"`. Un `.dat` genérico de 2007 se convierte igual que antes.
+  - La exportación de 2007 los deja vacíos, así que una partida de 2007 se escribe bit a bit como antes.
+- Comprobado: Payton (Pr Night Game) cambiado en el editor a Gd Night Game y Gd Eye, guardado, exportado y convertido. En el roster del juego cambian exactamente esos bits; el runtime da lo mismo que Python.
+- Al copiar un jugador (necesario para editar uno importado), PowerUp no copiaba Day Game, Rain, la fecha de nacimiento, la edad, los años en las mayores ni las estadísticas. Sin fecha, la exportación fallaba. Ahora se copian.
 
 **Caras:** 2008 insertó caras nuevas, así que los números de 2007 se corren por tramos:
 
@@ -176,6 +181,5 @@ La tabla de campos del runtime (`runtime/src/roster_fields.inc`, parche `wiicomp
 
 ## Pendiente
 
-- Añadir Gd Eye y Night Game como casillas del editor de PowerUp+ (solo para rosters de 2008).
 - Averiguar qué controla el rasgo oculto `0x75.4`.
 - Una lista de caras de 2008 para el editor de PowerUp+.

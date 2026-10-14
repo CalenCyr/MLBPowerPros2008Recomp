@@ -49,6 +49,52 @@ index 5b5191a..c76407b 100644
        .CreateLogger();
  
    builder.UseSerilog();
+diff --git a/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/PlayerEditorResponse.cs b/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/PlayerEditorResponse.cs
+index 71c1fa1..383fd53 100644
+--- a/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/PlayerEditorResponse.cs
++++ b/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/PlayerEditorResponse.cs
+@@ -410,6 +410,8 @@ namespace PowerUp.ElectronUI.Api.PlayerEditor
+     public KeyedCode Morale { get; }
+     public KeyedCode DayGameAbility { get; }
+     public KeyedCode InRainAbility { get; }
++    public KeyedCode NightGameAbility { get; }
++    public bool HasGoodEye { get; }
+ 
+     public GeneralSpecialAbilitiesDetailsDto(GeneralSpecialAbilities general)
+     {
+@@ -418,6 +420,8 @@ namespace PowerUp.ElectronUI.Api.PlayerEditor
+       Morale = general.Morale.ToKeyedCode();
+       DayGameAbility = general.DayGameAbility.ToKeyedCode();
+       InRainAbility = general.InRainAbility.ToKeyedCode();
++      NightGameAbility = general.NightGameAbility.ToKeyedCode();
++      HasGoodEye = general.HasGoodEye;
+     }
+   }
+ 
+diff --git a/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/SpecialAbilitiesRequest.cs b/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/SpecialAbilitiesRequest.cs
+index e6bd9c8..b7a10b1 100644
+--- a/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/SpecialAbilitiesRequest.cs
++++ b/PowerUp/PowerUp.ElectronUI/Api/PlayerEditor/SpecialAbilitiesRequest.cs
+@@ -27,6 +27,8 @@ namespace PowerUp.ElectronUI.Api.PlayerEditor
+     public string? MoraleKey { get; set; }
+     public string? DayGameAbilityKey { get; set; }
+     public string? InRainAbilityKey { get; set; }
++    public string? NightGameAbilityKey { get; set; }
++    public bool HasGoodEye { get; set; }
+ 
+     public GeneralSpecialAbilitiesParameters GetParameters()
+     {
+@@ -36,7 +38,9 @@ namespace PowerUp.ElectronUI.Api.PlayerEditor
+         Durability = Enum.Parse<Special2_4>(DurabilityKey!),
+         Morale = Enum.Parse<SpecialPositive_Negative>(MoraleKey!),
+         DayGameAbility = Enum.Parse<SpecialPositive_Negative>(DayGameAbilityKey!),
+-        InRainAbility = Enum.Parse<SpecialPositive_Negative>(InRainAbilityKey!)
++        InRainAbility = Enum.Parse<SpecialPositive_Negative>(InRainAbilityKey!),
++        NightGameAbility = NightGameAbilityKey is null ? SpecialPositive_Negative.Neutral : Enum.Parse<SpecialPositive_Negative>(NightGameAbilityKey),
++        HasGoodEye = HasGoodEye
+       };
+     }
+   }
 diff --git a/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs b/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs
 index b24c224..1175f14 100644
 --- a/PowerUp/PowerUp.ElectronUI/Api/Rosters/ExportRosterCommand.cs
@@ -180,6 +226,119 @@ index 3d5fb22..66ef446 100644
          onChange={e => setState(p => ({...p, selectedFile: e.target.files![0]}))} 
        />
      </div>
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/loadPlayerEditorApiClient.ts b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/loadPlayerEditorApiClient.ts
+index 5a6966f..4841c7f 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/loadPlayerEditorApiClient.ts
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/loadPlayerEditorApiClient.ts
+@@ -208,6 +208,8 @@ export interface GeneralSpecialAbilitiesDetailsDto {
+   morale: KeyedCode;
+   dayGameAbility: KeyedCode;
+   inRainAbility: KeyedCode;
++  nightGameAbility: KeyedCode;
++  hasGoodEye: boolean;
+ }
+ 
+ export interface HitterSpecialAblitiesDetailsDto {
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/savePlayerApiClient.ts b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/savePlayerApiClient.ts
+index a475e05..4a3b9ef 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/savePlayerApiClient.ts
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/savePlayerApiClient.ts
+@@ -130,6 +130,8 @@ export interface GeneralSpecialAbilitiesRequest {
+   moraleKey: string;
+   dayGameAbilityKey: string;
+   inRainAbilityKey: string;
++  nightGameAbilityKey: string;
++  hasGoodEye: boolean;
+ }
+ 
+ export interface HitterSpecialAbilitiesRequest {
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesEditor.tsx b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesEditor.tsx
+index 30095e0..056411d 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesEditor.tsx
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesEditor.tsx
+@@ -59,6 +59,21 @@ export function SpecialAbilitiesEditor(props: SpecialAbilitiesEditorProps) {
+         disabled={editorDisabled}
+         onChange={value => updateGeneral({ type: 'updateInRainAbility', inRainAbility: value })}
+       />
++      {/* MLB Power Pros 2008 only: a 2007 save has no place for these and ignores them. */}
++      <SpecialPositiveNegativeRow
++        positiveLabel='Gd Night Game (2008)'
++        negativeLabel='Pr Night Game (2008)'
++        options={options.specialPositive_NegativeOptions}
++        value={general.nightGameAbility}
++        disabled={editorDisabled}
++        onChange={value => updateGeneral({ type: 'updateNightGameAbility', nightGameAbility: value })}
++      />
++      <SpecialBooleanRow
++        label='Gd Eye (2008)'
++        value={general.hasGoodEye}
++        disabled={editorDisabled}
++        onChange={value => updateGeneral({ type: 'updateHasGoodEye', hasGoodEye: value })}
++      />
+     </SpecialAbilitiesSection>
+     {!isPitcher && getHitterSection()}
+     {!isPitcher && getPitcherSection()}
+diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesState.ts b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesState.ts
+index 1bd5385..f0c3e83 100644
+--- a/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesState.ts
++++ b/PowerUp/PowerUp.ElectronUI/electron/src/app/playerEditor/specialAbilitiesState.ts
+@@ -15,6 +15,8 @@ export interface GeneralSpecialAbilities {
+   morale: KeyedCode;
+   dayGameAbility: KeyedCode;
+   inRainAbility: KeyedCode;
++  nightGameAbility: KeyedCode;
++  hasGoodEye: boolean;
+ }
+ 
+ export interface HitterSpecialAblities {
+@@ -142,6 +144,8 @@ export type GeneralSpecialAbilitiesAction =
+ | { type: 'updateDurability', durability: KeyedCode }
+ | { type: 'updateMorale', morale: KeyedCode }
+ | { type: 'updateDayGameAbility', dayGameAbility: KeyedCode }
++| { type: 'updateNightGameAbility', nightGameAbility: KeyedCode }
++| { type: 'updateHasGoodEye', hasGoodEye: boolean }
+ | { type: 'updateInRainAbility', inRainAbility: KeyedCode }
+ 
+ export type HitterSpecialAbilitiesAction =
+@@ -290,6 +294,16 @@ export function GeneralSpecialAbilitiesReducer(state: GeneralSpecialAbilities, a
+         ...state,
+         dayGameAbility: action.dayGameAbility
+       }
++    case 'updateNightGameAbility':
++      return {
++        ...state,
++        nightGameAbility: action.nightGameAbility
++      }
++    case 'updateHasGoodEye':
++      return {
++        ...state,
++        hasGoodEye: action.hasGoodEye
++      }
+     case 'updateInRainAbility':
+       return {
+         ...state,
+@@ -844,7 +858,9 @@ export function getInitialSpecialAbilitiesFromResponse(response: SpecialAbilitie
+       durability: general.durability,
+       morale: general.morale,
+       dayGameAbility: general.dayGameAbility,
+-      inRainAbility: general.inRainAbility
++      inRainAbility: general.inRainAbility,
++      nightGameAbility: general.nightGameAbility,
++      hasGoodEye: general.hasGoodEye
+     },
+     hitter:  {
+       situational: {
+@@ -955,7 +971,9 @@ export function buildSpecialAbilitiesRequestFromState(state: SpecialAbilities):
+       durabilityKey: general.durability.key,
+       moraleKey: general.morale.key,
+       dayGameAbilityKey: general.dayGameAbility.key,
+-      inRainAbilityKey: general.inRainAbility.key
++      inRainAbilityKey: general.inRainAbility.key,
++      nightGameAbilityKey: general.nightGameAbility.key,
++      hasGoodEye: general.hasGoodEye
+     },
+     hitterSpecialAbilitiesRequest: {
+       situational: {
 diff --git a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts b/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
 index 966c1eb..45f6b90 100644
 --- a/PowerUp/PowerUp.ElectronUI/electron/src/app/rosterEditor/exportRosterApiClient.ts
@@ -293,6 +452,88 @@ index 6ab259b..4cbcf00 100644
        services.AddTransient<IRosterExportApi, RosterExportApi>();
        services.AddTransient<IPlayerMapper>(provider => new PlayerMapper(provider.GetRequiredService<ISpecialSavedNameLibrary>()));
        services.AddTransient<IPlayerApi>(provider => new PlayerApi());
+diff --git a/PowerUp/PowerUp/Entities/Players/Api/PlayerApi.cs b/PowerUp/PowerUp/Entities/Players/Api/PlayerApi.cs
+index 86dc957..5ddec9d 100644
+--- a/PowerUp/PowerUp/Entities/Players/Api/PlayerApi.cs
++++ b/PowerUp/PowerUp/Entities/Players/Api/PlayerApi.cs
+@@ -232,6 +232,8 @@
+       general.Morale = parameters.Morale;
+       general.DayGameAbility = parameters.DayGameAbility;
+       general.InRainAbility = parameters.InRainAbility;
++      general.NightGameAbility = parameters.NightGameAbility;
++      general.HasGoodEye = parameters.HasGoodEye;
+     }
+ 
+     private void UpdateHitterSpecialAbilities(HitterSpecialAbilities hitter, HitterSpecialAbilitiesParameters parameters)
+diff --git a/PowerUp/PowerUp/Entities/Players/Api/PlayerCopyParametersBuilder.cs b/PowerUp/PowerUp/Entities/Players/Api/PlayerCopyParametersBuilder.cs
+index f233f93..9301dc1 100644
+--- a/PowerUp/PowerUp/Entities/Players/Api/PlayerCopyParametersBuilder.cs
++++ b/PowerUp/PowerUp/Entities/Players/Api/PlayerCopyParametersBuilder.cs
+@@ -32,6 +32,11 @@
+           SpecialSavedNameId = player.SpecialSavedNameId,
+           SavedName = player.SavedName,
+           UniformNumber = player.UniformNumber,
++          // Copies kept no birthday or age (month and day 0), which broke exporting them.
++          BirthMonth = player.BirthMonth,
++          BirthDay = player.BirthDay,
++          Age = player.Age,
++          YearsInMajors = player.YearsInMajors,
+           Position = player.PrimaryPosition,
+           PitcherType = player.PitcherType,
+           VoiceId = player.VoiceId,
+@@ -42,6 +47,11 @@
+           GeneratedPlayer_LSPlayerId = player.GeneratedPlayer_LSPLayerId,
+           GeneratedPlayer_FullFirstName = player.GeneratedPlayer_FullFirstName,
+           GeneratedPlayer_FullLastName  = player.GeneratedPlayer_FullLastName,
++          // Copies also dropped the season stats (they came out as "no value").
++          BattingAverage = player.BattingAverage,
++          RunsBattedIn = player.RunsBattedIn,
++          HomeRuns = player.HomeRuns,
++          EarnedRunAverage = player.EarnedRunAverage,
+         },
+         Appearance = new PlayerAppearanceParameters
+         {
+@@ -131,7 +141,11 @@
+           {
+             IsStar = generalSpecialAbilities.IsStar,
+             Durability = generalSpecialAbilities.Durability,
+-            Morale = generalSpecialAbilities.Morale
++            Morale = generalSpecialAbilities.Morale,
++            DayGameAbility = generalSpecialAbilities.DayGameAbility,
++            InRainAbility = generalSpecialAbilities.InRainAbility,
++            NightGameAbility = generalSpecialAbilities.NightGameAbility,
++            HasGoodEye = generalSpecialAbilities.HasGoodEye
+           },
+           Hitter = new HitterSpecialAbilitiesParameters
+           {
+diff --git a/PowerUp/PowerUp/Entities/Players/Api/SpecialAbilitiesParameters.cs b/PowerUp/PowerUp/Entities/Players/Api/SpecialAbilitiesParameters.cs
+index 1a9895c..c0b4fab 100644
+--- a/PowerUp/PowerUp/Entities/Players/Api/SpecialAbilitiesParameters.cs
++++ b/PowerUp/PowerUp/Entities/Players/Api/SpecialAbilitiesParameters.cs
+@@ -14,6 +14,8 @@
+     public SpecialPositive_Negative Morale { get; set; }
+     public SpecialPositive_Negative DayGameAbility { get; set; }
+     public SpecialPositive_Negative InRainAbility { get; set; }
++    public SpecialPositive_Negative NightGameAbility { get; set; }
++    public bool HasGoodEye { get; set; }
+   }
+ 
+   public class HitterSpecialAbilitiesParameters
+diff --git a/PowerUp/PowerUp/Entities/Players/SpecialAbilities.cs b/PowerUp/PowerUp/Entities/Players/SpecialAbilities.cs
+index 3feda07..408468e 100644
+--- a/PowerUp/PowerUp/Entities/Players/SpecialAbilities.cs
++++ b/PowerUp/PowerUp/Entities/Players/SpecialAbilities.cs
+@@ -14,6 +14,10 @@
+     public SpecialPositive_Negative Morale { get; set; }
+     public SpecialPositive_Negative InRainAbility { get; set; }
+     public SpecialPositive_Negative DayGameAbility { get; set; }
++    /// <summary>MLB Power Pros 2008 only (Gd/Pr Night Game); 2007 saves do not have it.</summary>
++    public SpecialPositive_Negative NightGameAbility { get; set; }
++    /// <summary>MLB Power Pros 2008 only (Gd Eye); 2007 saves do not have it.</summary>
++    public bool HasGoodEye { get; set; }
+   }
+ 
+   public class HitterSpecialAbilities
 diff --git a/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs b/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs
 index 8431233..c1dd6f3 100644
 --- a/PowerUp/PowerUp/GameSave/Api/BaseRosterInitalizer.cs
@@ -341,7 +582,7 @@ index 8431233..c1dd6f3 100644
          {
            Stream = stream,
 diff --git a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
-index e06c584..a72db3e 100644
+index e06c584..6125075 100644
 --- a/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 +++ b/PowerUp/PowerUp/GameSave/Api/RosterExportApi.cs
 @@ -1,10 +1,13 @@
@@ -375,7 +616,7 @@ index e06c584..a72db3e 100644
    }
  
    public class RosterExportApi : IRosterExportApi
-@@ -72,6 +78,254 @@ namespace PowerUp.GameSave.Api
+@@ -72,6 +78,257 @@ namespace PowerUp.GameSave.Api
        WriteRosterToFile(roster, filePath, 0);
      }
  
@@ -455,7 +696,7 @@ index e06c584..a72db3e 100644
 +      foreach (var player in reader.Read().Players.Where(p => p.PowerProsId is > 0).Cast<GSPlayer>())
 +      {
 +        // Keyed the way the exported players are: through PowerUp's model (no birthday -> 1/1).
-+        var mapped = _playerMapper.MapToPlayer(player, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008" });
++        var mapped = _playerMapper.MapToPlayer(player, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008", PowerPros2008 = true });
 +        var key = PersonKey(mapped.LastName, mapped.FirstName, mapped.BirthMonth, mapped.BirthDay);
 +        originals.ByPerson.TryAdd(key, new List<GSPlayer>());
 +        originals.ByPerson[key].Add(player);
@@ -471,7 +712,7 @@ index e06c584..a72db3e 100644
 +    /// </summary>
 +    private void PreserveUntouched(IGSPlayer exported, GSPlayer original)
 +    {
-+      var player = _playerMapper.MapToPlayer(original, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008" });
++      var player = _playerMapper.MapToPlayer(original, new PlayerMappingParameters { ImportSource = "MLB Power Pros 2008", PowerPros2008 = true });
 +      var untouched = _playerMapper.MapToGSPlayer(player, (MLBPPTeam)exported.PowerProsTeamId!.Value, exported.PowerProsId!.Value);
 +      foreach (var property in typeof(GSPlayer).GetProperties())
 +      {
@@ -575,6 +816,9 @@ index e06c584..a72db3e 100644
 +        if (!untouched && voice == 0 && voices is { Count: > 0 })
 +          voice = PowerPros2008Roster.Voice2008(ClosestVoice(voices, player.FirstName ?? "", player.LastName ?? ""));
 +        gsPlayer.VoiceId = (ushort)voice;
++        // Abilities only 2008 has travel in two 2007-layout slots (PowerPros2008Fields.Mod2008).
++        gsPlayer.GoodOrPoorNightGame2008 = (short)player.SpecialAbilities.General.NightGameAbility;
++        gsPlayer.HasGoodEye2008 = player.SpecialAbilities.General.HasGoodEye;
 +        gsPlayer.Face = (ushort)(looks is { } f && gsPlayer.Face == original!.Face
 +          ? f.Face
 +          : PowerPros2008Roster.Face2008(gsPlayer.Face!.Value));
@@ -631,7 +875,7 @@ index e06c584..a72db3e 100644
      {
        // CHRISTODO: Don't hard code endian-ness
 diff --git a/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs b/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
-index fe3d726..63aa06f 100644
+index fe3d726..bb53e58 100644
 --- a/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
 +++ b/PowerUp/PowerUp/GameSave/Api/RosterImportApi.cs
 @@ -5,6 +5,7 @@ using PowerUp.Entities.Rosters;
@@ -662,11 +906,22 @@ index fe3d726..63aa06f 100644
  
        // CHRISTODO: Don't hard code this
 -      using (var reader = new GameSaveReader(_characterLibrary, parameters.Stream, ByteOrder.BigEndian))
-+      using (var reader = new GameSaveReader(_characterLibrary, ReadAsGameSave(parameters.Stream), ByteOrder.BigEndian))
++      using (var reader = new GameSaveReader(_characterLibrary, ReadAsGameSave(parameters.Stream, out var powerPros2008), ByteOrder.BigEndian))
        {
          var gameSave = reader.Read();
          var gsPlayers = gameSave.Players.Where(p => p.PowerProsId.HasValue && p.PowerProsId != 0);
-@@ -100,6 +103,29 @@ namespace PowerUp.GameSave.Api
+@@ -48,7 +51,9 @@ namespace PowerUp.GameSave.Api
+ 
+         foreach (var gsPlayer in gsPlayers)
+         {
+-          var player = _playerMapper.MapToPlayer(gsPlayer, PlayerMappingParameters.FromRosterImport(parameters));
++          var mapping = PlayerMappingParameters.FromRosterImport(parameters);
++          mapping.PowerPros2008 = powerPros2008;
++          var player = _playerMapper.MapToPlayer(gsPlayer, mapping);
+           players.Add(player);
+         }
+         DatabaseConfig.Database.SaveAll(players);
+@@ -100,6 +105,30 @@ namespace PowerUp.GameSave.Api
          };
        }
      }
@@ -675,7 +930,7 @@ index fe3d726..63aa06f 100644
 +    /// A 2007 save as it is, or MLB Power Pros 2008's roster (its PROJECT.BIN or game_data.pack)
 +    /// turned into one on top of the base save.
 +    /// </summary>
-+    private Stream ReadAsGameSave(Stream stream)
++    private Stream ReadAsGameSave(Stream stream, out bool powerPros2008)
 +    {
 +      if (!stream.CanSeek)
 +      {
@@ -685,6 +940,7 @@ index fe3d726..63aa06f 100644
 +      }
 +      var pack = PowerPros2008Roster.FindGameDataPack(stream);
 +      stream.Position = 0;
++      powerPros2008 = pack is not null;
 +      if (pack is null)
 +        return stream;
 +      if (_baseGameSavePathProvider is null)
@@ -710,12 +966,32 @@ index bfab9dd..e12ab0e 100644
      public IEnumerable<GSFreeAgent>? FreeAgents { get; set; }
    }
  
+diff --git a/PowerUp/PowerUp/GameSave/Objects/Players/GSPlayer.cs b/PowerUp/PowerUp/GameSave/Objects/Players/GSPlayer.cs
+index 2cf95b5..08d7f8f 100644
+--- a/PowerUp/PowerUp/GameSave/Objects/Players/GSPlayer.cs
++++ b/PowerUp/PowerUp/GameSave/Objects/Players/GSPlayer.cs
+@@ -340,6 +340,15 @@ namespace PowerUp.GameSave.Objects.Players
+     [GSSInt(0x78, bits: 2, bitOffset: 4)]
+     public short? GoodOrPoorRain { get; set; }
+ 
++    // MLB Power Pros 2008 only. PowerUp+'s 2008 export (roster_ids = "2008") writes them into two
++    // 2007-layout slots the 2008 conversion leaves unused; the 2007 export leaves them null, so 2007
++    // saves are written as before. See PowerPros2008Fields.Mod2008.
++    [GSSInt(0x78, bits: 2, bitOffset: 6)]
++    public short? GoodOrPoorNightGame2008 { get; set; }
++
++    [GSBoolean(0x77, bitOffset: 7)]
++    public bool? HasGoodEye2008 { get; set; }
++
+     [GSUInt(0x79, bits: 8, bitOffset: 0)]
+     public ushort? TopThrowingSpeedKMH { get; set; }
+ 
 diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs
 new file mode 100644
-index 0000000..1650bdb
+index 0000000..e330a50
 --- /dev/null
 +++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Fields.cs
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,237 @@
 +// Generated by tools/roster/powerup_to_2008.py --emit-cs (MLB Power Pros 2008 recomp project)
 +// from GSPlayer.cs: 2007 (bit, width) -> 2008 (bit, width) for every player field outside the
 +// byte ranges copied as they are (0x00..0x5B, 0x60..0x6E). BirthYear moves by one year.
@@ -899,10 +1175,17 @@ index 0000000..1650bdb
 +      0x321, 0x322, 0x323, 0x324, 0x325, 0x326, 0x327, 0x328, 0x329, 0x32A, 0x32B, 0x32C,
 +      0x32D, 0x32E, 0x32F, 0x330, 0x331, 0x332, 0x333, 0x334, 0x335, 0x336, 0x337, 0x338,
 +      0x339, 0x33A, 0x33F, 0x350, 0x354, 0x35B, 0x35C, 0x35D, 0x35E, 0x35F, 0x3A1, 0x3B1,
-+      0x3BB, 0x3BD, 0x3C6, 0x3C7, 0x407, 0x46E, 0x46F, 0x470, 0x471, 0x472, 0x473, 0x474,
-+      0x475, 0x476, 0x477, 0x478, 0x479, 0x47A, 0x47B, 0x47C, 0x47D, 0x47E, 0x47F, 0x480,
-+      0x481, 0x482, 0x483, 0x484, 0x485, 0x486, 0x487, 0x488, 0x489, 0x48A, 0x48B, 0x48C,
-+      0x48D, 0x48E, 0x48F, 0x490, 0x491,
++      0x3BB, 0x3BD, 0x407, 0x46E, 0x46F, 0x470, 0x471, 0x472, 0x473, 0x474, 0x475, 0x476,
++      0x477, 0x478, 0x479, 0x47A, 0x47B, 0x47C, 0x47D, 0x47E, 0x47F, 0x480, 0x481, 0x482,
++      0x483, 0x484, 0x485, 0x486, 0x487, 0x488, 0x489, 0x48A, 0x48B, 0x48C, 0x48D, 0x48E,
++      0x48F, 0x490, 0x491,
++    ];
++
++    /// <summary>Abilities only 2008 has: 2007-layout slot -> 2008 bits (GSPlayer *2008 fields).</summary>
++    public static readonly (int From, int Bits, int To, int ToBits)[] Mod2008 =
++    [
++      (0x3BF, 1, 0x3BC, 1), // HasGoodEye2008
++      (0x3C6, 2, 0x3C4, 2), // GoodOrPoorNightGame2008
 +    ];
 +
 +    /// <summary>2007 voice id runs (first, last, offset to 2008's id); other 2007 ids have no 2008 voice.</summary>
@@ -948,10 +1231,10 @@ index 0000000..1650bdb
 +}
 diff --git a/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
 new file mode 100644
-index 0000000..5f5f8cf
+index 0000000..eaf46f6
 --- /dev/null
 +++ b/PowerUp/PowerUp/GameSave/PowerPros2008/PowerPros2008Roster.cs
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,333 @@
 +﻿using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -1207,6 +1490,8 @@ index 0000000..5f5f8cf
 +          SetBits(to, field.From, field.Bits, value);
 +        }
 +        SetBits(to, VoiceBit, VoiceBits, (uint)Voice2007((int)GetBits(from, VoiceBit, VoiceBits)));
++        foreach (var field in PowerPros2008Fields.Mod2008)
++          SetBits(to, field.From, field.Bits, GetBits(from, field.To, field.ToBits));
 +        SetBits(to, FaceBit, FaceBits, (uint)Face2007((int)GetBits(from, FaceBit, FaceBits)));
 +        SetBits(to, SkinBit, SkinBits, (uint)Skin2007((int)GetBits(from, SkinBit, SkinBits)));
 +      }
@@ -1352,10 +1637,19 @@ index 42fd76a..68b2ffa 100644
      protected override string ParseKey(string keyString) => keyString.Replace("_"," ");
      protected override int ParseValue(string valueString) =>  int.Parse(valueString);
 diff --git a/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs b/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs
-index 091a11f..006586b 100644
+index 091a11f..affcdcf 100644
 --- a/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs
 +++ b/PowerUp/PowerUp/Mappers/Players/PlayerMapper.cs
-@@ -43,7 +43,8 @@ namespace PowerUp.Mappers.Players
+@@ -11,6 +11,8 @@ namespace PowerUp.Mappers.Players
+   {
+     public bool IsBase { get; set; }
+     public string? ImportSource { get; set; }
++    /// <summary>The save is MLB Power Pros 2008's roster (2008-only abilities are read too).</summary>
++    public bool PowerPros2008 { get; set; }
+ 
+     public static PlayerMappingParameters FromRosterImport(RosterImportParameters importParameters)
+       => new PlayerMappingParameters { IsBase = importParameters.IsBase, ImportSource = importParameters.ImportSource };
+@@ -43,7 +45,8 @@ namespace PowerUp.Mappers.Players
          SourceType = parameters.IsBase
            ? EntitySourceType.Base
            : EntitySourceType.Imported,
@@ -1365,3 +1659,37 @@ index 091a11f..006586b 100644
          LastName = gsPlayer.LastName!,
          FirstName = gsPlayer.FirstName!,
          SavedName = gsPlayer.SavedName!.Contains('*')
+@@ -88,7 +91,7 @@ namespace PowerUp.Mappers.Players
+         PositionCapabilities = PositionCapabilitiesMapper.GetPositionCapabilities(gsPlayer),
+         HitterAbilities = HitterAbilitiesMapper.GetHitterAbilities(gsPlayer),
+         PitcherAbilities = PitcherAbilitiesMapper.GetPitcherAbilities(gsPlayer),
+-        SpecialAbilities = SpecialAbilitiesMapper.GetSpecialAbilities(gsPlayer),
++        SpecialAbilities = SpecialAbilitiesMapper.GetSpecialAbilities(gsPlayer, parameters.PowerPros2008),
+       };
+     }
+ 
+diff --git a/PowerUp/PowerUp/Mappers/Players/SpecialAbilitiesMapper.cs b/PowerUp/PowerUp/Mappers/Players/SpecialAbilitiesMapper.cs
+index 26b5b64..dc807e4 100644
+--- a/PowerUp/PowerUp/Mappers/Players/SpecialAbilitiesMapper.cs
++++ b/PowerUp/PowerUp/Mappers/Players/SpecialAbilitiesMapper.cs
+@@ -5,11 +5,18 @@ namespace PowerUp.Mappers.Players
+ {
+   public static class SpecialAbilitiesMapper
+   {
+-    public static SpecialAbilities GetSpecialAbilities(IGSPlayer player)
++    /// <param name="powerPros2008">A 2008 import: also read 2008's Night Game and Gd Eye.</param>
++    public static SpecialAbilities GetSpecialAbilities(IGSPlayer player, bool powerPros2008 = false)
+     {
++      var general = GetGeneralSpecialAbilities(player);
++      if (powerPros2008 && player is GSPlayer gs)
++      {
++        general.NightGameAbility = (SpecialPositive_Negative)(gs.GoodOrPoorNightGame2008 ?? 0);
++        general.HasGoodEye = gs.HasGoodEye2008 ?? false;
++      }
+       return new SpecialAbilities
+       {
+-        General = GetGeneralSpecialAbilities(player),
++        General = general,
+         Hitter = GetHitterSpecialAbilities(player),
+         Pitcher = GetPitcherSpecialAbilities(player),
+       };
