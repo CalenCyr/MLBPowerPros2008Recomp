@@ -444,6 +444,21 @@ Verificado (14 de octubre de 2026):
 - **Tablas de texturas y paletas:** acaban con una entrada de 8 bytes a cero, en los 82 modelos de Coors Field. El juego las recorre hasta esa entrada: al copiarlas a otro sitio sin ella, las texturas con paleta del modelo salen blancas. Ampliar el array de texmaps o el de materiales (que usan su contador de la escena) funciona.
 - **Lista de texturas del `tbl`:** entradas {→ textura, → paleta, u32, u32}. Los dos u32 (`0xAC800`, `0xB2540`…) parecen direcciones de TMEM: texturas precargadas. Sin comprobar.
 
+**Lista de estadios del juego** (14 de octubre de 2026, por los datos del REL; para añadir estadios):
+- **Números de archivo:** el juego no guarda nombres de archivo. Pide las entradas de `project.bin` por número de registro: Coors Field = 75, su tabla = 76. Hay 4.681 registros, de los que 2.424 tienen nombre: quedan 2.256 libres para archivos nuevos.
+- **Tabla de estadios:** `ovl_main.rel` `+0x92A450` (en memoria `0x80E9F9D0`, sección 5). Son 40 entradas de 12 bytes: {u32 número del pack gráfico, u32 número del `tbl`, puntero a la raíz del `tbl` (`0x40000000 | posición`)}.
+  - El juego no busca la raíz del `tbl`: la lee de aquí. Un `tbl` reconstruido debe dejarla en el mismo sitio o actualizar esta tabla.
+  - **Orden:** el de los equipos de MLB por división: BAL, BOS, NYY, TB, TOR, CWS, CLE, DET, KC, MIN, LAA, OAK, SEA, TEX, ATL, FLA, NYM, PHI, WSH, CHC, CIN, HOU, MIL, PIT, STL, ARI, COL, LAD, SD, SF. Siguen `org01`–`org06`, `ml01`, `bullpen`, `bullpen2` y `season`.
+  - Justo después hay una vtable: la tabla no se puede alargar en su sitio.
+- **`0x80C7AF48`** (`GetStadiumFiles`, nombre propio): copia `tabla[(número − 1) × 12]` a su primer argumento. El número de estadio va de 1 a 40 y no se comprueba. Es la única referencia a la tabla en el código.
+- **Imágenes del menú de estadios:** `ovl_main.rel` `+0x7C8814` (`0x80D3DD94`) guarda 37 números de archivo `env_stadium_menu01`…`36` y `100`. Lo usan funciones de `0x805C6DDC` a `0x805C8660` (pantalla de elección de estadio), con la base en `0x80D3DD90`.
+- **`env_order_stadiumNN`:** `ovl_main.rel` `+0x7DCD0C` (`0x80D5228C`), entradas de 20 bytes {número de archivo, cuatro punteros dentro del pack}. Lo usan `0x80672F20` a `0x8067312C`.
+- **Para un estadio 37 seleccionable hace falta, por lo menos:**
+  - poder añadir archivos nuevos a `project.bin`;
+  - sustituir `GetStadiumFiles` y las funciones que leen las otras dos tablas por versiones nativas con entradas extra;
+  - encontrar en la pantalla de elección el número de estadios (36 más «aleatorio»);
+  - revisar si hay más tablas por estadio y si las partidas guardan el número de estadio.
+
 **Pendiente:**
 - los flags de la colocación (`0x500`, `0x1700`, `0x40000000`…);
 - qué elige la mezcla aditiva de las piezas `*_ADD_*`;
