@@ -35,8 +35,14 @@ foreach ($key in @('WIICOMPILED_SKIP_LAUNCHER','WIICOMPILED_BENCH','WIICOMPILED_
 }
 $info.Environment['WIICOMPILED_LAUNCHER_PAGE'] = 'controls'
 $info.Environment['WIICOMPILED_LAUNCHER_PROBE'] = '1'
-foreach ($pass in 1..2) {
+# Passes: controls page, reload in a new process, then pad navigation of the settings list.
+foreach ($pass in 1..3) {
   if ($pass -eq 2) { $info.Environment['WIICOMPILED_LAUNCHER_PROBE_RELOAD'] = '1' }
+  if ($pass -eq 3) {
+    $info.Environment.Remove('WIICOMPILED_LAUNCHER_PROBE_RELOAD') | Out-Null
+    $info.Environment['WIICOMPILED_LAUNCHER_PAGE'] = 'settings'
+    $info.Environment['WIICOMPILED_LAUNCHER_PROBE'] = 'nav'
+  }
   $process = [System.Diagnostics.Process]::Start($info)
   $stdout = $process.StandardOutput.ReadToEndAsync()
   $stderr = $process.StandardError.ReadToEndAsync()
@@ -46,10 +52,10 @@ foreach ($pass in 1..2) {
     $err = $stderr.GetAwaiter().GetResult()
     Set-Content -LiteralPath (Join-Path $probe "stdout-$pass.log") -Value $out
     Set-Content -LiteralPath (Join-Path $probe "stderr-$pass.log") -Value $err
-    $err -split "`r?`n" | Where-Object { $_ -like 'launcher-probe*' } | Write-Output
-    if ($process.ExitCode -ne 0 -or $err -notmatch 'launcher-probe COMPLETE') {
+    $err -split "`r?`n" | Where-Object { $_ -like 'launcher-probe*' -or $_ -like 'launcher-nav*' } | Write-Output
+    if ($process.ExitCode -ne 0 -or $err -notmatch 'launcher-(probe|nav) COMPLETE') {
         throw "Launcher integration test failed (exit $($process.ExitCode)); logs: $probe"
     }
   } finally { $process.Dispose() }
 }
-Write-Output "Launcher integration and reload passed. Logs: $probe"
+Write-Output "Launcher integration, reload and pad navigation passed. Logs: $probe"

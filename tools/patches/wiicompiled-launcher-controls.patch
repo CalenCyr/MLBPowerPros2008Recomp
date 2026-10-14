@@ -141,6 +141,20 @@ index 1ddfa2b..f2fc02b 100644
  static constexpr std::array<std::pair<PADButton, std::string_view>, PAD_BUTTON_COUNT> skButtonNames = {{
      {PAD_BUTTON_LEFT, "Left"sv},
      {PAD_BUTTON_RIGHT, "Right"sv},
+diff --git a/aurora-main/lib/imgui.cpp b/aurora-main/lib/imgui.cpp
+index 57d426f..d1bbead 100644
+--- a/aurora-main/lib/imgui.cpp
++++ b/aurora-main/lib/imgui.cpp
+@@ -59,6 +59,9 @@ void initialize() noexcept {
+   ZoneScoped;
+   SDL_Renderer* renderer = window::get_sdl_renderer();
+   ImGui_ImplSDL3_InitForSDLRenderer(window::get_sdl_window(), renderer);
++  // Menus answer to every connected pad, not only the first one SDL lists (DS4Windows
++  // exposes the physical pad and its virtual Xbox twin).
++  ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
+   g_useSdlRenderer = renderer != nullptr;
+   if (g_useSdlRenderer) {
+     ImGui_ImplSDLRenderer3_Init(renderer);
 diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
 index a4bc27b..06c2430 100644
 --- a/runtime/CMakeLists.txt
@@ -306,7 +320,7 @@ index 631eb3a..ac00f76 100644
  void HandleEvents(const AuroraEvent* events) noexcept;
  void Draw() noexcept;
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
-index 37e80ca..adfa8c3 100644
+index 37e80ca..2305661 100644
 --- a/runtime/src/launcher.cpp
 +++ b/runtime/src/launcher.cpp
 @@ -5,6 +5,10 @@
@@ -320,9 +334,45 @@ index 37e80ca..adfa8c3 100644
  #include "mods.h"
  #include "power_pros_ui.h"
  
-@@ -122,8 +126,12 @@ bool Accept() {
-     return Pressed({SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER, SDL_SCANCODE_SPACE, SDL_SCANCODE_J},
-                    {ImGuiKey_GamepadFaceDown, ImGuiKey_GamepadStart});
+@@ -17,6 +21,8 @@
+ #include <imgui_internal.h>
+ #include <SDL3/SDL_filesystem.h>
+ #include <SDL3/SDL_keyboard.h>
++#include <SDL3/SDL_hints.h>
++#include <SDL3/SDL_joystick.h>
+ #include <SDL3/SDL_surface.h>
+ #include <aurora/imgui.h>
+ 
+@@ -83,7 +89,7 @@ char** g_argv = nullptr;
+ bool g_keyboardEnabled = false;
+ bool g_padEnabled = false;
+ 
+-bool KeyPressed(SDL_Scancode key) {
++bool KeyPressed(SDL_Scancode key, bool repeat = true) {
+     struct Repeat { double down = -1.0, next = 0.0; };
+     static std::array<Repeat, SDL_SCANCODE_COUNT> state;
+     const double now = ImGui::GetTime();
+@@ -97,7 +103,7 @@ bool KeyPressed(SDL_Scancode key) {
+         r.next = now + 0.4;
+         return true;
+     }
+-    if (now < r.next) return false;
++    if (!repeat || now < r.next) return false;
+     r.next = now + 0.09;
+     return true;
+ }
+@@ -118,12 +124,19 @@ bool Left() {
+ bool Right() {
+     return Pressed({SDL_SCANCODE_RIGHT, SDL_SCANCODE_D}, {ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight});
+ }
++// Accept never repeats either: holding Cross to enter a screen must not also act inside it.
+ bool Accept() {
+-    return Pressed({SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER, SDL_SCANCODE_SPACE, SDL_SCANCODE_J},
+-                   {ImGuiKey_GamepadFaceDown, ImGuiKey_GamepadStart});
++    bool hit = false;
++    for (SDL_Scancode key : {SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER, SDL_SCANCODE_SPACE, SDL_SCANCODE_J})
++        hit = KeyPressed(key, false) || hit;
++    return hit || (g_padEnabled && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)));
  }
 +// Back never repeats and only counts the frame the key goes down: the press that
 +// closes a popup or cancels a capture must not also close the page under it.
@@ -334,7 +384,7 @@ index 37e80ca..adfa8c3 100644
  }
  
  bool Hovered(ImVec2 a, ImVec2 b) {
-@@ -516,10 +524,7 @@ Result Run(int argc, char** argv) {
+@@ -516,10 +529,7 @@ Result Run(int argc, char** argv) {
      std::vector<Tab> tabs{
          {"VIDEO", {api, display, resolution, aspect, fps}},
          {"AUDIO", {volume, mute}},
@@ -346,7 +396,7 @@ index 37e80ca..adfa8c3 100644
          {"INTERFAZ", {launcherOption}},
      };
      tabs.push_back(std::move(modsTab));
-@@ -568,6 +573,11 @@ Result Run(int argc, char** argv) {
+@@ -568,6 +578,11 @@ Result Run(int argc, char** argv) {
      bool discReady = false;
      const std::string gameLine = GameStatusLine(discReady);
      LoadFonts();
@@ -358,7 +408,7 @@ index 37e80ca..adfa8c3 100644
      const Art art = LoadArt();
  
      enum class Choice { None, Play, Quit } choice = Choice::None;
-@@ -598,59 +608,30 @@ Result Run(int argc, char** argv) {
+@@ -598,60 +613,36 @@ Result Run(int argc, char** argv) {
  
      constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
      int menu = 0;
@@ -409,6 +459,11 @@ index 37e80ca..adfa8c3 100644
 -        if (Pressed({SDL_SCANCODE_E, SDL_SCANCODE_TAB}, {ImGuiKey_GamepadR1})) tab = first + (tab - first + 1) % tabCount, row = 0;
 -        return Back();
 -    };
++    static const bool navProbe = [] {
++        const char* value = std::getenv("WIICOMPILED_LAUNCHER_PROBE");
++        return value && std::strcmp(value, "nav") == 0 && RuntimeConfigFile::PortableRootDirectory().has_value();
++    }();
++#include "../tests/launcher_nav_probe.inc"
      using Clock = std::chrono::steady_clock;
      const auto start = Clock::now();
      auto nextFrame = start;
@@ -422,14 +477,16 @@ index 37e80ca..adfa8c3 100644
              continue;
          }
          aurora_wait_for_frame_worker();
+-        g_padEnabled = SDL_GetKeyboardFocus() != nullptr;
 +        ImGui::GetIO().ConfigFlags = savedNavFlags | ImGuiConfigFlags_NavEnableKeyboard;
 +        if (launcher_controls::Capturing())
 +            ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
 +        PADBlockInput(false); // no guest is running during the launcher
-         g_padEnabled = SDL_GetKeyboardFocus() != nullptr;
++        g_padEnabled = SDL_GetKeyboardFocus() != nullptr || navProbe;
          g_keyboardEnabled = g_padEnabled || unfocusedInput;
  
-@@ -661,7 +642,9 @@ Result Run(int argc, char** argv) {
+         const ImVec2 size = ImGui::GetMainViewport()->Size;
+@@ -661,7 +652,9 @@ Result Run(int argc, char** argv) {
          const float t = std::chrono::duration<float>(Clock::now() - start).count();
          ImDrawList* dl = ImGui::GetBackgroundDrawList();
          const bool click = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -440,7 +497,7 @@ index 37e80ca..adfa8c3 100644
              // MoonInning art: the backdrops come from launcher/*.png (image pixels, 1672x941, fitted
              // to the window); everything that changes is drawn on top in the art's own colours.
              const float s = std::min(w / kArtW, h / kArtH);
-@@ -751,6 +734,10 @@ Result Run(int argc, char** argv) {
+@@ -751,6 +744,10 @@ Result Run(int argc, char** argv) {
                      const float nw = TextSize(g_text, 22 * s, note).x;
                      ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - nw, at(0, 782).y), Rgba(255, 224, 110), note);
                  }
@@ -451,7 +508,7 @@ index 37e80ca..adfa8c3 100644
                  const int n = static_cast<int>(kArtButtons.size());
                  if (Up() || Left()) menu = (menu + n - 1) % n;
                  if (Down() || Right()) menu = (menu + 1) % n;
-@@ -760,108 +747,6 @@ Result Run(int argc, char** argv) {
+@@ -760,108 +757,6 @@ Result Run(int argc, char** argv) {
                      if (menu == 2) settingsOpen = true, modsOnly = true, tab = kModsTab, row = 0;
                      if (menu == 3) choice = Choice::Quit;
                  }
@@ -560,7 +617,7 @@ index 37e80ca..adfa8c3 100644
              }
          } else {
              DrawBackground(dl, w, h, u, t, g_title);
-@@ -960,8 +845,8 @@ Result Run(int argc, char** argv) {
+@@ -960,8 +855,8 @@ Result Run(int argc, char** argv) {
              // Button hints.
              float hx = w * 0.06f;
              const float hy = h - 50 * u;
@@ -571,7 +628,7 @@ index 37e80ca..adfa8c3 100644
              Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
  
              if (!settingsOpen) {
-@@ -973,132 +858,10 @@ Result Run(int argc, char** argv) {
+@@ -973,132 +868,10 @@ Result Run(int argc, char** argv) {
                      if (menu == 1) settingsOpen = true, row = 0;
                      if (menu == 2) choice = Choice::Quit;
                  }
@@ -701,11 +758,11 @@ index 37e80ca..adfa8c3 100644
              }
          }
  
-+        if (launcher_controls::ProbeTick()) choice = Choice::Quit;
++        if (launcher_controls::ProbeTick() || (navProbe && navProbeTick())) choice = Choice::Quit;
          aurora_set_present_schedule(0, 0);
          aurora_end_frame();
          nextFrame += std::chrono::microseconds(16667);
-@@ -1106,6 +869,8 @@ Result Run(int argc, char** argv) {
+@@ -1106,6 +879,8 @@ Result Run(int argc, char** argv) {
          if (Clock::now() > nextFrame + std::chrono::milliseconds(100)) nextFrame = Clock::now();
      }
  
@@ -716,10 +773,10 @@ index 37e80ca..adfa8c3 100644
      }
 diff --git a/runtime/src/launcher_controls.cpp b/runtime/src/launcher_controls.cpp
 new file mode 100644
-index 0000000..83c0fb4
+index 0000000..7faa9a2
 --- /dev/null
 +++ b/runtime/src/launcher_controls.cpp
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,500 @@
 +#include "launcher_controls.h"
 +#include "launcher_visuals.h"
 +#include "controller_button_names.h"
@@ -730,6 +787,7 @@ index 0000000..83c0fb4
 +#include <aurora/aurora.h>
 +#include <dolphin/pad.h>
 +#include <imgui.h>
++#include <imgui_internal.h>
 +#include <SDL3/SDL_events.h>
 +#include <SDL3/SDL_gamepad.h>
 +#include <SDL3/SDL_keyboard.h>
@@ -1221,10 +1279,10 @@ index 0000000..83c0fb4
 +}
 diff --git a/runtime/src/launcher_settings.inc b/runtime/src/launcher_settings.inc
 new file mode 100644
-index 0000000..a73657e
+index 0000000..524ffd3
 --- /dev/null
 +++ b/runtime/src/launcher_settings.inc
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,210 @@
 +// Included in launcher::Run: the settings model and callbacks remain shared
 +// with the normal launch path. ImGui containers clip and scroll their content.
 +auto drawSettings = [&] {
@@ -1277,7 +1335,10 @@ index 0000000..a73657e
 +    ImGui::PushStyleColor(ImGuiCol_TextDisabled,ImVec4(.70f,.84f,1,1));
 +    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.70f,.85f,1,.85f));
 +    ImGui::PushFont(g_menu);
-+    ImGui::Begin("Ajustes del launcher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
++    // Settings lists move row by row with the pad/keys (below); ImGui's focus navigation is only
++    // used by the controls grid. NoNavInputs keeps ImGui reading the pad without moving focus.
++    const ImGuiWindowFlags listNav = tab != 2 ? ImGuiWindowFlags_NoNavInputs : 0;
++    ImGui::Begin("Ajustes del launcher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | listNav);
 +    ImGui::SetWindowFontScale(scale);
 +    if (framed) {
 +        const ImVec2 closeA=at(1465,120),closeB=at(1548,200);
@@ -1324,8 +1385,8 @@ index 0000000..a73657e
 +        scroll = row / pageRows * pageRows;
 +        const int shown = std::min(pageRows, count - scroll);
 +        const float listWidth = wide ? available * .53f : available;
-+        ImGui::BeginChild("Opciones", ImVec2(listWidth, height));
-+        ImGui::BeginChild("Lista", ImVec2(0, height - 56 * scale));
++        ImGui::BeginChild("Opciones", ImVec2(listWidth, height), 0, listNav);
++        ImGui::BeginChild("Lista", ImVec2(0, height - 56 * scale), 0, listNav);
 +        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5 * scale);  // room for the first pill's rim
 +        for (int i = scroll; i < scroll + shown; ++i) {
 +            Option& opt = current.options[i];
@@ -1333,15 +1394,15 @@ index 0000000..a73657e
 +            const float width = ImGui::GetContentRegionAvail().x;
 +            ImGui::BeginGroup();
 +            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width * .51f);
-+            ImGui::TextUnformatted(opt.label);
++            if (i == row) ImGui::TextColored(ImVec4(1, .82f, .4f, 1), "%s", opt.label);
++            else ImGui::TextUnformatted(opt.label);
 +            ImGui::PopTextWrapPos();
 +            ImGui::EndGroup();
 +            ImGui::SameLine(width * .55f);
-+            if (launcher_visuals::PillButton(opt.choices[opt.value].c_str(), ImVec2(width * .45f, 46 * scale))) { row = i; change(tab, i, 1); }
-+            if (ImGui::IsItemFocused() || ImGui::IsItemHovered()) row = i;
++            if (launcher_visuals::PillButton(opt.choices[opt.value].c_str(), ImVec2(width * .45f, 46 * scale), i == row)) { row = i; change(tab, i, 1); }
++            // The mouse only takes the selection when it moves, so a resting cursor does not fight the pad.
++            if (ImGui::IsItemHovered() && MouseMoved()) row = i;
 +            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { row = i; change(tab, i, -1); }
-+            if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) change(tab, i, -1);
-+            if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) change(tab, i, -1);
 +            ImGui::Separator();
 +            ImGui::PopID();
 +        }
@@ -1370,7 +1431,7 @@ index 0000000..a73657e
 +        ImGui::EndChild();
 +        if (wide) {
 +            ImGui::SameLine();
-+            ImGui::BeginChild("Ayuda", ImVec2(0, height), ImGuiChildFlags_Borders);
++            ImGui::BeginChild("Ayuda", ImVec2(0, height), ImGuiChildFlags_Borders, listNav);
 +            ImGui::PushTextWrapPos(0);
 +            if (count) {
 +                const auto& selected = current.options[row];
@@ -1391,9 +1452,19 @@ index 0000000..a73657e
 +                ImGui::PushTextWrapPos(0);
 +                ImGui::TextUnformatted(current.options[row].help);
 +                ImGui::PopTextWrapPos(); ImGui::EndChild();
-+                if (launcher_visuals::PillButton("Cerrar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
++                if (launcher_visuals::PillButton("Cerrar") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
++                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
++                    ImGui::CloseCurrentPopup();
 +                ImGui::EndPopup();
 +            }
++        }
++        // Pad/keyboard: up/down choose the row, left/right or Cross change it. The page follows the row.
++        if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) && !popupProtected && count) {
++            if (Up()) row = std::max(0, row - 1);
++            if (Down()) row = std::min(count - 1, row + 1);
++            if (Left()) change(tab, row, -1);
++            if (Right() || Accept()) change(tab, row, 1);
++            if (!wide && Pressed({SDL_SCANCODE_I}, {ImGuiKey_GamepadFaceUp})) ImGui::OpenPopup("Información");
 +        }
 +        if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
 +            if (KeyPressed(SDL_SCANCODE_PAGEUP) || ImGui::IsKeyPressed(ImGuiKey_GamepadL2)) row = std::max(0, scroll - pageRows);
@@ -1403,7 +1474,14 @@ index 0000000..a73657e
 +    ImGui::Separator();
 +    if (launcher_visuals::PillButton("Volver")) settingsOpen = false;
 +    ImGui::SameLine();
-+    ImGui::TextWrapped("%s: pestaña · %s: volver · %s", launcher_controls::TabPrompt(), launcher_controls::BackPrompt(),launcher_controls::DeviceLabel());
++    const bool wideList = available >= 800 * scale;
++    if (tab == 2)
++        ImGui::TextWrapped("Cruceta: moverse · %s: asignar · %s: pestaña · %s: volver", launcher_controls::AcceptPrompt(),
++                           launcher_controls::TabPrompt(), launcher_controls::BackPrompt());
++    else
++        ImGui::TextWrapped("Arriba/abajo: elegir · Izquierda/derecha o %s: cambiar · %s: pestaña · %s: volver%s",
++                           launcher_controls::AcceptPrompt(), launcher_controls::TabPrompt(), launcher_controls::BackPrompt(),
++                           wideList ? "" : launcher_controls::UsingGamepad() ? (launcher_controls::PlayStationPrompts() ? " · Triángulo: info" : " · Y: info") : " · I: info");
 +    const bool popupNow = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
 +    if (!controlsBusy && !popupProtected && !popupNow) {
 +        if (Pressed({SDL_SCANCODE_Q}, {ImGuiKey_GamepadL1})) { tab = firstTab+(tab-firstTab+tabCount-1)%tabCount; row = 0; }
@@ -1436,10 +1514,10 @@ index fa4cfa2..5f59b56 100644
          return;
 diff --git a/runtime/tests/launcher_controls_probe.inc b/runtime/tests/launcher_controls_probe.inc
 new file mode 100644
-index 0000000..cba7c72
+index 0000000..9a9b90d
 --- /dev/null
 +++ b/runtime/tests/launcher_controls_probe.inc
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,145 @@
 +// Runs against the real SDL event queue and PADRead, without starting guest code.
 +// Set WIICOMPILED_LAUNCHER_PROBE=1 in an isolated portable test directory.
 +bool ProbeTick() {
@@ -1452,6 +1530,13 @@ index 0000000..cba7c72
 +    static int frame = 0;
 +    static SDL_JoystickID id = 0;
 +    static SDL_Joystick* joystick = nullptr;
++    // Position and button go in the same frame: when the window has focus the SDL backend feeds
++    // the real cursor every frame, and ImGui applies a queued position+button pair together.
++    static ImVec4 target{};
++    const auto click = [](bool down) {
++        ImGui::GetIO().AddMousePosEvent((target.x + target.z) * .5f, (target.y + target.w) * .5f);
++        ImGui::GetIO().AddMouseButtonEvent(0, down);
++    };
 +    const auto key = [](SDL_Scancode code) {
 +        SDL_Event e{}; e.type = SDL_EVENT_KEY_DOWN; e.key.scancode = code; e.key.down = true; SDL_PushEvent(&e);
 +    };
@@ -1485,11 +1570,11 @@ index 0000000..cba7c72
 +            if (pad && SDL_GetGamepadID(pad) == id) { PADSetPortForIndex(i, 0); assigned = true; }
 +        }
 +        require(assigned, "assign virtual pad to player one");
-+        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true);
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_LEFT_STICK, true);  // L3: ImGui ignores it
 +    }
 +    if (frame == 25) {
 +        require(UsingGamepad() && PlayStationPrompts() && std::string(AcceptPrompt()) == "Cruz", "PlayStation prompts after pad input");
-+        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, false); key(SDL_SCANCODE_F9);
++        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_LEFT_STICK, false); key(SDL_SCANCODE_F9);
 +    }
 +    if (frame == 35) {
 +        require(!UsingGamepad() && std::string(AcceptPrompt()) == "Enter", "keyboard prompts after keyboard input");
@@ -1517,13 +1602,16 @@ index 0000000..cba7c72
 +        int version = 0; float main = 0, sub = 0; saved >> version >> main >> sub;
 +        require(version == 1 && main == .5f && sub == 2.f, "response settings persist");
 +        SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 0);
++    }
++    if (frame == 70) {
++        // The stick also moved ImGui's focus (and the scroll); take the hit box once it rests.
 +        const auto r=bindingRects[0];
 +        require(r.z>r.x && r.w>r.y,"binding rows expose hitboxes");
-+        ImGui::GetIO().AddMousePosEvent((r.x+r.z)*.5f,(r.y+r.w)*.5f);
++        target = r;
 +    }
-+    if (frame==66) ImGui::GetIO().AddMouseButtonEvent(0,true);
-+    if (frame==67) ImGui::GetIO().AddMouseButtonEvent(0,false);
-+    if (frame==75) require(capture.kind==CaptureKind::Button && capture.row==0,"clicking a binding captures in place");
++    if (frame==71) click(true);
++    if (frame==72) click(false);
++    if (frame==78) require(capture.kind==CaptureKind::Button && capture.row==0,"clicking a binding captures in place");
 +    if (frame == 85) SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_EAST, true);
 +    if (frame == 95) {
 +        require(capture.kind == CaptureKind::None, "button capture completes from SDL event");
@@ -1532,10 +1620,10 @@ index 0000000..cba7c72
 +        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_EAST, false);
 +        const auto r=axisRects[PAD_AXIS_LEFT_Y_POS];
 +        require(r.z>r.x && r.w>r.y,"stick group exposes direction rows");
-+        ImGui::GetIO().AddMousePosEvent((r.x+r.z)*.5f,(r.y+r.w)*.5f);
++        target = r;
 +    }
-+    if (frame==97) ImGui::GetIO().AddMouseButtonEvent(0,true);
-+    if (frame==98) ImGui::GetIO().AddMouseButtonEvent(0,false);
++    if (frame==97) click(true);
++    if (frame==98) click(false);
 +    if (frame==101) {
 +        require(capture.kind==CaptureKind::Axis && capture.row==PAD_AXIS_LEFT_Y_POS && !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId),
 +                "clicking a stick direction captures in place");
@@ -1547,10 +1635,10 @@ index 0000000..cba7c72
 +        require(states[0].stickY > 100, "a button can drive a stick direction");
 +        SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_NORTH, false);
 +        const auto r=bindingRects[0];
-+        ImGui::GetIO().AddMousePosEvent((r.x+r.z)*.5f,(r.y+r.w)*.5f);
++        target = r;
 +    }
-+    if (frame==113) ImGui::GetIO().AddMouseButtonEvent(0,true);
-+    if (frame==114) ImGui::GetIO().AddMouseButtonEvent(0,false);
++    if (frame==113) click(true);
++    if (frame==114) click(false);
 +    if (frame==118) {
 +        require(capture.kind==CaptureKind::Button, "second capture starts");
 +        SDL_Event e{}; e.type = SDL_EVENT_KEY_DOWN; e.key.scancode = SDL_SCANCODE_ESCAPE; e.key.down = true; SDL_PushEvent(&e);
@@ -1575,6 +1663,64 @@ index 0000000..cba7c72
 +    ++frame;
 +    return false;
 +}
+diff --git a/runtime/tests/launcher_nav_probe.inc b/runtime/tests/launcher_nav_probe.inc
+new file mode 100644
+index 0000000..3311b8f
+--- /dev/null
++++ b/runtime/tests/launcher_nav_probe.inc
+@@ -0,0 +1,52 @@
++// Included in launcher::Run. WIICOMPILED_LAUNCHER_PROBE=nav (with WIICOMPILED_LAUNCHER_PAGE=settings,
++// in an isolated portable directory) drives the settings list with an SDL virtual pad: rows move
++// one at a time, left/right and Cross change the row, a held Cross does not repeat, R1 changes tab.
++auto navProbeTick = [&]() -> bool {
++    static int frame = 0;
++    static SDL_JoystickID id = 0;
++    static SDL_Joystick* joystick = nullptr;
++    static int start = 0, choices = 1;
++    const auto require = [](bool ok, const char* label) {
++        if (!ok) { std::fprintf(stderr, "launcher-nav FAILED: %s\n", label); std::fflush(stderr); std::_Exit(2); }
++        std::fprintf(stderr, "launcher-nav PASS: %s\n", label);
++    };
++    const auto button = [&](SDL_GamepadButton b, bool down) { SDL_SetJoystickVirtualButton(joystick, b, down); };
++    if (frame == 0) {
++        require(RuntimeConfigFile::PortableRootDirectory().has_value() && settingsOpen && tab == 0, "isolated settings page");
++        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++        SDL_VirtualJoystickDesc desc{}; SDL_INIT_INTERFACE(&desc);
++        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD; desc.vendor_id = 0x054c; desc.product_id = 0x0ce6;
++        desc.naxes = SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
++        desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
++        desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1; desc.name = "Launcher nav probe";
++        id = SDL_AttachVirtualJoystick(&desc);
++        joystick = SDL_OpenJoystick(id);
++        require(joystick != nullptr, "attach virtual pad");
++    }
++    if (frame == 20 || frame == 30) button(SDL_GAMEPAD_BUTTON_DPAD_DOWN, true);
++    if (frame == 24 || frame == 34) button(SDL_GAMEPAD_BUTTON_DPAD_DOWN, false);
++    if (frame == 44) {
++        require(row == 2, "down moves one row per press");
++        start = option(0, 2).value; choices = int(option(0, 2).choices.size());
++        button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, true);
++    }
++    if (frame == 48) button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, false);
++    if (frame == 56) {
++        require(option(0, 2).value == (start + 1) % choices, "right changes the selected row");
++        button(SDL_GAMEPAD_BUTTON_SOUTH, true);
++    }
++    if (frame == 104) {
++        require(option(0, 2).value == (start + 2) % choices, "held Cross changes once");
++        button(SDL_GAMEPAD_BUTTON_SOUTH, false);
++    }
++    if (frame == 110) button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, true);
++    if (frame == 114) button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, false);
++    if (frame == 124) {
++        require(settingsOpen && tab == 1 && row == 0, "R1 moves to the next tab");
++        SDL_CloseJoystick(joystick); SDL_DetachVirtualJoystick(id);
++        std::fprintf(stderr, "launcher-nav COMPLETE\n"); std::fflush(stderr);
++        return true;
++    }
++    ++frame;
++    return false;
++};
 diff --git a/runtime/tests/stick_response_tests.cpp b/runtime/tests/stick_response_tests.cpp
 new file mode 100644
 index 0000000..6f43734

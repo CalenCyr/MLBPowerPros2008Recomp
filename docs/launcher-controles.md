@@ -6,6 +6,15 @@ La build local conserva el fondo, los colores y los botones brillantes del launc
 
 El panel de ajustes usa el marco dibujado del fondo solo cuando la ventana tiene una proporción cercana a 16:9. Con otras proporciones (ventanas estrechas, altas o 4:3) el panel ocupa la ventana sobre el fondo desenfocado, en lugar de quedar encajonado. Las listas largas se desplazan y la paginación se recalcula al cambiar el tamaño. Las ventanas emergentes se centran al abrirse.
 
+## Uso con mando
+
+- **Menú principal:** cruceta o stick para elegir, Cruz/A para entrar.
+- **Listas de ajustes (Vídeo, Audio, Interfaz, Mods):** arriba/abajo eligen la fila (resaltada en naranja); izquierda/derecha o Cruz cambian su valor; L1/R1 cambian de pestaña; L2/R2 pasan de página; Círculo/B vuelve. En ventanas estrechas, Triángulo/Y abre la explicación del ajuste. La barra inferior muestra estas teclas.
+- **Controles:** la cruceta mueve el foco por la cuadrícula; Cruz asigna; L1/R1 y Círculo igual que arriba.
+- Aceptar y Volver no se repiten al mantenerlos, así que entrar en una pantalla con Cruz no cambia también el primer ajuste.
+- El launcher escucha todos los mandos conectados, no solo el primero que lista SDL (DS4Windows expone el mando físico y su gemelo Xbox virtual).
+- Con teclado: flechas o WASD, Enter para cambiar, Q/E para pestañas, Esc para volver.
+
 ## Controles (estilo Dolphin)
 
 `Ajustes > Controles` es una sola pantalla con grupos, como el diálogo de mando de GameCube de Dolphin:
@@ -40,7 +49,8 @@ No se cambia el formato binario de los mapeos existentes. Una dirección de stic
 - dirección de stick asignada a un botón;
 - cancelación con Esc;
 - desconexión del mando;
-- lectura de los ajustes en un proceso nuevo.
+- lectura de los ajustes en un proceso nuevo;
+- en una tercera pasada, la lista de ajustes con el mando: una fila por pulsación, cambiar con derecha, Cruz mantenida que cambia una sola vez y R1 para la siguiente pestaña.
 
 No inicia una partida ni modifica los ajustes de la instalación del usuario.
 
