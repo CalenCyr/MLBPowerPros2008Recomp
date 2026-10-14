@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
+#include "capture.h"
 #include "catalog.h"
 #include "categories.h"
 #include "config.h"
@@ -367,6 +368,23 @@ void TestTransfer(const std::filesystem::path& temp) {
     CHECK(good == 2 && unknown == 1 && unnamed == 1 && duplicate == 1);
     CHECK(FindReplacements(modRoot).count(ReplacementName(any)) == 1);
 }
+void TestCapture(const std::filesystem::path& temp) {
+    const auto dumps = temp / "texture_dumps";
+    const auto captures = temp / "captures-test";
+    std::filesystem::create_directories(dumps);
+    std::ofstream(dumps / "tex1_8x8_0000000000000001_5.dds") << "old";   // existed before the capture
+    Capture cap;
+    cap.SeedForTest(dumps);                                                // records "before" without a process
+    std::ofstream(dumps / "tex1_8x8_0000000000000002_5.dds") << "new";
+    auto [n, files] = cap.Collect(captures);
+    CHECK(n == 1 && files.size() == 1 && files[0].filename() == "tex1_8x8_0000000000000002_5.dds");
+    CHECK(std::filesystem::exists(dumps / "tex1_8x8_0000000000000001_5.dds"));
+    Capture empty;
+    empty.SeedForTest(temp / "no-existe");                                 // Review Focus 5
+    CHECK(empty.Collect(captures).first == 0);
+    const auto sessions = LoadSessions(captures);
+    CHECK(sessions.size() == 1 && sessions[0].first == 1 && sessions[0].second.size() == 1);
+}
 } // namespace
 
 int RunSelftest() {
@@ -381,6 +399,7 @@ int RunSelftest() {
     TestCatalog(temp);
     TestConfigAndMods(temp);
     TestTransfer(temp);
+    TestCapture(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
