@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
+#include "categories.h"
 #include "core.h"
 #include "gx.h"
 #include "images.h"
@@ -189,6 +190,29 @@ void TestImages(const std::filesystem::path& temp) {
     CHECK(CheckReplacementSize(256, 128, 1024, 1024) == SizeCheck::WrongAspect);
     CHECK(CheckReplacementSize(1024, 1024, 8192, 8192) == SizeCheck::TooLarge);
 }
+void TestCategories() {
+    auto is = [](std::string_view pack, const char* g, const char* s) {
+        const Category c = Categorize(pack);
+        return c.group == g && c.subgroup == s;
+    };
+    CHECK(is("stadium_nyy.pack", "Estadios", "Yankees (NYY)"));
+    CHECK(is("stadium_nyytbl.pack", "Estadios", "Yankees (NYY)"));
+    CHECK(is("stadium_oka.pack", "Estadios", "Athletics (OAK)"));
+    CHECK(is("stadium_sky_rainy.pack", "Estadios", "Cielos"));
+    CHECK(is("stadium_org03.pack", "Estadios", "Original 3"));
+    CHECK(is("PWM_mdl_uniform_MLB_CHC_00.pack", "Uniformes", "Cubs (CHC)"));
+    CHECK(is("PWM_mdl_uniform_AAA_ARI_AAA_01.pack", "Uniformes", "Diamondbacks (ARI) AAA"));
+    CHECK(is("env_player_card_03NYY_YANKEES.pack", "Cartas de jugador", "Yankees (NYY)"));
+    CHECK(is("env_mainmenu.pack", "Menús", "Menú principal"));
+    CHECK(is("env_shop.pack", "Menús", "shop"));
+    CHECK(is("env_teamlogo_aaa01.pack", "Logos", "teamlogo_aaa01"));
+    CHECK(is("mylife_bg_house01.pack", "MLB Life", "bg_house01"));
+    CHECK(is("season_main_bg.pack", "Temporada", "main_bg"));
+    CHECK(is("ScsBG__01.pack", "Success", "ScsBG__01"));
+    CHECK(is("PWM_mdl_face_001.pack", "Caras", "face_001"));
+    CHECK(is("raro.pack", "Otros", "raro"));
+    CHECK(GroupOrder().front() == "Menús");
+}
 } // namespace
 
 int RunSelftest() {
@@ -199,6 +223,7 @@ int RunSelftest() {
     TestPack();
     TestProjectAndNames(temp);
     TestImages(temp);
+    TestCategories();
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
