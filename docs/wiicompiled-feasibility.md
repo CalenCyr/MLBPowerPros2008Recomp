@@ -755,3 +755,14 @@ Auditoría de todo el runtime buscando direcciones, desplazamientos de `r13`/`r2
   - **Panorámico:** MLB lo soporta de forma nativa: consulta `SCGetAspectRatio` (`0x800D3374`) en 5 sitios, 2 de su REL, y en 16:9 los objetos redondos siguen redondos. Se mantiene 16:9 por defecto.
   - **Volúmenes:** música, efectos, interfaz y voces del menú en pantalla dependen del gestor de sonido de Mario Kart y no hacen nada en MLB. Para MLB se ocultan y queda solo el volumen general (el launcher ya solo ofrecía ese).
   - **Fotogramas:** MLB va a 60 FPS de forma nativa: cada fotograma de 16,7 ms trae su dibujado completo (346-357 llamadas, ninguno vacío) y la lógica va a velocidad normal; el runtime no interpola (`frame_interpolation_fps = 0`).
+
+## Opciones gráficas para equipos modestos (14 de octubre de 2026)
+
+Parche `wiicompiled-graphics-options` (aurora y runtime). Pestaña VIDEO del launcher; también en el menú F10.
+
+- **ESCALADO = AMD FSR 1.** Portado a WGSL desde el algoritmo publicado por AMD (MIT): EASU (12 muestras, dirección del borde, sin halos) y RCAS (nitidez adaptativa, 0,2 stops). Va en la presentación final, en el mismo punto que el escalador MetalFX de Mac, y solo actúa si la imagen del juego es más pequeña que la ventana. Comprobado en el menú a x1 en una ventana de 1920×1009: bordes de las letras claramente más nítidos que el escalado bilineal.
+- **FILTRADO DE TEXTURAS** (Original, 2×, 4×, 8×, 16×). Aurora solo aplicaba anisotrópico a las texturas que lo piden en GX (`GX_ANISO_2/4`); «Original» sigue así. Un nivel forzado se aplica a toda textura cuyos filtros lo permitan, como el «forzar anisotrópico» de Dolphin. En partido, la tierra y el césped vistos de lado ganan detalle.
+- **CALIDAD:** Baja (1x + FSR 1 + filtrado original), Media (2x + FSR 1 + 4×), Alta (según la ventana + 16×) o Personalizada.
+- **Medido en partido** (RX 5500, Direct3D 12, ventana 1920×1009): x1 2,88 ms de GPU (32 %); x1 + FSR 1 + 16× 4,92 ms (40 %); x2 + 16× 7,54 ms (51 %).
+- **Descartado: saltar fotogramas.** MLB hace unas 35 copias del EFB por fotograma (dibuja a texturas que usa después); no dibujar un fotograma dejaría esas texturas viejas o vacías. FSR 1 con resolución interna baja da el ahorro sin ese riesgo. Bajar a 30 FPS tampoco vale: la lógica del juego va a 60 Hz e iría a cámara lenta.
+- **Menú F10:** «Disable bloom» se ocultó fuera de Mario Kart Wii (apuntaba a código de Mario Kart que no existe en MLB).

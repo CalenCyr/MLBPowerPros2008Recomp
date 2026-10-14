@@ -1,0 +1,681 @@
+diff --git a/aurora-main/cmake/aurora_core.cmake b/aurora-main/cmake/aurora_core.cmake
+index 65ffaea..265b894 100644
+--- a/aurora-main/cmake/aurora_core.cmake
++++ b/aurora-main/cmake/aurora_core.cmake
+@@ -32,7 +32,7 @@ endif ()
+ 
+ if (AURORA_ENABLE_GX)
+     target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
+-    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/dawn/BackendBinding.cpp)
++    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/webgpu/fsr.cpp lib/dawn/BackendBinding.cpp)
+     target_link_libraries(aurora_core PRIVATE dawn::webgpu_dawn)
+     if (APPLE AND DAWN_ENABLE_METAL)
+         find_library(AURORA_METALFX_FRAMEWORK MetalFX)
+diff --git a/aurora-main/include/aurora/aurora.h b/aurora-main/include/aurora/aurora.h
+index 89aecbd..16362a8 100644
+--- a/aurora-main/include/aurora/aurora.h
++++ b/aurora-main/include/aurora/aurora.h
+@@ -186,6 +186,13 @@ typedef enum {
+ // when both source dimensions are smaller than the aspect-fitted output.
+ void aurora_set_metalfx_spatial(bool enabled);
+ bool aurora_get_metalfx_spatial();
++// AMD FSR 1 (EASU + RCAS) for the final image, at the next frame. Applies when the game image is
++// smaller than the window and MetalFX is not upscaling. sharpness: RCAS stops, 0 sharpest, 2 soft.
++void aurora_set_fsr(bool enabled, float sharpness);
++bool aurora_get_fsr();
++// 0 keeps each texture's own anisotropy; 2, 4, 8 or 16 forces it wherever the filters allow.
++void aurora_set_forced_anisotropy(uint16_t level);
++uint16_t aurora_get_forced_anisotropy();
+ bool aurora_is_metalfx_spatial_supported();
+ AuroraMetalFXStatus aurora_get_metalfx_status();
+ 
+diff --git a/aurora-main/lib/aurora.cpp b/aurora-main/lib/aurora.cpp
+index 4c194b7..982e202 100644
+--- a/aurora-main/lib/aurora.cpp
++++ b/aurora-main/lib/aurora.cpp
+@@ -9,6 +9,7 @@
+ #include "webgpu/gpu.hpp"
+ #include "webgpu/gpu_timing.hpp"
+ #include "webgpu/metalfx.hpp"
++#include "webgpu/fsr.hpp"
+ #include <webgpu/webgpu_cpp.h>
+ #endif
+ 
+@@ -63,6 +64,8 @@ std::atomic<AuroraFrameWorkerWaitCallback> g_frameWorkerWaitCallback{nullptr};
+ std::atomic<uint64_t> g_presentScheduleBaseNanos{0};
+ std::atomic<uint64_t> g_presentScheduleIntervalNanos{0};
+ std::atomic<bool> g_metalfxRequested{false};
++std::atomic<bool> g_fsrRequested{false};
++std::atomic<float> g_fsrSharpness{0.2f};
+ std::atomic<bool> g_metalfxSupported{false};
+ std::atomic<AuroraMetalFXStatus> g_metalfxStatus{AURORA_METALFX_DISABLED};
+ 
+@@ -1328,6 +1331,14 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
+   } else if (auto upscaled = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled)) {
+     presentBindGroup = std::move(upscaled);
+     newMetalFXOutput = presentBindGroup;
++  } else if (g_fsrRequested.load(std::memory_order_relaxed)) {
++    // Same reuse contract as MetalFX: interpolated snapshots of this frame present the cached output.
++    if (auto fsr = webgpu::fsr::upscale(encoder, presentSource, static_cast<uint32_t>(viewport.width),
++                                        static_cast<uint32_t>(viewport.height),
++                                        g_fsrSharpness.load(std::memory_order_relaxed))) {
++      presentBindGroup = std::move(fsr);
++      newMetalFXOutput = presentBindGroup;
++    }
+   }
+   {
+     const std::array attachments{
+@@ -1385,6 +1396,7 @@ void shutdown() noexcept {
+   g_metalfxRequested.store(false);
+   g_metalfxSupported.store(false);
+   g_metalfxStatus.store(AURORA_METALFX_DISABLED);
++  webgpu::fsr::shutdown();
+   imgui::shutdown();
+   gfx::shutdown();
+   webgpu::shutdown();
+@@ -2123,6 +2135,15 @@ void aurora_set_background_input(bool value) {
+ void aurora_set_display_mode(AuroraDisplayMode mode) { aurora::window::set_display_mode(mode); }
+ AuroraDisplayMode aurora_get_display_mode() { return aurora::window::get_display_mode(); }
+ void aurora_set_metalfx_spatial(bool enabled) { aurora::g_metalfxRequested.store(enabled); }
++void aurora_set_fsr(bool enabled, float sharpness) {
++  aurora::g_fsrSharpness.store(sharpness);
++  aurora::g_fsrRequested.store(enabled);
++}
++bool aurora_get_fsr() { return aurora::g_fsrRequested.load(); }
++void aurora_set_forced_anisotropy(uint16_t level) {
++  aurora::webgpu::g_forcedAnisotropy.store(level > 1 ? std::min<uint16_t>(level, 16) : 0);
++}
++uint16_t aurora_get_forced_anisotropy() { return aurora::webgpu::g_forcedAnisotropy.load(); }
+ bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
+ bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }
+ AuroraMetalFXStatus aurora_get_metalfx_status() { return aurora::g_metalfxStatus.load(); }
+diff --git a/aurora-main/lib/gx/gx.cpp b/aurora-main/lib/gx/gx.cpp
+index 56e8dd7..14bbd16 100644
+--- a/aurora-main/lib/gx/gx.cpp
++++ b/aurora-main/lib/gx/gx.cpp
+@@ -2153,6 +2153,9 @@ wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcep
+     maxLod = 0.f;
+   }
+   u16 maxAnisotropy = wgpu_aniso(texObj.max_aniso());
++  if (const u16 forced = aurora::webgpu::g_forcedAnisotropy.load(std::memory_order_relaxed); forced > 1) {
++    maxAnisotropy = forced;
++  }
+   if (maxAnisotropy > 1 && !supports_wgpu_aniso(magFilter, minFilter, mipFilter)) {
+     maxAnisotropy = 1;
+   }
+diff --git a/aurora-main/lib/webgpu/fsr.cpp b/aurora-main/lib/webgpu/fsr.cpp
+new file mode 100644
+index 0000000..3e3fe2c
+--- /dev/null
++++ b/aurora-main/lib/webgpu/fsr.cpp
+@@ -0,0 +1,303 @@
++#include "fsr.hpp"
++
++#include <array>
++#include <cmath>
++
++// FSR 1 = EASU (edge-adaptive spatial upsampling: 12 taps, a direction and length estimated from
++// luma, a lanczos-like lobe stretched along the edge, then clamped to the nearest 2x2 to avoid
++// ringing) followed by RCAS (robust contrast-adaptive sharpening on a 5-tap cross, limited so it
++// never creates new peaks). Both work on the perceptual (gamma) values the XFB copy holds.
++namespace aurora::webgpu::fsr {
++namespace {
++
++constexpr char kShader[] = R"""(
++struct Params {
++    in_size: vec2<f32>,
++    out_size: vec2<f32>,
++    sharp: f32,
++    pad0: f32,
++    pad1: f32,
++    pad2: f32,
++};
++
++@group(0) @binding(0) var src_sampler: sampler;
++@group(0) @binding(1) var src: texture_2d<f32>;
++@group(1) @binding(0) var<uniform> p: Params;
++
++@vertex
++fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
++    var pos = array<vec2<f32>, 3>(vec2(-1.0, 1.0), vec2(-1.0, -3.0), vec2(3.0, 1.0));
++    return vec4<f32>(pos[i], 0.0, 1.0);
++}
++
++fn tap(c: vec2<i32>) -> vec3<f32> {
++    let hi = vec2<i32>(p.in_size) - vec2<i32>(1);
++    return textureLoad(src, clamp(c, vec2<i32>(0), hi), 0).rgb;
++}
++
++fn luma(c: vec3<f32>) -> f32 {
++    return c.b * 0.5 + (c.r * 0.5 + c.g);
++}
++
++// Accumulates the direction and edge length seen from one of the four bilinear corners.
++fn set_f(dir: ptr<function, vec2<f32>>, len: ptr<function, f32>, w: f32,
++         la: f32, lb: f32, lc: f32, ld: f32, le: f32) {
++    let dc = ld - lc;
++    let cb = lc - lb;
++    var len_x = max(abs(dc), abs(cb));
++    len_x = select(1.0 / len_x, 0.0, len_x == 0.0);
++    let dir_x = ld - lb;
++    len_x = clamp(abs(dir_x) * len_x, 0.0, 1.0);
++    len_x = len_x * len_x;
++    let ec = le - lc;
++    let ca = lc - la;
++    var len_y = max(abs(ec), abs(ca));
++    len_y = select(1.0 / len_y, 0.0, len_y == 0.0);
++    let dir_y = le - la;
++    len_y = clamp(abs(dir_y) * len_y, 0.0, 1.0);
++    len_y = len_y * len_y;
++    *dir = *dir + vec2<f32>(dir_x, dir_y) * w;
++    *len = *len + (len_x + len_y) * w;
++}
++
++fn tap_w(acc_c: ptr<function, vec3<f32>>, acc_w: ptr<function, f32>, off: vec2<f32>, dir: vec2<f32>,
++         len2: vec2<f32>, lob: f32, clp: f32, c: vec3<f32>) {
++    var v = vec2<f32>(off.x * dir.x + off.y * dir.y, off.x * (-dir.y) + off.y * dir.x);
++    v = v * len2;
++    let d2 = min(v.x * v.x + v.y * v.y, clp);
++    var wb = 0.4 * d2 - 1.0;
++    var wa = lob * d2 - 1.0;
++    wb = wb * wb;
++    wa = wa * wa;
++    wb = 1.5625 * wb - 0.5625;
++    let w = wb * wa;
++    *acc_c = *acc_c + c * w;
++    *acc_w = *acc_w + w;
++}
++
++@fragment
++fn fs_easu(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
++    var pp = frag.xy * (p.in_size / p.out_size) - vec2<f32>(0.5);
++    let fp = floor(pp);
++    pp = pp - fp;
++    let f0 = vec2<i32>(fp);
++    let b = tap(f0 + vec2<i32>(0, -1));
++    let c = tap(f0 + vec2<i32>(1, -1));
++    let e = tap(f0 + vec2<i32>(-1, 0));
++    let f = tap(f0);
++    let g = tap(f0 + vec2<i32>(1, 0));
++    let h = tap(f0 + vec2<i32>(2, 0));
++    let i = tap(f0 + vec2<i32>(-1, 1));
++    let j = tap(f0 + vec2<i32>(0, 1));
++    let k = tap(f0 + vec2<i32>(1, 1));
++    let l = tap(f0 + vec2<i32>(2, 1));
++    let n = tap(f0 + vec2<i32>(0, 2));
++    let o = tap(f0 + vec2<i32>(1, 2));
++    let bl = luma(b); let cl = luma(c); let el = luma(e); let fl = luma(f);
++    let gl = luma(g); let hl = luma(h); let il = luma(i); let jl = luma(j);
++    let kl = luma(k); let ll = luma(l); let nl = luma(n); let ol = luma(o);
++
++    var dir = vec2<f32>(0.0);
++    var len = 0.0;
++    set_f(&dir, &len, (1.0 - pp.x) * (1.0 - pp.y), bl, el, fl, gl, jl);
++    set_f(&dir, &len, pp.x * (1.0 - pp.y), cl, fl, gl, hl, kl);
++    set_f(&dir, &len, (1.0 - pp.x) * pp.y, fl, il, jl, kl, nl);
++    set_f(&dir, &len, pp.x * pp.y, gl, jl, kl, ll, ol);
++
++    let dir2 = dir * dir;
++    var dir_r = dir2.x + dir2.y;
++    let zro = dir_r < (1.0 / 32768.0);
++    dir_r = select(inverseSqrt(dir_r), 1.0, zro);
++    dir.x = select(dir.x, 1.0, zro);
++    dir = dir * dir_r;
++    len = len * 0.5;
++    len = len * len;
++    let stretch = (dir.x * dir.x + dir.y * dir.y) / max(abs(dir.x), abs(dir.y));
++    let len2 = vec2<f32>(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
++    let lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
++    let clp = 1.0 / lob;
++
++    var acc_c = vec3<f32>(0.0);
++    var acc_w = 0.0;
++    tap_w(&acc_c, &acc_w, vec2<f32>(0.0, -1.0) - pp, dir, len2, lob, clp, b);
++    tap_w(&acc_c, &acc_w, vec2<f32>(1.0, -1.0) - pp, dir, len2, lob, clp, c);
++    tap_w(&acc_c, &acc_w, vec2<f32>(-1.0, 1.0) - pp, dir, len2, lob, clp, i);
++    tap_w(&acc_c, &acc_w, vec2<f32>(0.0, 1.0) - pp, dir, len2, lob, clp, j);
++    tap_w(&acc_c, &acc_w, vec2<f32>(0.0, 0.0) - pp, dir, len2, lob, clp, f);
++    tap_w(&acc_c, &acc_w, vec2<f32>(-1.0, 0.0) - pp, dir, len2, lob, clp, e);
++    tap_w(&acc_c, &acc_w, vec2<f32>(1.0, 1.0) - pp, dir, len2, lob, clp, k);
++    tap_w(&acc_c, &acc_w, vec2<f32>(2.0, 1.0) - pp, dir, len2, lob, clp, l);
++    tap_w(&acc_c, &acc_w, vec2<f32>(2.0, 0.0) - pp, dir, len2, lob, clp, h);
++    tap_w(&acc_c, &acc_w, vec2<f32>(1.0, 0.0) - pp, dir, len2, lob, clp, g);
++    tap_w(&acc_c, &acc_w, vec2<f32>(1.0, 2.0) - pp, dir, len2, lob, clp, o);
++    tap_w(&acc_c, &acc_w, vec2<f32>(0.0, 2.0) - pp, dir, len2, lob, clp, n);
++
++    let mn = min(min(f, g), min(j, k));
++    let mx = max(max(f, g), max(j, k));
++    let color = min(mx, max(mn, acc_c / acc_w));
++    return vec4<f32>(color, 1.0);
++}
++
++@fragment
++fn fs_rcas(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
++    let sp = vec2<i32>(floor(frag.xy));
++    let b = tap(sp + vec2<i32>(0, -1));
++    let d = tap(sp + vec2<i32>(-1, 0));
++    let e = tap(sp);
++    let f = tap(sp + vec2<i32>(1, 0));
++    let h = tap(sp + vec2<i32>(0, 1));
++    let mn4 = min(min(b, d), min(f, h));
++    let mx4 = max(max(b, d), max(f, h));
++    // Largest lobe that neither pushes the result below 0 nor above 1 (peak = 1, -4).
++    let hit_min = min(mn4, e) / max(4.0 * mx4, vec3<f32>(1.0 / 32768.0));
++    let hit_max = (vec3<f32>(1.0) - max(mx4, e)) / (4.0 * min(mn4, e) - vec3<f32>(4.0));
++    let lobe_rgb = max(-hit_min, hit_max);
++    let limit = 0.25 - 1.0 / 16.0;
++    let lobe = max(-limit, min(max(lobe_rgb.r, max(lobe_rgb.g, lobe_rgb.b)), 0.0)) * p.sharp;
++    let color = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
++    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
++}
++)""";
++
++struct Pipelines {
++  wgpu::RenderPipeline easu;
++  wgpu::RenderPipeline rcas;
++  wgpu::BindGroupLayout paramsLayout;
++  wgpu::Sampler sampler;
++};
++Pipelines g_pipelines;
++
++struct Slot {
++  uint32_t inW = 0, inH = 0, outW = 0, outH = 0;
++  float sharpness = -1.f;
++  wgpu::Texture easuTexture, rcasTexture;
++  wgpu::Buffer easuParams, rcasParams;
++  wgpu::BindGroup easuParamsGroup, rcasParamsGroup, rcasSource, output;
++};
++// One slot per frame that can be in flight, as for MetalFX: a cached output stays valid while
++// later frames encode into the other slots.
++std::array<Slot, 4> g_slots;
++size_t g_nextSlot = 0;
++
++struct alignas(16) Params {
++  float inW, inH, outW, outH, sharp, pad[3];
++};
++
++constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
++
++void create_pipelines() {
++  wgpu::ShaderSourceWGSL source{};
++  source.code = kShader;
++  const wgpu::ShaderModuleDescriptor moduleDescriptor{.nextInChain = &source, .label = "FSR 1 Module"};
++  auto module = g_device.CreateShaderModule(&moduleDescriptor);
++
++  const wgpu::BindGroupLayoutEntry paramsEntry{
++      .binding = 0,
++      .visibility = wgpu::ShaderStage::Fragment,
++      .buffer = wgpu::BufferBindingLayout{.type = wgpu::BufferBindingType::Uniform, .minBindingSize = sizeof(Params)},
++  };
++  const wgpu::BindGroupLayoutDescriptor paramsLayoutDescriptor{.entryCount = 1, .entries = &paramsEntry};
++  g_pipelines.paramsLayout = g_device.CreateBindGroupLayout(&paramsLayoutDescriptor);
++  const std::array layouts{g_CopyBindGroupLayout, g_pipelines.paramsLayout};
++  const wgpu::PipelineLayoutDescriptor layoutDescriptor{.bindGroupLayoutCount = layouts.size(),
++                                                        .bindGroupLayouts = layouts.data()};
++  auto layout = g_device.CreatePipelineLayout(&layoutDescriptor);
++
++  auto make = [&](const char* entry, const char* label) {
++    const wgpu::ColorTargetState target{.format = kFormat, .writeMask = wgpu::ColorWriteMask::All};
++    const wgpu::FragmentState fragment{.module = module, .entryPoint = entry, .targetCount = 1, .targets = &target};
++    const wgpu::RenderPipelineDescriptor descriptor{
++        .label = label,
++        .layout = layout,
++        .vertex = wgpu::VertexState{.module = module, .entryPoint = "vs_main"},
++        .primitive = wgpu::PrimitiveState{.topology = wgpu::PrimitiveTopology::TriangleList},
++        .multisample = wgpu::MultisampleState{.count = 1, .mask = UINT32_MAX},
++        .fragment = &fragment,
++    };
++    return g_device.CreateRenderPipeline(&descriptor);
++  };
++  g_pipelines.easu = make("fs_easu", "FSR EASU");
++  g_pipelines.rcas = make("fs_rcas", "FSR RCAS");
++  wgpu::SamplerDescriptor samplerDescriptor{};
++  samplerDescriptor.magFilter = wgpu::FilterMode::Nearest;
++  samplerDescriptor.minFilter = wgpu::FilterMode::Nearest;
++  g_pipelines.sampler = g_device.CreateSampler(&samplerDescriptor);
++}
++
++wgpu::Texture make_target(uint32_t w, uint32_t h, const char* label) {
++  const wgpu::TextureDescriptor descriptor{
++      .label = label,
++      .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding,
++      .size = {w, h, 1},
++      .format = kFormat,
++  };
++  return g_device.CreateTexture(&descriptor);
++}
++
++wgpu::BindGroup params_group(wgpu::Buffer& buffer, const Params& params) {
++  const wgpu::BufferDescriptor descriptor{.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
++                                          .size = sizeof(Params)};
++  buffer = g_device.CreateBuffer(&descriptor);
++  g_queue.WriteBuffer(buffer, 0, &params, sizeof(Params));
++  const wgpu::BindGroupEntry entry{.binding = 0, .buffer = buffer, .size = sizeof(Params)};
++  const wgpu::BindGroupDescriptor groupDescriptor{.layout = g_pipelines.paramsLayout, .entryCount = 1, .entries = &entry};
++  return g_device.CreateBindGroup(&groupDescriptor);
++}
++
++void draw(wgpu::CommandEncoder& encoder, const wgpu::Texture& target, const wgpu::RenderPipeline& pipeline,
++          const wgpu::BindGroup& source, const wgpu::BindGroup& params, const char* label) {
++  const wgpu::RenderPassColorAttachment attachment{
++      .view = target.CreateView(),
++      .loadOp = wgpu::LoadOp::Clear,
++      .storeOp = wgpu::StoreOp::Store,
++  };
++  const wgpu::RenderPassDescriptor descriptor{.label = label, .colorAttachmentCount = 1, .colorAttachments = &attachment};
++  auto pass = encoder.BeginRenderPass(&descriptor);
++  pass.SetPipeline(pipeline);
++  pass.SetBindGroup(0, source);
++  pass.SetBindGroup(1, params);
++  pass.Draw(3);
++  pass.End();
++}
++
++} // namespace
++
++wgpu::BindGroup upscale(wgpu::CommandEncoder& encoder, const PresentSource& source, uint32_t outputWidth,
++                        uint32_t outputHeight, float sharpness) {
++  const uint32_t inW = source.size.width, inH = source.size.height;
++  if (!inW || !inH || !outputWidth || !outputHeight || (inW >= outputWidth && inH >= outputHeight) || !source.bindGroup) {
++    return {};
++  }
++  if (!g_pipelines.easu) create_pipelines();
++  auto& slot = g_slots[g_nextSlot++ % g_slots.size()];
++  if (slot.inW != inW || slot.inH != inH || slot.outW != outputWidth || slot.outH != outputHeight ||
++      slot.sharpness != sharpness) {
++    slot = {};
++    slot.inW = inW;
++    slot.inH = inH;
++    slot.outW = outputWidth;
++    slot.outH = outputHeight;
++    slot.sharpness = sharpness;
++    slot.easuTexture = make_target(outputWidth, outputHeight, "FSR EASU output");
++    slot.rcasTexture = make_target(outputWidth, outputHeight, "FSR RCAS output");
++    const float w = static_cast<float>(outputWidth), h = static_cast<float>(outputHeight);
++    slot.easuParamsGroup = params_group(slot.easuParams, Params{static_cast<float>(inW), static_cast<float>(inH), w, h,
++                                                                0.f, {}});
++    slot.rcasParamsGroup = params_group(slot.rcasParams, Params{w, h, w, h, std::exp2(-sharpness), {}});
++    slot.rcasSource = create_copy_bind_group(slot.easuTexture.CreateView(), g_pipelines.sampler);
++    wgpu::SamplerDescriptor linear{};
++    linear.magFilter = wgpu::FilterMode::Linear;
++    linear.minFilter = wgpu::FilterMode::Linear;
++    slot.output = create_copy_bind_group(slot.rcasTexture.CreateView(), g_device.CreateSampler(&linear));
++  }
++  draw(encoder, slot.easuTexture, g_pipelines.easu, source.bindGroup, slot.easuParamsGroup, "FSR EASU");
++  draw(encoder, slot.rcasTexture, g_pipelines.rcas, slot.rcasSource, slot.rcasParamsGroup, "FSR RCAS");
++  return slot.output;
++}
++
++void shutdown() {
++  g_slots = {};
++  g_pipelines = {};
++}
++
++} // namespace aurora::webgpu::fsr
+diff --git a/aurora-main/lib/webgpu/fsr.hpp b/aurora-main/lib/webgpu/fsr.hpp
+new file mode 100644
+index 0000000..35b12b1
+--- /dev/null
++++ b/aurora-main/lib/webgpu/fsr.hpp
+@@ -0,0 +1,16 @@
++#pragma once
++
++#include "gpu.hpp"
++
++// AMD FidelityFX Super Resolution 1 (EASU upscale + RCAS sharpen) for the final presentation.
++// Port of the published FSR 1 algorithm (MIT, Copyright (c) 2021 Advanced Micro Devices) to WGSL.
++namespace aurora::webgpu::fsr {
++
++// Upscales `source` to outputWidth x outputHeight and returns a copy-layout bind group of the
++// result, or an empty bind group when it does not apply (source not smaller than the output).
++// sharpness is RCAS's value in stops: 0 is the sharpest, 2 is almost none.
++wgpu::BindGroup upscale(wgpu::CommandEncoder& encoder, const PresentSource& source, uint32_t outputWidth,
++                        uint32_t outputHeight, float sharpness);
++void shutdown();
++
++} // namespace aurora::webgpu::fsr
+diff --git a/aurora-main/lib/webgpu/gpu.cpp b/aurora-main/lib/webgpu/gpu.cpp
+index b211986..c39dc72 100644
+--- a/aurora-main/lib/webgpu/gpu.cpp
++++ b/aurora-main/lib/webgpu/gpu.cpp
+@@ -54,7 +54,8 @@ TextureWithSampler g_frameBufferResolved;
+ TextureWithSampler g_depthBuffer;
+ 
+ // EFB -> XFB copy pipeline
+-static wgpu::BindGroupLayout g_CopyBindGroupLayout;
++wgpu::BindGroupLayout g_CopyBindGroupLayout;
++std::atomic<uint16_t> g_forcedAnisotropy{0};
+ wgpu::RenderPipeline g_CopyPipeline;
+ wgpu::BindGroup g_CopyBindGroup;
+ static bool g_presentSourceOverrideActive = false;
+diff --git a/aurora-main/lib/webgpu/gpu.hpp b/aurora-main/lib/webgpu/gpu.hpp
+index aae07f9..c8276fa 100644
+--- a/aurora-main/lib/webgpu/gpu.hpp
++++ b/aurora-main/lib/webgpu/gpu.hpp
+@@ -6,6 +6,7 @@
+ #include "wgpu.hpp"
+ 
+ #include <array>
++#include <atomic>
+ #include <cstdint>
+ 
+ struct SDL_Window;
+@@ -55,6 +56,9 @@ extern TextureWithSampler g_frameBuffer;
+ extern TextureWithSampler g_frameBufferResolved;
+ extern TextureWithSampler g_depthBuffer;
+ extern wgpu::RenderPipeline g_CopyPipeline;
++extern wgpu::BindGroupLayout g_CopyBindGroupLayout;
++// 0: use what each texture asks for; 2-16: force that anisotropy wherever the filters allow it.
++extern std::atomic<uint16_t> g_forcedAnisotropy;
+ extern wgpu::BindGroup g_CopyBindGroup;
+ extern wgpu::Instance g_instance;
+ extern bool g_bcTexturesSupported;
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index acd2650..c0d2e2d 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -37,6 +37,8 @@
+ struct RuntimeUserConfig {
+     std::optional<bool> widescreen;
+     std::optional<bool> forceAspect169;
++    std::optional<bool> fsr;
++    std::optional<uint32_t> textureFiltering;
+     std::optional<int32_t> windowPosX;
+     std::optional<int32_t> windowPosY;
+     std::optional<uint32_t> windowWidth;
+@@ -311,6 +313,10 @@ inline void EnsureConfigFile() {
+               "[video]\n"
+               "widescreen = true\n"
+               "force_16_9 = false\n"
++              "# AMD FSR 1 upscaling when the internal resolution is below the window.\n"
++              "fsr = false\n"
++              "# Forced anisotropic filtering: 0 (each texture's own), 2, 4, 8 or 16.\n"
++              "texture_filtering = 0\n"
+               "resolution_multiplier = 1.0\n"
+               "frame_interpolation_fps = 0\n"
+               "display_mode = \"windowed\"\n"
+@@ -440,6 +446,11 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
+ 
+     config.widescreen = FindConfigValue<bool>(document, "video", "widescreen");
+     config.forceAspect169 = FindConfigValue<bool>(document, "video", "force_16_9");
++    config.fsr = FindConfigValue<bool>(document, "video", "fsr");
++    if (auto value = FindConfigUint(document, "video", "texture_filtering");
++        value && (*value == 0 || *value == 2 || *value == 4 || *value == 8 || *value == 16)) {
++        config.textureFiltering = *value;
++    }
+     config.windowPosX = FindConfigInt(document, "video", "window_x");
+     config.windowPosY = FindConfigInt(document, "video", "window_y");
+     if (auto value = FindConfigUint(document, "video", "window_width"); value && *value != 0) {
+@@ -863,6 +874,24 @@ inline bool SetForceAspect169(bool value) {
+     return WriteSetting("video", "force_16_9", value ? "true" : "false");
+ }
+ 
++inline bool FsrEnabled(bool fallback = false) {
++    return Get().fsr.value_or(fallback);
++}
++
++inline bool SetFsr(bool value) {
++    Mutable().fsr = value;
++    return WriteSetting("video", "fsr", value ? "true" : "false");
++}
++
++inline uint32_t TextureFiltering(uint32_t fallback = 0) {
++    return Get().textureFiltering.value_or(fallback);
++}
++
++inline bool SetTextureFiltering(uint32_t value) {
++    Mutable().textureFiltering = value;
++    return WriteSetting("video", "texture_filtering", std::to_string(value));
++}
++
+ inline bool WindowPosition(int32_t& x, int32_t& y) {
+     if (!Get().windowPosX || !Get().windowPosY) {
+         return false;
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index c7c52ec..3ee2c2b 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -68,6 +68,7 @@ constexpr std::array<ApiOption, 5> kApis{{
+ 
+ constexpr std::array<const char*, 3> kDisplayModes{"windowed", "borderless", "exclusive"};
+ constexpr std::array<float, 6> kResolutions{1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 0.0f};
++constexpr std::array<uint32_t, 5> kFilteringLevels{0, 2, 4, 8, 16};  // FILTRADO DE TEXTURAS choices
+ 
+ bool AutomatedRun() {
+     for (const char* env : {"WIICOMPILED_MATCH_BENCH", "WIICOMPILED_SKIP_LAUNCHER", "WIICOMPILED_BENCH", "WIICOMPILED_PAD_SCRIPT",
+@@ -508,6 +509,26 @@ Result Run(int argc, char** argv) {
+                   RuntimeConfigFile::ForceAspect169Enabled() ? 1 : 0};
+     Option fps{"MOSTRAR FPS", "Contador de fotogramas por segundo en una esquina.", YesNo(),
+                RuntimeConfigFile::ShowFps(true) ? 1 : 0};
++    Option fsr{"ESCALADO",
++               "Cómo se agranda la imagen del juego hasta tu ventana.\n\n"
++               "AMD FSR 1 la reescala con bordes nítidos: con una resolución interna baja da casi la "
++               "nitidez de una alta y cuesta mucho menos. Solo actúa si la imagen del juego es más pequeña "
++               "que la ventana.",
++               {"Normal", "AMD FSR 1"}, RuntimeConfigFile::FsrEnabled(false) ? 1 : 0};
++    Option filtering{"FILTRADO DE TEXTURAS",
++                     "Nitidez de las texturas vistas de lado (césped, gradas, el campo a lo lejos). Original usa lo "
++                     "que pide el juego; 16x es lo más nítido. En gráficas integradas, 2x o 4x rinde mejor.",
++                     {"Original", "2x", "4x", "8x", "16x"}};
++    for (size_t i = 0; i < kFilteringLevels.size(); ++i) {
++        if (kFilteringLevels[i] == RuntimeConfigFile::TextureFiltering(0)) filtering.value = static_cast<int>(i);
++    }
++    Option quality{"CALIDAD",
++                   "Ajusta de una vez la resolución interna, el escalado y el filtrado.\n\n"
++                   "Baja: 1x con FSR 1, para equipos modestos o portátiles.\n"
++                   "Media: 2x con FSR 1 y filtrado 4x.\n"
++                   "Alta: según la ventana y filtrado 16x.\n\n"
++                   "Personalizada: lo que hayas elegido en cada opción.",
++                   {"Personalizada", "Baja", "Media", "Alta"}};
+     Option volume{"VOLUMEN", "Volumen general del juego.", {}};
+     for (int v = 0; v <= 100; v += 10) volume.choices.push_back(std::to_string(v) + "%");
+     volume.value = std::clamp(static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 10.0f)), 0, 10);
+@@ -515,6 +536,7 @@ Result Run(int argc, char** argv) {
+     // The runtime re-reads these after the launcher (main.cpp, settings_overlay::InitializeRuntimeSettings),
+     // so Play keeps this window; only the API, Wii Remotes and mods need a new process.
+     display.restart = resolution.restart = aspect.restart = fps.restart = volume.restart = mute.restart = false;
++    fsr.restart = filtering.restart = quality.restart = false;
+     Option wiimote{"WII REMOTE", "Usar Wii Remotes reales por Bluetooth. Déjalo en No si solo usas mando o teclado.",
+                    YesNo(), RuntimeConfigFile::WiiRemotesEnabled(true) ? 1 : 0};
+     Option launcherOption{"MOSTRAR AL INICIAR",
+@@ -558,7 +580,7 @@ Result Run(int argc, char** argv) {
+     }
+ 
+     std::vector<Tab> tabs{
+-        {"VIDEO", {api, display, resolution, aspect, fps}},
++        {"VIDEO", {api, quality, display, resolution, fsr, filtering, aspect, fps}},
+         {"AUDIO", {volume, mute}},
+         {"CONTROLES", {wiimote}},
+         {"INTERFAZ", {launcherOption}},
+@@ -567,6 +589,26 @@ Result Run(int argc, char** argv) {
+     tabs.push_back(std::move(toolsTab));
+     auto option = [&](int tab, int index) -> Option& { return tabs[static_cast<size_t>(tab)].options[static_cast<size_t>(index)]; };
+ 
++    // Quality presets: {resolution index, FSR, filtering index}. CALIDAD shows the one the current
++    // values match, or Personalizada.
++    struct Preset { int resolution; int fsr; int filtering; };
++    constexpr std::array<Preset, 3> kPresets{{{0, 1, 0}, {2, 1, 2}, {5, 0, 4}}};
++    auto videoOption = [&](const char* label) -> Option& {
++        for (Option& o : tabs[0].options)
++            if (std::strcmp(o.label, label) == 0) return o;
++        return tabs[0].options[0];
++    };
++    auto matchPreset = [&] {
++        Option& q = videoOption(quality.label);
++        q.value = 0;
++        for (size_t i = 0; i < kPresets.size(); ++i) {
++            if (videoOption(resolution.label).value == kPresets[i].resolution && videoOption(fsr.label).value == kPresets[i].fsr &&
++                videoOption(filtering.label).value == kPresets[i].filtering)
++                q.value = static_cast<int>(i) + 1;
++        }
++    };
++    matchPreset();
++
+     bool restart = false;
+     auto apply = [&](int tab, int index) {
+         const Option& o = option(tab, index);
+@@ -595,6 +637,18 @@ Result Run(int argc, char** argv) {
+         }
+         if (label == resolution.label) RuntimeConfigFile::SetResolutionMultiplier(kResolutions[static_cast<size_t>(o.value)]);
+         if (label == aspect.label) RuntimeConfigFile::SetForceAspect169(o.value != 0);
++        if (label == fsr.label) RuntimeConfigFile::SetFsr(o.value != 0);
++        if (label == filtering.label) RuntimeConfigFile::SetTextureFiltering(kFilteringLevels[static_cast<size_t>(o.value)]);
++        if (label == quality.label && o.value > 0) {
++            const Preset& p = kPresets[static_cast<size_t>(o.value - 1)];
++            videoOption(resolution.label).value = p.resolution;
++            videoOption(fsr.label).value = p.fsr;
++            videoOption(filtering.label).value = p.filtering;
++            RuntimeConfigFile::SetResolutionMultiplier(kResolutions[static_cast<size_t>(p.resolution)]);
++            RuntimeConfigFile::SetFsr(p.fsr != 0);
++            RuntimeConfigFile::SetTextureFiltering(kFilteringLevels[static_cast<size_t>(p.filtering)]);
++        }
++        if (label == resolution.label || label == fsr.label || label == filtering.label) matchPreset();
+         if (label == fps.label) RuntimeConfigFile::SetShowFps(o.value != 0);
+         if (label == volume.label) RuntimeConfigFile::SetAudioVolume(static_cast<float>(o.value) / 10.0f);
+         if (label == mute.label) RuntimeConfigFile::SetAudioMuted(o.value != 0);
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index f8fc9e6..f36577a 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -1053,7 +1053,24 @@ void DrawGraphicsSettings() {
+         RuntimeConfigFile::SetForceAspect169(g_forceAspect169);
+     }
+     ImGui::TextDisabled("Keep a 16:9 image with black bars when the window has another shape.");
++    bool fsr = aurora_get_fsr();
++    if (ImGui::Checkbox("AMD FSR 1 upscaling", &fsr)) {
++        aurora_set_fsr(fsr, 0.2f);
++        RuntimeConfigFile::SetFsr(fsr);
++    }
++    ImGui::TextDisabled("Sharper upscaling when the internal resolution is below the window.");
++    static constexpr const char* kFiltering[] = {"Game default", "2x", "4x", "8x", "16x"};
++    static constexpr uint16_t kFilteringLevels[] = {0, 2, 4, 8, 16};
++    int filtering = 0;
++    for (int i = 0; i < 5; ++i) {
++        if (kFilteringLevels[i] == aurora_get_forced_anisotropy()) filtering = i;
++    }
++    if (ImGui::Combo("Texture filtering", &filtering, kFiltering, 5)) {
++        aurora_set_forced_anisotropy(kFilteringLevels[filtering]);
++        RuntimeConfigFile::SetTextureFiltering(kFilteringLevels[filtering]);
++    }
+     ImGui::Separator();
++#ifdef WIICOMPILED_GAME_RMCP01
+     struct EffectFlag {
+         const char* label;
+         uint32_t flag;
+@@ -1076,6 +1093,7 @@ void DrawGraphicsSettings() {
+     }
+     ImGui::TextDisabled("Applied when the next scene renderer is created.");
+     ImGui::Separator();
++#endif  // the bloom path is Mario Kart Wii code; nothing to switch in other games
+     static constexpr const char* kDisplayModes[] = {
+         "Windowed",
+         "Borderless fullscreen",
+@@ -1550,6 +1568,8 @@ void InitializeRuntimeSettings() noexcept {
+     g_displayMode = ConfiguredDisplayMode();
+     g_showFps = RuntimeConfigFile::ShowFps(true);
+     g_forceAspect169 = RuntimeConfigFile::ForceAspect169Enabled();
++    aurora_set_fsr(RuntimeConfigFile::FsrEnabled(false), 0.2f);
++    aurora_set_forced_anisotropy(static_cast<uint16_t>(RuntimeConfigFile::TextureFiltering(0)));
+     PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
+     InputBindings::Reload();
+     controller_mapping_wizard::LoadPersistedMappings();
