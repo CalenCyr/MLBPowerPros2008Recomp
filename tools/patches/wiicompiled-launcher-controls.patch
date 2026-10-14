@@ -202,10 +202,10 @@ index 0000000..bcbc3f7
 +}
 diff --git a/runtime/include/launcher_visuals.h b/runtime/include/launcher_visuals.h
 new file mode 100644
-index 0000000..bd51826
+index 0000000..7f4717d
 --- /dev/null
 +++ b/runtime/include/launcher_visuals.h
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,35 @@
 +#pragma once
 +#include "power_pros_ui.h"
 +#include <string>
@@ -213,7 +213,12 @@ index 0000000..bd51826
 +// Keep native focus/activation while drawing the launcher's original glossy
 +// blue/orange pills over ImGui's button geometry.
 +inline bool PillButton(const char* label, ImVec2 size = ImVec2(0,0), bool selected = false) {
++    // Only the pill is visible; ImGui's rectangular frame would show around its rounded ends.
++    ImGui::PushStyleColor(ImGuiCol_Button,IM_COL32(0,0,0,0));
++    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,IM_COL32(0,0,0,0));
++    ImGui::PushStyleColor(ImGuiCol_ButtonActive,IM_COL32(0,0,0,0));
 +    const bool pressed = ImGui::Button(label,size);
++    ImGui::PopStyleColor(3);
 +    ImVec2 a=ImGui::GetItemRectMin(), b=ImGui::GetItemRectMax();
 +    const bool highlight=selected || ImGui::IsItemHovered() || (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible);
 +    const float u=ImGui::GetFontSize()/24.f;
