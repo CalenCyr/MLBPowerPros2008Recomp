@@ -385,6 +385,66 @@ void TestCapture(const std::filesystem::path& temp) {
     const auto sessions = LoadSessions(captures);
     CHECK(sessions.size() == 1 && sessions[0].first == 1 && sessions[0].second.size() == 1);
 }
+// Final review fixes.
+void TestReviewFixes(const std::filesystem::path& temp) {
+    // ParseName: 0 or > 65535 dimensions are not texture names (they divided by zero on import).
+    CHECK(!ParseName("tex1_0x0_00000000000000aa_5") && !ParseName("tex1_70000x8_00000000000000aa_5"));
+
+    // ReadEntry: an entry larger than the file is refused without allocating it.
+    const auto small = temp / "small.bin";
+    std::ofstream(small, std::ios::binary) << "abc";
+    CHECK(ReadEntry(small, ProjectEntry{"x.pack", 0, 0xFFFFFFF0u}).empty());
+    CHECK(ReadEntry(small, ProjectEntry{"x.pack", 1, 2}).size() == 2);
+
+    Catalog c;
+    SyntheticCatalog(temp, c);
+    if (c.Textures().size() != 3) return;
+    const auto root = temp / "mods" / "Revision";
+    std::filesystem::create_directories(root / "textures");
+    const CatalogTexture& t = c.Textures()[1];  // 8x8 C4 with a known palette
+    Image img{16, 16, std::vector<uint8_t>(16 * 16 * 4, 7)};
+    const auto png = temp / "rev.png";
+    CHECK(SavePng(png, img, nullptr));
+
+    // "Aplicar a todas las paletas": the $ file is the texture's replacement too, and removal clears it.
+    CHECK(ImportOne(c, 1, png, root, true).ok);
+    auto found = FindReplacements(root);
+    CHECK(ReplacementsOf(t, found).size() == 1);
+    CHECK(RemoveReplacements(t, found) == 1);
+    CHECK(ReplacementsOf(t, FindReplacements(root)).empty());
+
+    // A failed save keeps the earlier replacement: put a file where the target folder must go.
+    CHECK(ImportOne(c, 1, png, root, false).ok);
+    const auto before = ReplacementsOf(t, FindReplacements(root));
+    CHECK(before.size() == 1);
+    const auto blockedDir = ReplacementPath(root, c.Textures()[0], c.Textures()[0].name).parent_path();
+    const auto moved = root / "moved.png";
+    std::filesystem::rename(before[0], moved);
+    std::filesystem::remove_all(blockedDir);
+    std::ofstream(blockedDir, std::ios::binary) << "not a folder";
+    const auto elsewhere = root / "textures" / "Otro" / (t.name + ".png");
+    std::filesystem::create_directories(elsewhere.parent_path());
+    std::filesystem::rename(moved, elsewhere);
+    CHECK(!ImportOne(c, 1, png, root, false).ok);           // save fails...
+    CHECK(std::filesystem::exists(elsewhere));               // ...and the old replacement survives
+
+    // Folder import accepts a captured palette variant name and keeps that name.
+    ParsedName variant = t.key;
+    variant.paletteHash ^= 0x5;
+    const auto in = temp / "variants";
+    std::filesystem::create_directories(in);
+    CHECK(SavePng(in / PathFromUtf8(ReplacementName(variant) + ".png"), img, nullptr));
+    std::filesystem::remove(blockedDir);
+    Progress progress;
+    const auto report = ImportFolder(c, in, root, &progress);
+    CHECK(report.size() == 1 && report[0].ok);
+    CHECK(FindReplacements(root).count(ReplacementName(variant)) == 1);
+    CHECK(progress.total == 1 && progress.done == 1);
+
+    // Export reports progress too.
+    Progress exported;
+    CHECK(Export(c, {0, 1, 2}, temp / "rev-export", nullptr, &exported) == 3 && exported.done == 3 && exported.total == 3);
+}
 } // namespace
 
 int RunSelftest() {
@@ -400,6 +460,7 @@ int RunSelftest() {
     TestConfigAndMods(temp);
     TestTransfer(temp);
     TestCapture(temp);
+    TestReviewFixes(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }

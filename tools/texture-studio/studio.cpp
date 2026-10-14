@@ -30,6 +30,7 @@
 #include <functional>
 #include <iterator>
 #include <list>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <set>
@@ -233,12 +234,38 @@ struct App {
     DialogResult dialog;
     Pending pending = Pending::None;
     bool dialogOpen = false;
+    // Long batches (export, folder import, zip) run here so the window keeps responding.
+    struct Job {
+        std::thread thread;
+        std::atomic<bool> done{false};
+        bool running = false;
+        Progress progress;
+        std::string label;
+        std::function<void()> finish;  // runs on the UI thread once the work is done
+    } job;
     Thumbs thumbs;
 };
 
 void Toast(App& a, std::string text, bool error = false) {
     a.toast = std::move(text);
     a.toastError = error;
+}
+
+// The replacement files of the active mod for this texture (exact palette, "$", captured variants).
+std::vector<fs::path> Replacements(const App& a, const CatalogTexture& t) { return ReplacementsOf(t, a.replacements); }
+bool Replaced(const App& a, const CatalogTexture& t) { return !Replacements(a, t).empty(); }
+
+void StartJob(App& a, std::string label, std::function<void(Progress&)> work, std::function<void()> finish) {
+    a.job.progress.done = 0;
+    a.job.progress.total = 0;
+    a.job.done = false;
+    a.job.running = true;
+    a.job.label = std::move(label);
+    a.job.finish = std::move(finish);
+    a.job.thread = std::thread([&a, work = std::move(work)] {
+        work(a.job.progress);
+        a.job.done = true;
+    });
 }
 
 fs::path ModRoot(const App& a) { return a.activeMod >= 0 ? a.mods[a.activeMod].root : fs::path(); }
@@ -274,7 +301,7 @@ void Refilter(App& a) {
             if (a.group != "Todo" && t.group != a.group) continue;
             if (!a.subgroup.empty() && t.subgroup != a.subgroup) continue;
         }
-        if (a.onlyReplaced && !a.replacements.count(t.name)) continue;
+        if (a.onlyReplaced && !Replaced(a, t)) continue;
         if (a.onlySeen && t.seenIn.empty()) continue;
         if (!needle.empty()) {
             std::string hay = t.name + " " + t.group + " " + t.subgroup;
@@ -449,9 +476,9 @@ void DrawThumb(App& a, SDL_Renderer* r, ImDrawList* dl, int index, ImVec2 p, flo
     int w = 0, h = 0;
     SDL_Texture* tex = nullptr;
     if (replacement) {
-        const auto it = a.replacements.find(t.name);
-        if (it == a.replacements.end()) return;
-        const fs::path file = it->second;
+        const auto files = Replacements(a, t);
+        if (files.empty()) return;
+        const fs::path file = files.front();
         tex = a.thumbs.Get(r, "r:" + t.name, [file] { return LoadImage(file, nullptr).value_or(Image{}); }, &w, &h);
     } else {
         tex = a.thumbs.Get(r, "o:" + t.name, [&a, index] { return a.catalog.Original(a.catalog.Textures()[index]); }, &w, &h);
@@ -464,7 +491,7 @@ void DrawThumb(App& a, SDL_Renderer* r, ImDrawList* dl, int index, ImVec2 p, flo
 
 void DrawGrid(App& a, SDL_Renderer* r, ImVec2 size) {
     int replaced = 0;
-    for (int i : a.visible) replaced += a.replacements.count(a.catalog.Textures()[i].name) ? 1 : 0;
+    for (int i : a.visible) replaced += Replaced(a, a.catalog.Textures()[i]) ? 1 : 0;
     std::string title = a.session > 0 ? "Capturas > Sesión " + std::to_string(a.session)
                                       : a.group + (a.subgroup.empty() ? "" : " > " + a.subgroup);
     title += " · " + std::to_string(a.visible.size()) + " texturas · " + std::to_string(replaced) + " reemplazadas";
@@ -493,10 +520,11 @@ void DrawGrid(App& a, SDL_Renderer* r, ImVec2 size) {
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", t.subgroup.c_str(), t.name.c_str());
                 ImGui::PopID();
-                DrawThumb(a, r, dl, index, p, thumb, a.replacements.count(t.name) > 0);
+                const bool hasReplacement = Replaced(a, t);
+                DrawThumb(a, r, dl, index, p, thumb, hasReplacement);
                 const bool sel = index == a.selected;
                 dl->AddRect(p, ImVec2(p.x + thumb, p.y + thumb), sel ? ui::kYellow : ui::kPanelBorder, 8, 0, sel ? 3.0f : 1.5f);
-                if (a.replacements.count(t.name)) ui::Badge(dl, ImVec2(p.x + thumb - 11, p.y + 11), 9, false);
+                if (hasReplacement) ui::Badge(dl, ImVec2(p.x + thumb - 11, p.y + 11), 9, false);
                 if (!t.seenIn.empty()) ui::Badge(dl, ImVec2(p.x + 11, p.y + 11), 9, true);
                 char dims[32];
                 std::snprintf(dims, sizeof dims, "%ux%u", t.key.width, t.key.height);
@@ -517,7 +545,7 @@ void DrawDetail(App& a, SDL_Renderer* r, ImVec2 size) {
         return;
     }
     const CatalogTexture& t = a.catalog.Textures()[a.selected];
-    const bool replaced = a.replacements.count(t.name) > 0;
+    const bool replaced = Replaced(a, t);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float box = 160;
     const ImVec2 o = ImGui::GetCursorScreenPos();
@@ -581,15 +609,14 @@ void DrawDetail(App& a, SDL_Renderer* r, ImVec2 size) {
     }
     ImGui::SameLine();
     if (ui::Pill("Quitar reemplazo", ui::kRedTop, ui::kRedBottom, true, replaced)) {
-        std::error_code ec;
-        fs::remove(a.replacements[t.name], ec);
+        const size_t removed = RemoveReplacements(t, a.replacements);
         a.thumbs.Forget("r:" + t.name);
         a.replacements = FindReplacements(ModRoot(a));
-        Toast(a, "Reemplazo quitado.");
+        Toast(a, removed > 1 ? "Reemplazo quitado (" + std::to_string(removed) + " archivos)." : std::string("Reemplazo quitado."));
     }
     ImGui::SameLine();
     if (ui::Pill("Abrir carpeta", ui::kGreyTop, ui::kGreyBottom, true, hasMod))
-        OpenInExplorer(replaced ? a.replacements[t.name].parent_path() : ModRoot(a));
+        OpenInExplorer(replaced ? Replacements(a, t).front().parent_path() : ModRoot(a));
     if (t.key.hasPalette) {
         ImGui::Checkbox("Aplicar a todas las paletas (el reemplazo se usa con cualquier color de paleta)", &a.allPalettes);
     }
@@ -678,23 +705,43 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
         break;
     }
     case Pending::ExportCategory: {
-        std::vector<std::string> problems;
-        const size_t n = Export(a.catalog, a.visible, path, &problems);
-        Toast(a, std::to_string(n) + " texturas exportadas en " + Utf8(path) +
-                     (problems.empty() ? "" : " (" + std::to_string(problems.size()) + " no se pudieron exportar)"),
-              !problems.empty() && n == 0);
+        auto result = std::make_shared<std::pair<size_t, std::vector<std::string>>>();
+        StartJob(
+            a, "Exportando texturas...",
+            [&a, path, result, textures = a.visible](Progress& p) { result->first = Export(a.catalog, textures, path, &result->second, &p); },
+            [&a, path, result] {
+                const auto& [n, problems] = *result;
+                Toast(a, std::to_string(n) + " texturas exportadas en " + Utf8(path) +
+                             (problems.empty() ? "" : " (" + std::to_string(problems.size()) + " no se pudieron exportar)"),
+                      !problems.empty() && n == 0);
+            });
         break;
     }
-    case Pending::ImportFolder:
-        a.report = ImportFolder(a.catalog, path, ModRoot(a));
-        a.thumbs.Clear();
-        a.replacements = FindReplacements(ModRoot(a));
-        a.openReport = true;
+    case Pending::ImportFolder: {
+        auto result = std::make_shared<std::vector<ImportResult>>();
+        StartJob(
+            a, "Importando texturas...",
+            [&a, path, result, mod = ModRoot(a)](Progress& p) { *result = ImportFolder(a.catalog, path, mod, &p); },
+            [&a, result] {
+                a.report = std::move(*result);
+                a.thumbs.Clear();
+                a.replacements = FindReplacements(ModRoot(a));
+                a.openReport = true;
+                Refilter(a);
+            });
         break;
-    case Pending::Zip:
-        if (WriteZip(ModRoot(a), path, &error)) Toast(a, "Mod empaquetado: " + Utf8(path));
-        else Toast(a, error, true);
+    }
+    case Pending::Zip: {
+        auto result = std::make_shared<std::pair<bool, std::string>>();
+        StartJob(
+            a, "Empaquetando el mod...",
+            [path, result, mod = ModRoot(a)](Progress&) { result->first = WriteZip(mod, path, &result->second); },
+            [&a, path, result] {
+                if (result->first) Toast(a, "Mod empaquetado: " + Utf8(path));
+                else Toast(a, result->second, true);
+            });
         break;
+    }
     case Pending::None: break;
     }
     Refilter(a);
@@ -702,6 +749,23 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
 
 void DrawPopups(App& a, SDL_Renderer* r) {
     const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    if (a.job.running && a.job.done) {
+        a.job.thread.join();
+        a.job.running = false;
+        if (a.job.finish) a.job.finish();
+    }
+    if (a.job.running) ImGui::OpenPopup("Trabajando");
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(520, 0));
+    if (ImGui::BeginPopupModal("Trabajando", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
+        const size_t done = a.job.progress.done, total = a.job.progress.total;
+        ImGui::TextUnformatted(a.job.label.c_str());
+        const std::string count = total ? std::to_string(done) + " / " + std::to_string(total) : std::string();
+        ImGui::ProgressBar(total ? static_cast<float>(done) / static_cast<float>(total) : -static_cast<float>(ImGui::GetTime()),
+                           ImVec2(-1, 0), count.c_str());
+        if (!a.job.running) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     if (a.openNewMod) { ImGui::OpenPopup("Nuevo mod"); a.openNewMod = false; }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Nuevo mod", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -768,7 +832,10 @@ void DrawPopups(App& a, SDL_Renderer* r) {
             int w = 0, h = 0;
             a.thumbs.budget = std::max(a.thumbs.budget, 1);
             SDL_Texture* tex = a.zoomReplacement
-                                   ? a.thumbs.Get(r, "r:" + t.name, [&] { return LoadImage(a.replacements[t.name], nullptr).value_or(Image{}); }, &w, &h)
+                                   ? a.thumbs.Get(r, "r:" + t.name, [&] {
+                                         const auto files = Replacements(a, t);
+                                         return files.empty() ? Image{} : LoadImage(files.front(), nullptr).value_or(Image{});
+                                     }, &w, &h)
                                    : a.thumbs.Get(r, "o:" + t.name, [&] { return a.catalog.Original(t); }, &w, &h);
             if (tex) {
                 SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
@@ -860,7 +927,11 @@ int main(int, char**) {
     a.paths = ResolvePaths(args, &a.fatal);
     if (a.fatal.empty())
         a.builder = std::thread([&a] {
-            a.catalog.Build(a.paths.projectBin, &a.progress, &a.buildError);
+            try {
+                a.catalog.Build(a.paths.projectBin, &a.progress, &a.buildError);
+            } catch (const std::exception& e) {
+                a.buildError = std::string("No se pudo leer project.bin: ") + e.what();
+            }
             a.built = true;
         });
 
@@ -963,6 +1034,7 @@ int main(int, char**) {
     }
 
     if (a.builder.joinable()) a.builder.join();
+    if (a.job.thread.joinable()) a.job.thread.join();
     a.thumbs.Clear();
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();

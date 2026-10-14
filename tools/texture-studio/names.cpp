@@ -61,7 +61,7 @@ std::optional<ParsedName> ParseName(std::string_view stem) {
     const size_t x = parts[1].find('x');
     uint64_t w, h, tex, fmt;
     if (x == std::string_view::npos || !number(parts[1].substr(0, x), 10, w) || !number(parts[1].substr(x + 1), 10, h) ||
-        !number(parts[2], 16, tex) || !number(parts.back(), 10, fmt))
+        !number(parts[2], 16, tex) || !number(parts.back(), 10, fmt) || w == 0 || h == 0 || w > 65535 || h > 65535)
         return std::nullopt;
     n.width = static_cast<uint32_t>(w);
     n.height = static_cast<uint32_t>(h);

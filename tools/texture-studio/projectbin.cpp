@@ -39,6 +39,10 @@ std::optional<std::vector<ProjectEntry>> ReadProjectIndex(const std::filesystem:
 }
 
 std::vector<uint8_t> ReadEntry(const std::filesystem::path& file, const ProjectEntry& entry) {
+    // Sizes come from the file itself: never allocate past its end (a corrupt record would ask for 4 GB).
+    std::error_code ec;
+    const uint64_t fileSize = std::filesystem::file_size(file, ec);
+    if (ec || entry.offset > fileSize || entry.size > fileSize - entry.offset) return {};
     std::ifstream f(file, std::ios::binary);
     std::vector<uint8_t> out(entry.size);
     f.seekg(static_cast<std::streamoff>(entry.offset));
