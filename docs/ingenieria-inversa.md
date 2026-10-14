@@ -438,6 +438,12 @@ Verificado (14 de octubre de 2026):
 - Pasar a rojo el segundo color del material de `DP_MIP_turf` no cambia nada: el estadio se dibuja sin la luz de los materiales.
 - Cambiar la traslación de las colocaciones de `DP_FLG_*` pone las banderas en fila sobre el césped del center field. El juego usa la tabla, aunque la caja y la esfera de la colocación sigan en el sitio viejo.
 
+**Escribir estadios** (comprobado en partidos de Coors Field, 14 de octubre de 2026):
+- **Datos nuevos al final del pack:** los acepta, con punteros nuevos (`0x40000000 | posición`). Una malla repuntada a una display list nueva de triángulos sueltos (`0x90`) en vez de strips, y a arrays nuevos, se dibuja bien. No hay tabla de reubicación que actualizar.
+- **Tamaño:** un `stadium_col.pack` de 9,5 MB y uno de 21 MB cargan y el partido se juega. Uno de 31,5 MB o de 43 MB se queda en «Preparando partido».
+- **Tablas de texturas y paletas:** acaban con una entrada de 8 bytes a cero, en los 82 modelos de Coors Field. El juego las recorre hasta esa entrada: al copiarlas a otro sitio sin ella, las texturas con paleta del modelo salen blancas. Ampliar el array de texmaps o el de materiales (que usan su contador de la escena) funciona.
+- **Lista de texturas del `tbl`:** entradas {→ textura, → paleta, u32, u32}. Los dos u32 (`0xAC800`, `0xB2540`…) parecen direcciones de TMEM: texturas precargadas. Sin comprobar.
+
 **Pendiente:**
 - los flags de la colocación (`0x500`, `0x1700`, `0x40000000`…);
 - qué elige la mezcla aditiva de las piezas `*_ADD_*`;

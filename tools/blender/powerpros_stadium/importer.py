@@ -8,7 +8,7 @@ import bpy
 import numpy as np
 from mathutils import Euler, Matrix
 
-from . import names, pj7m, stadium_tbl, textures
+from . import fingerprint, names, pj7m, stadium_tbl, textures
 
 try:
     from . import projectbin                 # copied into the add-on zip by build_addon.py
@@ -25,10 +25,11 @@ class ImportFailure(Exception):
 
 
 def find_project_bin(path):
-    """project.bin from what the player picked: the file itself, the game folder or the data folder."""
+    """(project.bin, game folder or None) from what the player picked: the file itself, the game
+    folder (the one with UserData, where mods/ lives) or the data folder."""
     path = Path(path)
     if path.is_file() and path.name.lower() == "project.bin":
-        return path
+        return path, None
     folder = path if path.is_dir() else path.parent
     config = folder / "UserData" / "Config.toml"
     candidates = []
@@ -42,7 +43,7 @@ def find_project_bin(path):
     candidates += [folder / "files" / "project.bin", folder / "project.bin"]
     for c in candidates:
         if c.is_file():
-            return c
+            return c, folder if config.is_file() else None
     raise ImportFailure("No encuentro project.bin. Elige la carpeta del juego instalado con el Setup "
                         "(la que tiene UserData) o el archivo files/project.bin.")
 
@@ -69,6 +70,7 @@ def make_image(gfx, tex, cache):
     img.pixels.foreach_set((pixels[::-1].astype(np.float32) / 255.0).ravel())   # Blender rows go bottom-up
     img.pack()
     img["pp_texture_offset"] = tex.offset
+    img["pp_pixels_hash"] = fingerprint.image_hash(img)
     cache[tex.offset] = (img, bool((pixels[..., 3] < 255).any()))
     return cache[tex.offset]
 
@@ -166,7 +168,7 @@ def build_mesh(gfx, model, images, materials):
     me.polygons.foreach_set("material_index", np.asarray(face_mat, np.int32))
     uv = me.uv_layers.new(name="UVMap")
     uv.data.foreach_set("uv", np.asarray(loop_uv, np.float32).ravel())
-    col = me.color_attributes.new("Color", "BYTE_COLOR", "CORNER")
+    col = me.color_attributes.new("Color", "FLOAT_COLOR", "CORNER")      # exact round trip of the RGBA8 values
     col.data.foreach_set("color", (np.asarray(loop_col, np.float32) / 255.0).ravel())
     nrm_attr = me.attributes.new("pp_normal", "FLOAT_VECTOR", "CORNER")
     nrm_attr.data.foreach_set("vector", np.asarray(loop_nrm, np.float32).ravel())
@@ -202,7 +204,7 @@ def build_collision(table, parent):
 
 
 def import_stadium(context, path, code, collision=True):
-    project_bin = find_project_bin(path)
+    project_bin, game_folder = find_project_bin(path)
     archive = projectbin.Archive(project_bin)
     gfx = archive.read(f"stadium_{code}.pack")
     tbl = archive.read(f"stadium_{code}tbl.pack")
@@ -218,6 +220,9 @@ def import_stadium(context, path, code, collision=True):
 
     coll = bpy.data.collections.new(names.NAMES.get(code, code))
     coll["pp_stadium"] = code
+    coll["pp_project_bin"] = str(project_bin)
+    if game_folder is not None:
+        coll["pp_game_folder"] = str(game_folder)
     context.scene.collection.children.link(coll)
     images, materials, objects = {}, {}, []
     for off, pl in zip(offsets, placements):
@@ -234,6 +239,8 @@ def import_stadium(context, path, code, collision=True):
             obj["pp_rotation"] = pl.rotation
             obj["pp_scale"] = pl.scale
         coll.objects.link(obj)
+        obj["pp_signature"] = fingerprint.mesh_signature(obj)
+        obj["pp_matrix"] = fingerprint.matrix_signature(obj)
         objects.append(obj)
 
     if collision and table and table.triangles:

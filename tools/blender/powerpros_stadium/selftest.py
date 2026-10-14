@@ -9,9 +9,9 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from powerpros_stadium import pj7m, stadium_tbl
+    from powerpros_stadium import pj7m, pj7m_write, stadium_tbl
 else:
-    from . import pj7m, stadium_tbl
+    from . import pj7m, pj7m_write, stadium_tbl
 
 P = 0x40000000
 
@@ -95,6 +95,32 @@ def main():
     pl = table.placements[0]
     assert (pl.model, pl.translation, pl.rotation[1], pl.scale, pl.flags) == (0x30, (1, 2, 3), 0.5, (1, 1, 1), 0x500)
     assert table.triangles == [(0, 1, 2, 7)] and table.vertices[1] == (10.0, 0.0, 0.0)
+    # Writer: replace the geometry, add a material with a new texture, move the placement.
+    g = graphics_pack()
+    w = pj7m_write.PackWriter(g)
+    model = pj7m.parse_model(w.d, 0x30)
+    tex = w.add_texture_rgb5a3(bytes([0xFF]) * 32, 4, 4)
+    new_mat = w.add_material(model, model.materials[0].raw, tex)
+    assert new_mat == 1
+    tri = pj7m_write.MeshData(new_mat, [(0, 0, 0), (0, 0, -5), (5, 0, 0)], [(0, 1, 0)], [(1, 2, 3, 4)], [(0, 0)],
+                              [(0, 0, 0, 0), (1, 0, 0, 0), (2, 0, 0, 0)])
+    assert w.set_meshes(model, [tri]) == (3, 1)
+    assert bytes(w.d[:len(g)]) == bytes(g[:0x30]) + bytes(w.d[0x30:len(g)]) and len(w.d) % 4 == 0
+    m2 = pj7m.parse_model(w.d, 0x30)
+    assert m2.header == {"textures": 2, "positions": 3, "triangles": 1}
+    assert len(m2.materials) == 2 and m2.materials[1].texmaps == [1] and m2.texmaps[1].texture == 1
+    assert m2.textures[1].offset == tex and (m2.textures[1].width, m2.textures[1].fmt) == (4, 5)
+    root2 = pj7m.ptr(w.d, 0x30 + 0x0C)
+    for table in (pj7m.ptr(w.d, root2 + 8), pj7m.ptr(w.d, root2 + 12)):      # zero-terminated tables
+        assert bytes(w.d[table + 16:table + 24]) == bytes(8)
+    mesh2 = m2.meshes[0]
+    assert mesh2.material == 1 and pj7m.raw_triangle_count(mesh2) == 1 and mesh2.dl % 32 == 0
+    assert pj7m.array(w.d, mesh2, "pos") == [(0, 0, 0), (0, 0, -5), (5, 0, 0)]
+    assert pj7m.array(w.d, mesh2, "clr") == [(1, 2, 3, 4)]
+    t = table_pack()
+    pj7m_write.set_placement(t, 0x20, (4, 5, 6), (0, 1, 0), (2, 2, 2), (0, 0, 0, 1, 1, 1), (0.5, 0.5, 0.5, 1))
+    pl = stadium_tbl.parse_table(t).placements[0]
+    assert (pl.translation, pl.scale, pl.sphere, pl.flags, pl.model) == ((4, 5, 6), (2, 2, 2), (0.5, 0.5, 0.5, 1), 0x500, 0x30)
     print("selftest OK")
 
 
