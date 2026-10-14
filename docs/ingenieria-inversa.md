@@ -495,6 +495,7 @@ Fuentes: `wiicompiled-match-benchmark.patch` (`match_benchmark.cpp`), `docs/wiic
 
 ## 8. Gráficos (GX y VI)
 
+- **Panorámico nativo:** el juego consulta `SCGetAspectRatio` (`0x800D3374`) desde `0x8004D994`, `0x80055928`, `0x80062D24` y, en el REL, `0x807AB5D4` y `0x80CCAE3C`, y adapta la imagen a 16:9 (los objetos redondos siguen redondos). Código traducido y observación, `RL8E54`.
 - `GXInit` `0x800C25CC`, `GXCopyDisp` `0x800C61F8`.
 - Variables globales de GX:
   - `FifoObj` `0x802D2AC0`
@@ -540,6 +541,7 @@ Fuentes: `wiicompiled-mlb-pad-stick-range.patch`, `config/wiicompiled/rl8e54-dat
 ## 10. Partidas guardadas, NAND, SYSCONF y ES
 
 - **Título:** `00010000/524c3845` (título de disco). La partida es `title/00010000/524c3845/data/pm3usma.dat`.
+- **IOS:** el TMD del disco pide IOS33 (`tmd.bin` `+0x184` = `0x0000000100000021`). El juego imprime la versión en su `OSReport` de arranque («Firmware: 33.14.24»).
 - **Cabecera del disco en memoria baja:** `0x80000000` = `RL8E`, `0x80000004` = `0x35340001` (editor «54», disco 0, versión 1). El runtime escribía el editor «01» y el disco 1 de Mario Kart Wii, y usaba «RMCP» como código de respaldo; desde el parche `wiicompiled-mlb-disc-identity` usa los de MLB.
 - MLB Life, Season y League escriben partida.
 - **NAND:** el juego usa las bibliotecas NAND/ISFS del SDK sobre IOS.

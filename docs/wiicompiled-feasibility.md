@@ -750,4 +750,8 @@ Auditoría de todo el runtime buscando direcciones, desplazamientos de `r13`/`r2
   - `IPCCltInit` no marcaba la bandera de "ya inicializado" (`r13-26876`): una segunda llamada habría vuelto a avanzar el búfer. Ahora la comprueba y la marca, como el original.
 - **Comprobado:** 8 de 8 arranques sin cierre, `IPCCltInit` una sola vez, NAND solo en `title/00010000/524c3845`, el partido automático llega a jugarse y las pruebas del launcher pasan. Antes se habían visto 2 cierres silenciosos en 9 arranques; si el puntero de Miis era la causa no está demostrado.
 - **Sin efecto en MLB** (código no enlazado o desactivado): mezcla de audio, ISFS, EGG/GX, SC, ES, hilos del sistema de Mario Kart, cargador de mods de Retro Rewind.
-- **Pendiente de revisar:** pantalla panorámica por defecto en 16:9; versión de IOS declarada (IOS36, la de Mario Kart); los deslizadores de volumen de efectos, interfaz y voces no hacen nada en MLB (estaban atados al sonido de Mario Kart).
+- **Revisado después, mismo día:**
+  - **IOS:** el TMD del disco pide IOS33 (`0x21`); el runtime declaraba IOS36. Ahora `GameProfile::kIosVersion` da `0x00210E18` (valor de Dolphin para IOS33; misma fecha y memoria que IOS36). El juego lo confirma al arrancar: «Firmware: 33.14.24» (antes 36.14.24).
+  - **Panorámico:** MLB lo soporta de forma nativa: consulta `SCGetAspectRatio` (`0x800D3374`) en 5 sitios, 2 de su REL, y en 16:9 los objetos redondos siguen redondos. Se mantiene 16:9 por defecto.
+  - **Volúmenes:** música, efectos, interfaz y voces del menú en pantalla dependen del gestor de sonido de Mario Kart y no hacen nada en MLB. Para MLB se ocultan y queda solo el volumen general (el launcher ya solo ofrecía ese).
+  - **Fotogramas:** MLB va a 60 FPS de forma nativa: cada fotograma de 16,7 ms trae su dibujado completo (346-357 llamadas, ninguno vacío) y la lógica va a velocidad normal; el runtime no interpola (`frame_interpolation_fps = 0`).
