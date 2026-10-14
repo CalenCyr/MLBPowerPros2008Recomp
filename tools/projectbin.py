@@ -64,6 +64,16 @@ class Archive:
             record = self.records[index]
             yield self.name(record), index, self.data_off + sector * SECTOR, record[6]
 
+    def read(self, name):
+        """Bytes of the entry called name ("/stadium_col.pack" or "stadium_col.pack"), or None."""
+        name = "/" + name.lstrip("/").lower()
+        for path, _, offset, size in self.entries():
+            if path.lower() == name:
+                with open(self.path, "rb") as f:
+                    f.seek(offset)
+                    return f.read(size)
+        return None
+
     def build(self, replacements, out):
         header = bytearray(self.header)
         sector = 0
