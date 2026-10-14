@@ -2,8 +2,10 @@
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
 #include "core.h"
 #include "gx.h"
+#include "pack.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace tstudio {
 namespace {
@@ -60,10 +62,44 @@ void TestGx() {
     CHECK(Decode(std::span<const uint8_t>(i8.data(), 10), 16, 4, 1, {}).Empty());  // short data
     CHECK(Decode(i8, 16, 4, 3, {}).Empty());                                        // IA8: not decodable
 }
+// A synthetic PACKWII: header, one layout C8 texture with its palette pointer, one model C4 texture
+// whose palette follows it (+0x24), and one texture whose pixels run past the end (ignored).
+std::vector<uint8_t> SyntheticPack() {
+    std::vector<uint8_t> d(0x400, 0);
+    std::memcpy(d.data(), "PACKWII ", 8);
+    d[0x17] = 0x20;
+    auto put16 = [&](size_t o, uint16_t v) { d[o] = v >> 8; d[o + 1] = v & 0xFF; };
+    auto put32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; ++i) d[o + i] = (v >> (24 - 8 * i)) & 0xFF; };
+    // layout texture at 0x40: 8x4 C8, pixels at 0x100, palette (256 entries) at 0x200 via +0x2C
+    put16(0x40, 8); put16(0x42, 4); put32(0x44, 9); put32(0x48, 0x40000100);
+    put32(0x54, 1); put32(0x58, 1); put16(0x64, 256); put32(0x68, 2); put32(0x6C, 0x40000200);
+    // model texture at 0x80: 8x8 C4 (type 0x84), pixels at 0x140, palette header at 0xA4 -> data 0x160
+    put16(0x80, 8); put16(0x82, 8); d[0x84] = 0x84; put32(0x88, 0x40000140);
+    put16(0xA4, 16); d[0xA8] = 0x81; put32(0xAC, 0x40000160);
+    // broken texture at 0xC0: 1024x1024 RGBA8 whose pixels would end past the file
+    put16(0xC0, 1024); put16(0xC2, 1024); put32(0xC4, 6); put32(0xC8, 0x40000180);
+    return d;
+}
+
+void TestPack() {
+    const auto d = SyntheticPack();
+    const auto t = FindTextures(d);
+    CHECK(t.size() == 2);
+    if (t.size() != 2) return;
+    CHECK(t[0].offset == 0x40 && t[0].format == 9 && t[0].data == 0x100 && !t[0].model);
+    CHECK(t[0].paletteEntries == 256 && t[0].paletteData == 0x200 && !t[0].paletteByPosition);
+    CHECK(t[1].offset == 0x80 && t[1].format == 8 && t[1].model);
+    CHECK(t[1].paletteEntries == 16 && t[1].paletteData == 0x160 && t[1].paletteByPosition);
+    CHECK(FindTextures(std::span<const uint8_t>(d.data(), 0x30)).empty());   // truncated
+    std::vector<uint8_t> other(d);
+    other[0] = 'X';
+    CHECK(FindTextures(other).empty());                                       // not PACKWII
+}
 } // namespace
 
 int RunSelftest() {
     TestGx();
+    TestPack();
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
