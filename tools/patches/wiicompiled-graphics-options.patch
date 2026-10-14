@@ -679,3 +679,40 @@ index f8fc9e6..f36577a 100644
      PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
      InputBindings::Reload();
      controller_mapping_wizard::LoadPersistedMappings();
+diff --git a/runtime/tests/launcher_nav_probe.inc b/runtime/tests/launcher_nav_probe.inc
+index 3311b8f..c60768c 100644
+--- a/runtime/tests/launcher_nav_probe.inc
++++ b/runtime/tests/launcher_nav_probe.inc
+@@ -39,9 +39,29 @@ auto navProbeTick = [&]() -> bool {
+         require(option(0, 2).value == (start + 2) % choices, "held Cross changes once");
+         button(SDL_GAMEPAD_BUTTON_SOUTH, false);
+     }
+-    if (frame == 110) button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, true);
+-    if (frame == 114) button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, false);
+-    if (frame == 124) {
++    // VIDEO rows: 1 CALIDAD, 3 resolution, 4 ESCALADO, 5 FILTRADO. The test config is 1x, no FSR, original.
++    if (frame == 108) button(SDL_GAMEPAD_BUTTON_DPAD_UP, true);
++    if (frame == 112) button(SDL_GAMEPAD_BUTTON_DPAD_UP, false);
++    if (frame == 120) {
++        require(row == 1 && option(0, 1).value == 0, "CALIDAD starts as Personalizada");
++        button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, true);
++    }
++    if (frame == 124) button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, false);
++    if (frame == 132) {
++        require(option(0, 1).value == 1 && option(0, 3).value == 0 && option(0, 4).value == 1 && option(0, 5).value == 0 &&
++                    RuntimeConfigFile::FsrEnabled(false) && RuntimeConfigFile::TextureFiltering(0) == 0,
++                "CALIDAD Baja sets 1x, FSR 1, original filtering");
++        button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, true);
++    }
++    if (frame == 136) button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, false);
++    if (frame == 144) {
++        require(option(0, 1).value == 2 && option(0, 3).value == 2 && option(0, 4).value == 1 && option(0, 5).value == 2 &&
++                    RuntimeConfigFile::ResolutionMultiplier(1.0f) == 2.0f && RuntimeConfigFile::TextureFiltering(0) == 4,
++                "CALIDAD Media sets 2x, FSR 1, 4x filtering");
++    }
++    if (frame == 150) button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, true);
++    if (frame == 154) button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, false);
++    if (frame == 164) {
+         require(settingsOpen && tab == 1 && row == 0, "R1 moves to the next tab");
+         SDL_CloseJoystick(joystick); SDL_DetachVirtualJoystick(id);
+         std::fprintf(stderr, "launcher-nav COMPLETE\n"); std::fflush(stderr);
