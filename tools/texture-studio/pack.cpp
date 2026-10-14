@@ -25,12 +25,14 @@ std::vector<PackTexture> FindTextures(std::span<const uint8_t> d) {
     if (d.size() < 0x30 || std::memcmp(d.data(), "PACKWII ", 8) != 0) return out;
     std::unordered_map<uint32_t, Palette> pals;  // palette header offset -> palette
     for (size_t o = 0x20; o + 12 <= d.size(); o += 4) {
-        const uint16_t w = Be16(d, o), h = Be16(d, o + 2);
+        // Texture headers hold the height first, then the width (checked against the runtime's dumps);
+        // a palette header holds its entry count, then 0.
+        const uint16_t h = Be16(d, o), w = Be16(d, o + 2);
         const auto p = Pointer(d, o + 8);
         if (!p || *p >= d.size()) continue;
         const uint8_t kind = d[o + 4];
-        if (h == 0 && kind == 0x81 && (w == 16 || w == 256) && *p + 2ull * w <= d.size()) {
-            pals[static_cast<uint32_t>(o)] = {w, *p};
+        if (w == 0 && kind == 0x81 && (h == 16 || h == 256) && *p + 2ull * h <= d.size()) {
+            pals[static_cast<uint32_t>(o)] = {h, *p};
             continue;
         }
         if (!Pow2Size(w) || !Pow2Size(h)) continue;

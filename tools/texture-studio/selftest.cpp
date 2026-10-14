@@ -2,10 +2,13 @@
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
 #include "core.h"
 #include "gx.h"
+#include "names.h"
 #include "pack.h"
+#include "projectbin.h"
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 
 namespace tstudio {
 namespace {
@@ -70,8 +73,9 @@ std::vector<uint8_t> SyntheticPack() {
     d[0x17] = 0x20;
     auto put16 = [&](size_t o, uint16_t v) { d[o] = v >> 8; d[o + 1] = v & 0xFF; };
     auto put32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; ++i) d[o + i] = (v >> (24 - 8 * i)) & 0xFF; };
-    // layout texture at 0x40: 8x4 C8, pixels at 0x100, palette (256 entries) at 0x200 via +0x2C
-    put16(0x40, 8); put16(0x42, 4); put32(0x44, 9); put32(0x48, 0x40000100);
+    // layout texture at 0x40: 8 wide, 4 high C8 (header: u16 height, u16 width), pixels at 0x100,
+    // palette (256 entries) at 0x200 via +0x2C
+    put16(0x40, 4); put16(0x42, 8); put32(0x44, 9); put32(0x48, 0x40000100);
     put32(0x54, 1); put32(0x58, 1); put16(0x64, 256); put32(0x68, 2); put32(0x6C, 0x40000200);
     // model texture at 0x80: 8x8 C4 (type 0x84), pixels at 0x140, palette header at 0xA4 -> data 0x160
     put16(0x80, 8); put16(0x82, 8); d[0x84] = 0x84; put32(0x88, 0x40000140);
@@ -87,6 +91,7 @@ void TestPack() {
     CHECK(t.size() == 2);
     if (t.size() != 2) return;
     CHECK(t[0].offset == 0x40 && t[0].format == 9 && t[0].data == 0x100 && !t[0].model);
+    CHECK(t[0].width == 8 && t[0].height == 4);
     CHECK(t[0].paletteEntries == 256 && t[0].paletteData == 0x200 && !t[0].paletteByPosition);
     CHECK(t[1].offset == 0x80 && t[1].format == 8 && t[1].model);
     CHECK(t[1].paletteEntries == 16 && t[1].paletteData == 0x160 && t[1].paletteByPosition);
@@ -95,11 +100,72 @@ void TestPack() {
     other[0] = 'X';
     CHECK(FindTextures(other).empty());                                       // not PACKWII
 }
+// A synthetic project.bin with two entries, laid out like the real one (tools/projectbin.py).
+std::vector<uint8_t> SyntheticProject() {
+    std::vector<uint8_t> d(0x3000, 0);
+    auto put32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; ++i) d[o + i] = (v >> (24 - 8 * i)) & 0xFF; };
+    put32(0x00, 2); put32(0x04, 0x800);
+    put32(0x14, 0x100);   // records
+    put32(0x28, 0x200);   // order
+    put32(0x2C, 0x300);   // names
+    put32(0x34, 0x800);   // data
+    const char names[] = "\0/a.pack\0/b.dat\0";
+    std::memcpy(&d[0x300], names, sizeof(names));
+    // record 1: name 1, 1 sector, size 5; record 2: name 9, 1 sector, size 3
+    put32(0x100 + 0x1C + 4, 1); put32(0x100 + 0x1C + 8, 1); put32(0x100 + 0x1C + 24, 5);
+    put32(0x100 + 0x38 + 4, 9); put32(0x100 + 0x38 + 8, 1); put32(0x100 + 0x38 + 24, 3);
+    // order: pair 0 unused, (1, sector 0), (2, sector 1), (0, 0)
+    put32(0x208, 1); put32(0x20C, 0); put32(0x210, 2); put32(0x214, 1);
+    std::memcpy(&d[0x800], "HELLO", 5);
+    std::memcpy(&d[0x1000], "abc", 3);
+    return d;
+}
+
+void TestProjectAndNames(const std::filesystem::path& temp) {
+    const auto bytes = SyntheticProject();
+    const auto file = temp / "project.bin";
+    std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    std::string error;
+    const auto index = ReadProjectIndex(file, &error);
+    CHECK(index && index->size() == 2);
+    CHECK(index && (*index)[0].name == "a.pack" && (*index)[0].offset == 0x800 && (*index)[0].size == 5);
+    CHECK(index && (*index)[1].name == "b.dat" && (*index)[1].offset == 0x1000);
+    CHECK(index && std::string(reinterpret_cast<const char*>(ReadEntry(file, (*index)[0]).data()), 5) == "HELLO");
+    const auto cut = temp / "cut.bin";
+    std::ofstream(cut, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), 0x20);
+    CHECK(!ReadProjectIndex(cut, &error) && !error.empty());
+
+    // Hashes (reference values from Python's xxhash, seed 0).
+    std::vector<uint8_t> i8(32);
+    for (size_t i = 0; i < i8.size(); ++i) i8[i] = static_cast<uint8_t>(i);
+    CHECK(TextureHash(i8, 8, 4, 1) == 0xcbf59c5116ff32b4ull);
+    const std::vector<uint8_t> c4(32, 0x12);
+    CHECK(TextureHash(c4, 8, 8, 8) == 0xc2e5e11911ded5deull);
+    const uint8_t pal[] = {0x80, 0x00, 0x81, 0x11, 0x82, 0x22, 0x83, 0x33};
+    CHECK(PaletteHash(c4, 8, 8, 8, pal) == 0x9ceb41977776c426ull);              // indices 1..2 only
+    CHECK(!PaletteHash(c4, 8, 8, 8, std::span<const uint8_t>(pal, 4)));          // palette too short
+
+    ParsedName n{256, 128, 9, 0x0123456789abcdefull, true, false, 0xfedcba9876543210ull};
+    CHECK(ReplacementName(n) == "tex1_256x128_0123456789abcdef_fedcba9876543210_9");
+    n.paletteWildcard = true;
+    CHECK(ReplacementName(n) == "tex1_256x128_0123456789abcdef_$_9");
+    n.hasPalette = false;
+    CHECK(ReplacementName(n) == "tex1_256x128_0123456789abcdef_9");
+    const auto p = ParseName("tex1_64x32_00000000000000aa_0000000000000bbb_8");
+    CHECK(p && p->width == 64 && p->height == 32 && p->textureHash == 0xaa && p->hasPalette && p->paletteHash == 0xbbb && p->format == 8);
+    const auto q = ParseName("tex1_64x32_00000000000000aa_$_9");
+    CHECK(q && q->paletteWildcard);
+    CHECK(!ParseName("hola_64x32_aa_9") && !ParseName("tex1_64x32_zz_9") && !ParseName("tex1_64_aa_9"));
+}
 } // namespace
 
 int RunSelftest() {
+    const auto temp = std::filesystem::temp_directory_path() / PathFromUtf8("texture-studio-selftest-ñ");
+    std::filesystem::remove_all(temp);
+    std::filesystem::create_directories(temp);
     TestGx();
     TestPack();
+    TestProjectAndNames(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
