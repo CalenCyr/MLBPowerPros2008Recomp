@@ -99,6 +99,22 @@ int DevMode(const std::vector<std::string>& args) {
         for (const auto& e : *index) std::printf("%llu %u %s\n", static_cast<unsigned long long>(e.offset), e.size, e.name.c_str());
         return 0;
     }
+    if (args.size() == 3 && args[0] == "--whereis") {  // --whereis <project.bin> <dumps dir>: category and pack of each dump
+        Catalog c;
+        std::string error;
+        if (!c.Build(PathFromUtf8(args[1]), nullptr, &error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+        for (const auto& f : fs::directory_iterator(PathFromUtf8(args[2]))) {
+            const std::string stem = Utf8(f.path().stem());
+            const auto n = ParseName(stem);
+            if (!n) continue;
+            int i = c.Find(stem);
+            if (i < 0) i = c.FindTexture(*n);
+            if (i < 0) { std::printf("%s -\n", stem.c_str()); continue; }
+            const auto& t = c.Textures()[i];
+            std::printf("%s %s/%s %s\n", stem.c_str(), t.group.c_str(), t.subgroup.c_str(), c.Entries()[t.locations[0].entry].name.c_str());
+        }
+        return 0;
+    }
     if (args.size() == 3 && args[0] == "--check-dumps") {  // names computed here vs the game's dumps
         Catalog c;
         std::string error;

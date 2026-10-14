@@ -97,6 +97,12 @@ cmake --build $setupBuild --parallel | Out-Host
 Invoke-Checked 'setup build'
 Copy-Item "$setupBuild\MLBPowerPros2008-Setup.exe" $Output
 
+Write-Host 'Texture Studio...'
+# Power Pros Wii 2008 Texture Studio (tools/texture-studio): texture mods, installed next to the game.
+$studioBuild = Join-Path $root 'local\build\texture-studio'
+& "$root\tools\texture-studio\build.ps1" -Source $Source -Output $studioBuild
+Copy-Item "$studioBuild\TextureStudio.exe" $workspace
+
 Write-Host 'Licenses...'
 New-Item -ItemType Directory -Force "$Output\licenses" | Out-Null
 Copy-Item "$root\LICENSE" "$Output\licenses\MLBPowerPros2008Recomp-LICENSE.txt"

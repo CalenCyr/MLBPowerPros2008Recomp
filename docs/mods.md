@@ -29,7 +29,8 @@ description = "Uniformes redibujados a 4x."
 ## Tipos de contenido
 
 - **`textures/`**: reemplazo de texturas con los nombres de Dolphin, `tex1_<ancho>x<alto>_<hash>[_<hash de paleta>]_<formato>.png` o `.dds`. Pueden tener más resolución que la original.
-  - Para obtener los nombres, pon en `UserData\Config.toml`, bajo `[video]`, `texture_replacements = true` y `texture_dumps = true`. Juega hasta la pantalla que quieras cambiar: las texturas del juego se exportan a `UserData\Cache\texture_dumps`.
+  - **La forma recomendada es Power Pros Wii 2008 Texture Studio** (`docs/texture-studio.md`): enseña todas las texturas, las exporta a PNG y guarda tus versiones editadas o en HD con el nombre correcto en el `textures/` de tu mod.
+  - A mano: para obtener los nombres, pon en `UserData\Config.toml`, bajo `[video]`, `texture_replacements = true` y `texture_dumps = true`. Juega hasta la pantalla que quieras cambiar: las texturas del juego se exportan a `UserData\Cache\texture_dumps`.
   - Edita la que quieras y guárdala en el `textures/` de tu mod con el mismo nombre.
   - Muchas texturas son atlas, es decir, una imagen con varias piezas; solo se ven las zonas que el juego usa.
 - **`disc/`**: archivos con la misma ruta que dentro de la carpeta `files` del disco. Por ejemplo, `disc/sound/SeData.bin` reemplaza `files/sound/SeData.bin` y `disc/project.bin` reemplaza el archivo de contenido (ver abajo).

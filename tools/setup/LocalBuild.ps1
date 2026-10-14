@@ -148,6 +148,8 @@ if (Test-Path $editor) {
     if (Test-Path $installedEditor) { Remove-Item -Recurse -Force $installedEditor }
     Copy-Item $editor $game -Recurse -Force
 }
+$studio = Join-Path $workspace 'TextureStudio.exe'  # texture mods (launcher > HERRAMIENTAS > EDITOR DE TEXTURAS)
+if (Test-Path $studio) { Copy-Item $studio $game -Force }
 foreach ($name in 'config', 'wii_bootstrap') {
     $dir = Join-Path $build $name
     if (Test-Path $dir) { Copy-Item $dir $game -Recurse -Force }
@@ -178,5 +180,11 @@ if ($Shortcut) {
     $link.TargetPath = Join-Path $game 'MLBPowerPros2008.exe'
     $link.WorkingDirectory = $game
     $link.Save()
+    if (Test-Path (Join-Path $game 'TextureStudio.exe')) {
+        $studioLink = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktop 'Power Pros Wii 2008 Texture Studio.lnk'))
+        $studioLink.TargetPath = Join-Path $game 'TextureStudio.exe'
+        $studioLink.WorkingDirectory = $game
+        $studioLink.Save()
+    }
 }
 Progress 100 'Listo.'

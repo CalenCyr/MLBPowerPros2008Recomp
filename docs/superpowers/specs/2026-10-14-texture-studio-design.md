@@ -59,8 +59,7 @@ Cada unidad tiene una sola responsabilidad y se prueba por separado. `catalog`, 
 
 ### Índice
 
-- Primera apertura: recorre los 2.356 packs (unos 392 MB) y guarda un índice en `UserData/Cache/texture_studio/index.bin` con, por textura: pack, posición, ancho, alto, formato, posición de paleta, hash de textura, hash de paleta.
-- Se rehace solo si cambian el tamaño o la fecha de `project.bin`, o la versión del índice.
+- Al abrir: recorre los 2.356 packs (unos 392 MB) en un hilo, con barra de progreso, y guarda en memoria por textura: pack, posición, ancho, alto, formato, posición de paleta, hash de textura y hash de paleta. Medido: 9.657 texturas distintas en 1,1 s, así que no se guarda en disco (decisión de implementación del 14 de octubre de 2026).
 - Texturas idénticas en varios packs se agrupan por nombre `tex1_…`; la ficha muestra «usada en N packs».
 - Miniaturas: se decodifican al aparecer en pantalla y se guardan en caché en memoria (con límite).
 
