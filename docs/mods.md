@@ -59,9 +59,34 @@ python tools/projectbin.py build   <project.bin> <reemplazos> <salida>
 
 Para saber qué entrada usa cada pantalla, ejecuta el juego con `WIICOMPILED_DEBUG_DVD=1`: el registro muestra cada lectura de `project.bin` con su posición, que `projectbin.py list` traduce a nombre.
 
-Formato (verificado en las 2.424 entradas): cabecera con versión 2 y sector 0x800; registros de 0x1C bytes en 0x6000 (nombre, sectores, alineación, tamaño); tabla de orden en 0x26000 (registro, sector de inicio); nombres en 0x2B000; datos desde 0x3D800. Los `.pack` empiezan por `PACKWII` (dos por `PACKPS2`) y por dentro son bloques con etiquetas (`SURF`, `SURG`...) y punteros relativos; ese formato interno todavía no está documentado.
+Formato (verificado en las 2.424 entradas): cabecera con versión 2 y sector 0x800; registros de 0x1C bytes en 0x6000 (nombre, sectores, alineación, tamaño); tabla de orden en 0x26000 (registro, sector de inicio); nombres en 0x2B000; datos desde 0x3D800. El formato interno de los `.pack` está en `docs/ingenieria-inversa.md`, sección 5.
 
 Un mod no debe distribuir un `project.bin` completo (es contenido del juego): solo sus `.pack` en `project/`.
+
+### Texturas dentro de un `.pack`
+
+`tools/packwii.py` saca las texturas de un `.pack` a PNG y vuelve a meter las que edites. Necesita `pip install numpy pillow`.
+
+```
+python tools/projectbin.py extract <project.bin> pack env_mainmenu
+python tools/packwii.py info   pack/env_mainmenu.pack                 # texturas, formato y paleta
+python tools/packwii.py export pack/env_mainmenu.pack png             # un PNG por textura + textures.json
+#   edita los PNG que quieras, sin cambiar su tamaño
+python tools/packwii.py import pack/env_mainmenu.pack png mimod/project/env_mainmenu.pack
+```
+
+- Cada PNG se llama `<posición>_<ancho>x<alto>.png`. `import` solo vuelve a codificar los que cambiaron. Si no cambia ninguno, el `.pack` sale idéntico byte a byte.
+- **Formatos:** RGBA8, RGB5A3, I4, I8, C4 y C8.
+- **Paletas (C4/C8):**
+  - Si la paleta es solo de esa textura, se recalcula con los colores nuevos.
+  - Si la comparten varias texturas, o el juego puede dibujar la textura con otras paletas, los colores no cambian. Los píxeles editados toman el color más parecido y los demás conservan su índice exacto.
+  - Ejemplo de lo segundo: las etiquetas del menú principal salen azules en el PNG, pero el juego pinta cada botón de un color.
+- **Texturas que no se pueden importar:**
+  - Unas 400 tienen la paleta en otro pack: salen en gris y `import` las rechaza.
+  - Tres del menú principal salen rayadas y aún no se entienden.
+- **Comprobado en el juego:** un recuadro pintado sobre «Exhibition» en `env_mainmenu.pack` aparece en el menú principal y el resto de botones no cambia.
+
+No subas ni compartas los PNG exportados ni los `.pack` del juego. Un mod reparte solo los `.pack` que modificó, igual que con los uniformes.
 
 ## Partidas por roster
 
@@ -90,8 +115,9 @@ Un mod solo debe traer sus propios archivos o diferencias, **nunca copias del ju
   - el registro muestra `mods: enabled ...` e `Indexed N texture replacements from 2 folder(s)`.
   - un pack de texturas de Dolphin real (logos y uniformes 2023, 206 texturas) funciona sin cambios como `textures/`;
   - un mod con solo `project/PWM_mdl_uniform_MLB_CHC_00.pack` (el de los Yankees, 6,9 KB) hace que los Cubs salgan con la gorra "NY" en la selección de equipo. El juego genera la copia en 656 ms, la reutiliza en el siguiente arranque y queda idéntica a la de `projectbin.py build` (mismo SHA-256).
+  - (13 de octubre de 2026) un `env_mainmenu.pack` editado con `packwii.py` (recuadro sobre «Exhibition») se ve en el menú principal sin alterar los demás botones.
 - **Sin probar todavía:** `riivolution/` en MLB. Usa el mismo código de Wiicompiled que ya funciona con Mario Kart Wii.
 - **Pendiente:**
-  - formato interno de `PACKWII` (texturas y modelos);
+  - modelos dentro de `PACKWII` (las texturas ya se pueden editar con `packwii.py`);
   - opción en el launcher para volcar texturas sin editar `Config.toml`;
   - mods de código en C++ compilados por el Setup.

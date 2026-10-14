@@ -282,7 +282,10 @@ Fuentes: desensamblado (`0x80027A54`, `0x80027BF8`, `0x80038E50`-`0x8003A41C`); 
 - **Registros** de `0x1C` bytes: 0, offset del nombre, tamaño en sectores, alineación (`0x800`), 0, 0, tamaño en bytes.
 - **Tabla de orden:** pares (registro, sector de inicio relativo a `0x3D800`), ordenados por sector. El par 0 no se usa y la lista acaba en (0, 0).
 - **Nombres:** rutas terminadas en NUL que empiezan por `/`.
-- **Tipos:** `.pack` (2.356 empiezan por `PACKWII `, 2 por `PACKPS2`), `.dat` y `.arc`. Dentro, los `.pack` son bloques con etiqueta (`SURF`, `SURG`…) y punteros relativos; ese formato interno **sigue sin documentar**.
+- **Tipos:**
+  - `.pack`: 2.356 empiezan por `PACKWII ` y 2 por `PACKPS2` (`team_logo.pack`, little-endian). Formato abajo.
+  - `.dat`: 60 `PCD`, 2 `TCD` y 1 `SID`, little-endian: comentarios de las cartas de jugador y de equipo, y de la tienda. Empiezan por la etiqueta y un NUL, un `float` 1.0, el número de textos y sus posiciones. El texto va en u16 con una tabla de caracteres propia, aún sin decodificar.
+  - `.arc`: 2 archivos U8 de Nintendo (`RFLRes01`, `SpeakerSe`).
 - **Montaje:** `0x800431E8` monta `/PROJECT.BIN` (cadena en `0x80155DD0`) llamando a `0x80059E7C`.
 - **Gestor de recursos de DVD:** `0x80042C28` solo procesa su cola cuando `DVDGetDriveStatus` dice que la unidad está libre. Al arrancar, el juego lanza `DVDInquiryAsync` y luego consulta el estado.
 - **Entradas conocidas:**
@@ -291,6 +294,41 @@ Fuentes: desensamblado (`0x80027A54`, `0x80027BF8`, `0x80038E50`-`0x8003A41C`); 
   - `env_title_logo`, `env_mainmenu`, `env_teamnameNN`
   - `PWM_mdl_uniform_MLB_<equipo>_<n>.pack`: uniformes. Cambiar el de CHC por el de NYY pone la gorra "NY" a los Cubs.
 - **Para mods:** un `project.bin` reconstruido solo cambia los tamaños de los registros (`+0x08` sectores, `+0x18` bytes) y los sectores de inicio. La cabecera, la tabla hash y los nombres no cambian (`tools/projectbin.py`).
+
+### Formato `PACKWII`
+
+Big-endian, un grafo de objetos con punteros. Verificado sobre las 2.356 entradas.
+
+- **Cabecera:** `"PACKWII "`, u32 0, u32 número de entradas (`+0x0C`), puntero a la tabla (`+0x10`), u32 `0x20` (tamaño de la cabecera).
+- **Puntero:** `0x40000000 | posición en el archivo` (base 0).
+- **Tabla:** entradas de 12 bytes {u32 0, u32 id, puntero}. Solo 19 packs la tienen; el resto llega a sus objetos desde una estructura raíz en `+0x20`.
+- **Etiquetas en `+0x20`:**
+  - `1MPP`: movimientos de lanzador (263 packs).
+  - `1MBP`: movimientos de bateador (249).
+  - `PJ7M`: modelos (8).
+  - Otras: `1HMP`, `1UAP`, `1LMP`, `pM_U`.
+  - 1.822 no tienen etiqueta: interfaces `env_*` (`pM2`), modelos, estadios, temporadas.
+- **`SURF`:** capa 2D de las interfaces. Tamaño `0x2C`, nombre, escala 100/100 y punteros.
+
+**Texturas** (comprobadas decodificándolas; `tools/packwii.py`):
+
+| Tipo | Cabecera |
+|---|---|
+| Modelo | u16 ancho, u16 alto, u8 tipo (`0x80` RGBA8, `0x81` RGB5A3, `0x82` C8, `0x84` C4), `+0x08` puntero a los píxeles, cuatro palabras `0x82000000`. En C4/C8 la cabecera de paleta va en `+0x24`. |
+| Interfaz | u16 ancho, u16 alto, u32 formato GX, `+0x08` píxeles, `+0x14` 1, `+0x18` 1, `+0x24` u16 entradas de paleta, `+0x28` u32 formato de paleta (2 = RGB5A3), `+0x2C` puntero a la paleta (0 si está en otro sitio). |
+| Paleta | u16 entradas (16 o 256), u16 0, u8 `0x81`, u8 0, u16 `0x6000`, `+0x08` puntero a los colores RGB5A3. |
+
+- **Conjuntos de texturas:** {u32 n, → n texturas, u32 m, → m paletas}. Hay una paleta para todas o una por textura.
+- **Píxeles:** en el orden por bloques de GX (C4 8×8, C8 8×4, RGB5A3 y RGBA8 4×4; RGBA8 guarda AR y GB en dos mitades de 32 bytes por bloque).
+- **Cobertura:** 11.292 texturas en 1.637 packs; 10.781 de las 11.200 con paleta quedan emparejadas.
+  - Por puntero: cabecera de interfaz, conjuntos de texturas, modelo con paleta en `+0x24`.
+  - Por posición: la cabecera de paleta justo antes de la textura (`-0x20`) o los colores justo después de los píxeles.
+  - Las demás reciben la paleta de otro pack.
+- **Una textura, varias paletas:**
+  - En `env_mainmenu.pack`, el atlas de etiquetas `0x2A920` (512×512, C8) se exporta en azul, pero el juego dibuja cada botón de otro color. Su mitad superior es la etiqueta normal y la inferior la seleccionada.
+  - Si se reconstruye esa paleta o se cambian índices de píxeles que no se tocaron, todas las etiquetas salen con ruido. Si solo se cambian los píxeles editados, el cambio aparece en el juego (comprobado con un recuadro sobre «Exhibition»).
+  - Por eso `packwii.py` deja fijas las paletas emparejadas por posición y conserva los índices originales.
+- **Sin resolver:** en `env_mainmenu.pack`, `0x12140`, `0x9B6E0` y `0xBB940` salen con rayas horizontales; puede que alternen paletas por línea o vayan entrelazadas.
 
 **Funciones DVD:**
 
@@ -306,7 +344,7 @@ Fuentes: desensamblado (`0x80027A54`, `0x80027BF8`, `0x80038E50`-`0x8003A41C`); 
 
 - Respuesta de unidad comercial que espera el juego: `+0` = `0x00000002`, `+4` = `0x20060526`, `+8` = `0x41000000`.
 
-Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `wiicompiled-dvd-low-completion.patch`.
+Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `tools/packwii.py`, `wiicompiled-dvd-low-completion.patch`.
 
 ## 6. Roster: `game_data.pack` y formato de jugador
 
@@ -559,11 +597,13 @@ Fuentes: `wiicompiled-mlb-nand-es.patch`, `hle/mlb/sc_check_status.cpp`, `docs/m
   - `tools/align_sdk_by_anchors.py`
   - `tools/function_data_refs.py`
   - `tools/projectbin.py` (lee y reconstruye `project.bin`)
+  - `tools/packwii.py` (exporta e importa las texturas de un `.pack`)
   - `tools/roster/` (convierte rosters)
 - **Puntos de vigilancia en el juego recompilado:** `WIICOMPILED_DEBUG_WATCH=<dirección>` informa de cada escritura en esa dirección, con la pila de llamadas. Así se encontró el reloj de las frases.
 - **Diagnóstico de audio:** `WIICOMPILED_AUDIO_DUMP=<archivo>` guarda la mezcla final para medir chasquidos.
 - **Pendiente de investigar:**
-  - formato interno de los `.pack` (`SURF`, `SURG`…)
+  - objetos de los `.pack` aparte de las texturas: modelos, capas `SURF`/`SURG` y movimientos
+  - texto de los `.dat` `PCD`/`TCD`/`SID` y las texturas rayadas de `env_mainmenu.pack`
   - estructura de los equipos y las alineaciones más allá de lo mapeado
   - lógica de MLB Life
   - los ~450 candidatos de getters en mitad de funciones
