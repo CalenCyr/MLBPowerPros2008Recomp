@@ -4,10 +4,16 @@ Recompilación nativa no oficial de MLB Power Pros 2008 para Wii (USA, `RL8E54`)
 
 ## Instalar y jugar (Windows 10/11, 64 bits)
 
-1. Descarga `MLB Power Pros 2008 Setup.zip` desde la página de *Releases* de este repositorio y descomprímelo en una carpeta tuya.
+1. Descarga `MLB Power Pros 2008 Setup.zip` desde la página de *Releases* de este repositorio y descomprímelo en una carpeta tuya. *(Todavía no hay una release publicada; hasta entonces el paquete se genera con `tools/setup/Make-Payload.ps1 -Zip`.)*
 2. Abre `MLBPowerPros2008-Setup.exe`, pulsa **ELEGIR DISCO** y selecciona tu copia del juego (ISO, NKit, RVZ, WBFS, WIA, GCZ o CISO).
 3. Pulsa **INSTALAR**. El Setup comprueba que sea un volcado limpio de `RL8E54`, lo extrae, traduce el código del juego y lo compila **en tu PC**. La primera vez tarda unos minutos.
 4. Pulsa **JUGAR** (o usa el acceso directo del escritorio). Antes de cada partida aparece el launcher para elegir API gráfica, pantalla, resolución, audio y controles.
+
+Desde el launcher (AJUSTES → MODS / HERRAMIENTAS) también se activan mods y se abren las herramientas incluidas:
+
+- **Editor de rosters** (PowerUp+ adaptado a 2008): `docs/roster-2008.md`.
+- **Power Pros Wii 2008 Texture Studio**, para hacer mods de texturas, también en HD: `docs/texture-studio.md`.
+- Tipos de mods y cómo instalarlos: `docs/mods.md`.
 
 **No se incluye ni se descarga nada del juego.** Ni este repositorio ni sus releases contienen la imagen del disco, el ejecutable, assets ni código traducido: el Setup solo trae herramientas (traductor, compilador, código fuente del runtime) y todo lo del juego se genera en tu equipo a partir de tu propia copia. No pidas ni compartas archivos del juego.
 
@@ -41,6 +47,8 @@ El traductor y el runtime son los de Wiicompiled, fijados en `config/tools.lock.
 
 - Release: `tools/setup/Make-Payload.ps1` arma el Setup; `tools/setup/LocalBuild.ps1` es lo que corre en la PC del jugador.
 - Mods y roster: `docs/mods.md`, `docs/roster-2008.md`, `tools/projectbin.py`, `tools/roster/`, `tools/powerupplus.ps1`.
+- Texturas: `docs/texture-studio.md`, `tools/texture-studio/` (`build.ps1`; `TextureStudio.exe --selftest`), `tools/packwii.py`.
+- Diseños y planes de trabajo: `docs/superpowers/`.
 - Ingeniería inversa: **`docs/ingenieria-inversa.md`** (referencia del juego por sistema; PDF con `tools/build_re_pdf.py`), `docs/reverse-engineering-tools.md` (Ghidra, dtk), `function_data_refs.py`, `dol_to_elf.py`, `sample_host_thread.cpp`.
 
 ## Estructura

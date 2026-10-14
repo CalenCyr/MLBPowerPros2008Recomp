@@ -115,8 +115,9 @@ Un mod solo debe traer sus propios archivos o diferencias, **nunca copias del ju
   - un pack de texturas de Dolphin real (logos y uniformes 2023, 206 texturas) funciona sin cambios como `textures/`;
   - un mod con solo `project/PWM_mdl_uniform_MLB_CHC_00.pack` (el de los Yankees, 6,9 KB) hace que los Cubs salgan con la gorra "NY" en la selección de equipo. El juego genera la copia en 656 ms, la reutiliza en el siguiente arranque y queda idéntica a la de `projectbin.py build` (mismo SHA-256).
   - (13 de octubre de 2026) un `env_mainmenu.pack` editado con `packwii.py` (recuadro sobre «Exhibition») se ve en el menú principal sin alterar los demás botones.
+  - (14 de octubre de 2026) un mod hecho con Texture Studio (atlas del menú principal y vallas y marcador de Coors Field, ×4) se ve en el menú y durante un partido.
 - **Sin probar todavía:** `riivolution/` en MLB. Usa el mismo código de Wiicompiled que ya funciona con Mario Kart Wii.
+- **Hecho:** volcar texturas sin editar `Config.toml`: «Capturar en juego» de Texture Studio (launcher → HERRAMIENTAS → EDITOR DE TEXTURAS).
 - **Pendiente:**
-  - modelos dentro de `PACKWII` (las texturas ya se pueden editar con `packwii.py`);
-  - opción en el launcher para volcar texturas sin editar `Config.toml`;
+  - modelos dentro de `PACKWII` (las texturas ya se editan con Texture Studio o `packwii.py`);
   - mods de código en C++ compilados por el Setup.

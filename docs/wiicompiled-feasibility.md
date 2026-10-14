@@ -45,7 +45,7 @@ Ajustes que hizo falta hacer:
 - **Entradas `gap_*` de dtk.** No son código; por ejemplo, la cadena `MetroTRK` en `.init`, en `0x80004338`. Generaban la única instrucción "no soportada" (`0x4D657472` = "Metr") y el conversor ahora las descarta.
 - **L2CR.** `mfspr 1017` se traduce como `PPC_ReadSpr(1017)`, que su runtime ya conserva como registro sombra.
 
-Alcance: esto es código traducido, no comportamiento validado. El runtime todavía no compila para MLB.
+Alcance: esto es código traducido, no comportamiento validado. El runtime todavía no compila para MLB. *(Resuelto: compila y arranca en la fase 2, abajo.)*
 
 ## Cobertura de nombres para reasignar ganchos
 
@@ -168,11 +168,11 @@ En esa última ejecución:
 - `OSInit`, VI, GX, AI y el hilo mezclador AX están activos.
 - Hay 5 hilos invitados como fibras.
 - El juego imprime sus `OSReport` (SDK OS, SC, KPAD, AX).
-- **No dibuja todavía.** La ventana muestra el marcador de WiiCompiled a ~50 FPS.
+- **No dibuja todavía.** La ventana muestra el marcador de WiiCompiled a ~50 FPS. *(Resuelto en «Render», 11 de octubre.)*
 - Los hilos activos son del DOL; el REL `ovl_main.rel` aún no se ha cargado ni enlazado.
 - El hilo principal está en el bucle de frame del cargador (`0x800472B4`): sincronización por token de GX y `VIWaitForRetrace`.
 
-**Siguiente paso:** averiguar en qué espera la carga del REL. Seguramente sea la ruta DVD o NAND del cargador del juego (hilo `0x80242888`, entrada `0x80027A54`). El volcado de fibras solo guarda el contexto inicial, así que hace falta trazar las llamadas DVD y NAND.
+**Siguiente paso (resuelto en «Carga de `ovl_main.rel`»):** averiguar en qué espera la carga del REL. Seguramente sea la ruta DVD o NAND del cargador del juego (hilo `0x80242888`, entrada `0x80027A54`). El volcado de fibras solo guarda el contexto inicial, así que hace falta trazar las llamadas DVD y NAND.
 
 Alcance: es comportamiento de arranque observado, no validado contra Dolphin. Cada gancho reasignado sigue siendo candidato hasta que se compare con la referencia (lockstep o pruebas dirigidas).
 
@@ -226,7 +226,7 @@ Arreglo, en `tools/patches/wiicompiled-aurora-partial-efb-copy.patch` (4.º parc
 - A los 20 s ya pasó al segundo panel. Funciona a 60 FPS.
 - Es comportamiento observado. No hay comparación píxel a píxel; la escala horizontal de la copia de 512 px a la ventana no está validada.
 
-**Siguiente paso:** pasar la pantalla de la correa (pulsación de A automatizada) para que siga la carga de `ovl_main.rel`.
+**Siguiente paso (resuelto abajo):** pasar la pantalla de la correa (pulsación de A automatizada) para que siga la carga de `ovl_main.rel`.
 
 ## Carga de `ovl_main.rel` (11 de octubre de 2026)
 
@@ -305,7 +305,7 @@ Fallos corregidos, en orden:
 
 Es comportamiento observado, no validado contra Dolphin píxel a píxel. El audio y el juego en sí siguen sin comprobar.
 
-**Siguiente paso:** guiar las pulsaciones hasta Exhibition y un partido, y comprobar render y entrada en el juego.
+**Siguiente paso (resuelto en «Dentro del juego» y las secciones siguientes):** guiar las pulsaciones hasta Exhibition y un partido, y comprobar render y entrada en el juego.
 
 ## Dentro del juego: modo Home Run (11 de octubre de 2026)
 
@@ -540,7 +540,7 @@ No está validado píxel a píxel contra Dolphin.
 
 **Pendiente:**
 - Probar en una PC limpia, sin las herramientas del proyecto.
-- Publicar la release (zip de unos 400 MB comprimido; tamaño por medir).
+- Publicar la release. El repositorio está en GitHub (privado) desde el 13 de octubre; la release no se ha publicado. Tamaño medido el 14 de octubre: paquete de 963 MB, zip de 303 MB.
 - Generar el paquete desde un clon limpio en un solo paso. Hoy `-Source` apunta a un árbol ya parcheado, reasignado y con los artefactos de Wiicompiled.
 - Linux y Switch.
 
@@ -552,7 +552,7 @@ No está validado píxel a píxel contra Dolphin.
   - en ajustes, las pestañas, las filas y la ayuda, interpolando desde los bordes suavizados.
 - **Lo que dibuja `launcher.cpp` encima:** si encuentra `launcher/*.png` junto al exe, ajusta el arte a la ventana y rellena las barras con el mismo arte ampliado y oscurecido.
   - **Botón elegido:** se redibuja ampliado y con brillo que pulsa, con las chispas a su lado.
-  - **Resto de botones:** atenuados. MODS queda deshabilitado y su línea dice "Próximamente".
+  - **Resto de botones:** atenuados. MODS queda deshabilitado y su línea dice "Próximamente". *(Ya no: MODS funciona desde «Mods», 12 de octubre.)*
   - **Caja de info:** muestra el estado real (disco, ID, API en uso, aviso de reinicio).
   - **Ajustes:** pestañas, filas, valores y ayuda se dibujan con los colores del mockup; el botón de cerrar es el del arte.
   - **Sin las PNG:** se mantiene el estilo procedural de antes (por ejemplo en Switch).
@@ -561,7 +561,7 @@ No está validado píxel a píxel contra Dolphin.
   - `Make-Payload.ps1` las mete en el paquete y `LocalBuild.ps1` las instala en `Game/launcher`.
   - `check_no_game_data.py` solo admite binarios en `assets/launcher/*.png`, de hasta 4 MiB.
 - **Verificado con teclas enviadas solo a la ventana:**
-  - las chispas siguen a la selección y MODS muestra "Próximamente";
+  - las chispas siguen a la selección y MODS muestra "Próximamente" (en aquel momento);
   - la entrada a ajustes y el cambio de pestaña funcionan;
   - las barras quedan rellenas en una ventana de 1920x1009.
 - **El Setup usa el mismo arte:** `prepare_mooninning_art.py` también genera `setup.png`, que es el fondo del menú con los cuatro botones en blanco.
@@ -667,7 +667,7 @@ No está validado píxel a píxel contra Dolphin.
 
   - El juego no dibuja fotogramas de más: va a 60 por segundo. A x4 la GPU trabaja el 70 % de cada fotograma. Unas 35 copias del EFB por fotograma escalan con la resolución, 16 veces más píxeles a x4.
   - Las dos sesiones llegaron solas al campo, con los mismos equipos y estadio, y los dibujos variaron entre 208 y 1.012 (el partido se mueve). Es juego automático de la CPU, no una repetición exacta fotograma a fotograma.
-- **Pendiente:** saber qué parte de los 11,7 ms son esas copias y cuál el dibujado en sí.
+- **Pendiente:** saber qué parte de los 11,7 ms son esas copias y cuál el dibujado en sí. *(Resuelto en «Por qué x4 carga tanto la GPU»: casi todo es dibujado.)*
 
 ## Por qué x4 carga tanto la GPU (13 de octubre de 2026)
 
@@ -703,7 +703,7 @@ No está validado píxel a píxel contra Dolphin.
   - El límite pasa de 120 a 250 ms: solo frena un crecimiento descontrolado.
   - Si la cola se vacía, se pausa hasta volver a tener 80 ms: un silencio corto en vez de chasquidos.
 - **Resultado, misma prueba:** la cola se mantiene en 65-80 ms. En las pausas de 40-50 ms del partido no baja de 16-40 ms. No hay descartes. Solo una pausa de 88 ms al cargar el partido la dejó casi vacía.
-- No se comprobó a oído: falta que alguien lo escuche jugando.
+- No se comprobó a oído en ese momento. *(Confirmado después: ver el final de «Chasquidos del comentarista».)*
 
 ## Chasquidos del comentarista (13 de octubre de 2026)
 
@@ -728,4 +728,13 @@ No está validado píxel a píxel contra Dolphin.
   - **Inicio del partido:** el usuario aún oía chasquidos un momento al principio, cuando los jugadores van a sus posiciones. Medido segundo a segundo: el temporizador bajaba a 130-180 despertares/s entre los segundos 34 y 47, porque el hilo principal calcula hasta 17-20 ms seguidos (un fotograma entero) sin ceder el turno. Además, el límite de un cuarto de periodo movía el ancla y tiraba la deuda acumulada.
   - Arreglo: (1) el ancla lógica guarda la deuda completa; solo el temporizador real respeta el cuarto de periodo. (2) Cuando el código del juego reactiva las interrupciones (`OSRestoreInterrupts`/`OSEnableInterrupts`) y hay un temporizador vencido, se cede el turno ahí mismo, como hace la consola al tomar la interrupción pendiente (`OS_HLE_PreemptionPoint`, el mismo mecanismo que ya usa `GXCopyDisp`). Solo en las llamadas desde el juego; el C++ del runtime sigue usando las versiones normales. Un atómico con el plazo más próximo evita bloquear en cada llamada.
   - Resultado: 200-203 despertares/s todo el tiempo (solo se pierden ~15 en el segundo de la carga del campo), 0 chasquidos en 69 s, 1,5/min en 90 s sin ninguno al inicio, 60 FPS en x1 y x4, 8 de 8 arranques bien.
-  - Resultado, mismo partido directo: 200-201 sueños/s, **3,0-3,4 saltos/min** (Dolphin 3,1), 59,96 FPS a x1. Falta confirmarlo a oído en juego normal.
+  - Resultado, mismo partido directo: 200-201 sueños/s, **3,0-3,4 saltos/min** (Dolphin 3,1), 59,96 FPS a x1.
+  - **Confirmado a oído** por el usuario en juego normal el 13 de octubre de 2026: el chasquido del comentarista ya no se oye. La comparación con Dolphin de la saturación propia de los datos sigue sin hacerse.
+
+## Texture Studio (14 de octubre de 2026)
+
+- **Power Pros Wii 2008 Texture Studio** (`tools/texture-studio`, guía en `docs/texture-studio.md`): app aparte para crear mods de texturas. Lee el `project.bin` del jugador, muestra las 9.657 texturas distintas por categorías, las exporta a PNG e importa las editadas (también en HD) como `tex1_…` en `mods/<mod>/textures/`.
+- **Integración:** el launcher la abre desde HERRAMIENTAS → EDITOR DE TEXTURAS (parche `wiicompiled-texture-studio`), el Setup la instala junto al juego y `wiicompiled-build.ps1` la deja junto a `WiiCompiled.exe`.
+- **Captura en juego:** `WIICOMPILED_TEXTURE_DUMPS=1` activa el volcado de texturas solo para esa ejecución, sin tocar `Config.toml`.
+- **Verificado en el juego:** el atlas de etiquetas del menú principal y dos texturas de Coors Field (vallas y marcador) escaladas ×4 con el Studio se ven en el menú y durante un partido.
+- **Ingeniería inversa:** las cabeceras de textura de los `.pack` guardan el alto antes que el ancho (ver `docs/ingenieria-inversa.md`, sección 5).
