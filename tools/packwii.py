@@ -14,9 +14,9 @@ root structure. Textures come in two header layouts (docs/ingenieria-inversa.md,
 
 A layout palette that lives elsewhere is found through texture sets: {u32 n, -> n texture
 headers, u32 m, -> m palettes} (one palette for all, or one each). About 96% of the paletted
-textures pair this way. Others pair by position (palette header right before the texture or palette
-data right after it); the game may draw those with several palettes, so their palette is kept on
-import. The rest (palette in another pack) export in grey and cannot be imported.
+textures pair this way. Others pair by position (palette data right after the pixels; checked
+against the runtime's texture dumps). The game can swap palettes at run time, so a position-paired
+palette is kept on import. The rest (palette in another pack) export in grey and cannot be imported.
 
 usage:
   packwii.py info <file.pack>
@@ -207,8 +207,8 @@ def find_textures(d):
             for i, x in enumerate(tl):
                 if byoff[x]["fmt"] in (8, 9) and byoff[x]["pal"] is None:
                     byoff[x]["pal"] = pals[pl[i] if len(pl) == len(tl) else pl[0]]
-    # Pairing by position only: the game may draw these with other palettes too (env_mainmenu.pack
-    # tints one set of labels per button colour), so import must keep their palette and indices.
+    # Pairing by position only: the game may draw these with another palette (env_mainmenu.pack
+    # 0x163a0 does), so import keeps their palette and the indices of unedited pixels.
     for t in texs:
         if t["fmt"] not in (8, 9) or t["pal"] is not None:
             continue
@@ -217,9 +217,7 @@ def find_textures(d):
         end = t["data"] + nbytes(t["w"], t["h"], t["fmt"])
         if t["kind"] == "model" and t["off"] + 0x24 in pals:          # palette header follows
             t["pal"] = pals[t["off"] + 0x24]
-        elif pals.get(t["off"] - 0x20, (0,))[0] == want:                 # palette header just before
-            t["pal"] = pals[t["off"] - 0x20]
-        else:                                                            # palette data after the pixels
+        else:      # palette data right after the pixels (the header just before is the previous texture's)
             t["pal"] = next((pal for pal in pals.values() if pal == (want, end)), None)
     return texs
 

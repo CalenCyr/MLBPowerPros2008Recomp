@@ -320,14 +320,16 @@ Big-endian, un grafo de objetos con punteros. Verificado sobre las 2.356 entrada
 
 - **Conjuntos de texturas:** {u32 n, → n texturas, u32 m, → m paletas}. Hay una paleta para todas o una por textura.
 - **Píxeles:** en el orden por bloques de GX (C4 8×8, C8 8×4, RGB5A3 y RGBA8 4×4; RGBA8 guarda AR y GB en dos mitades de 32 bytes por bloque).
-- **Cobertura:** 11.292 texturas en 1.637 packs; 10.781 de las 11.200 con paleta quedan emparejadas.
+- **Cobertura:** 11.292 texturas en 1.637 packs; 10.769 de las 11.200 con paleta quedan emparejadas.
   - Por puntero: cabecera de interfaz, conjuntos de texturas, modelo con paleta en `+0x24`.
-  - Por posición: la cabecera de paleta justo antes de la textura (`-0x20`) o los colores justo después de los píxeles.
+  - Por posición: los colores de la paleta van justo después de los píxeles. La cabecera de paleta que hay justo antes de una textura es la de la textura anterior, no la suya.
   - Las demás reciben la paleta de otro pack.
-- **Una textura, varias paletas:**
-  - En `env_mainmenu.pack`, el atlas de etiquetas `0x2A920` (512×512, C8) se exporta en azul, pero el juego dibuja cada botón de otro color. Su mitad superior es la etiqueta normal y la inferior la seleccionada.
-  - Si se reconstruye esa paleta o se cambian índices de píxeles que no se tocaron, todas las etiquetas salen con ruido. Si solo se cambian los píxeles editados, el cambio aparece en el juego (comprobado con un recuadro sobre «Exhibition»).
-  - Por eso `packwii.py` deja fijas las paletas emparejadas por posición y conserva los índices originales.
+- **Comprobado contra el juego** (14 de octubre de 2026, volcado de texturas del runtime hasta el menú principal):
+  - El hash XXH64 de los píxeles calculado desde el pack coincide con el del juego: el juego usa los bytes del pack tal cual.
+  - De 38 texturas del pack vistas con paleta, 36 tienen la misma paleta que la emparejada aquí. Las otras dos: una paleta suelta de `env_common.pack` sin puntero conocido, y `env_mainmenu.pack` `0x163A0`, que el juego dibuja con una paleta distinta de la que apunta su cabecera (cambio de paleta en ejecución).
+  - El resto del volcado no viene de packs: fotogramas de vídeo THP (I8 de 512×448 y 256×224) y unas pocas texturas de tamaño no potencia de dos (texto generado en ejecución, por confirmar).
+- **Atlas de etiquetas del menú principal:** `env_mainmenu.pack` `0x2A920` (512×512, C8) tiene las 12 etiquetas en sus colores; la mitad superior es la normal y la inferior la seleccionada. Un recuadro pintado sobre «Exhibition» se ve en el juego.
+- **Al importar** `packwii.py` deja fija la paleta de las texturas emparejadas por posición y conserva el índice exacto de los píxeles no editados, porque el juego puede dibujar una textura con otra paleta.
 - **Sin resolver:** en `env_mainmenu.pack`, `0x12140`, `0x9B6E0` y `0xBB940` salen con rayas horizontales; puede que alternen paletas por línea o vayan entrelazadas.
 
 **Funciones DVD:**

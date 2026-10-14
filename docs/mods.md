@@ -79,8 +79,7 @@ python tools/packwii.py import pack/env_mainmenu.pack png mimod/project/env_main
 - **Formatos:** RGBA8, RGB5A3, I4, I8, C4 y C8.
 - **Paletas (C4/C8):**
   - Si la paleta es solo de esa textura, se recalcula con los colores nuevos.
-  - Si la comparten varias texturas, o el juego puede dibujar la textura con otras paletas, los colores no cambian. Los píxeles editados toman el color más parecido y los demás conservan su índice exacto.
-  - Ejemplo de lo segundo: las etiquetas del menú principal salen azules en el PNG, pero el juego pinta cada botón de un color.
+  - Si la comparten varias texturas, o la paleta se encontró solo por su posición en el archivo, los colores no cambian: el juego puede dibujar la textura con otra paleta. Los píxeles editados toman el color más parecido y los demás conservan su índice exacto.
 - **Texturas que no se pueden importar:**
   - Unas 400 tienen la paleta en otro pack: salen en gris y `import` las rechaza.
   - Tres del menú principal salen rayadas y aún no se entienden.
