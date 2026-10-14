@@ -238,6 +238,7 @@ def import_stadium(context, path, code, collision=True):
 
     if collision and table and table.triangles:
         sub = bpy.data.collections.new(f"{coll.name} · Colisión")
+        sub.hide_render = True           # its 70 m invisible walls would hide the stands in renders
         coll.children.link(sub)
         build_collision(table, sub)
         layer = context.view_layer.layer_collection.children[coll.name].children[sub.name]

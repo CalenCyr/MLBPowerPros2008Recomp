@@ -352,6 +352,103 @@ Big-endian, un grafo de objetos con punteros. Verificado sobre las 2.356 entrada
 
 Fuentes: `docs/phase0-report.md`, `docs/mods.md`, `tools/projectbin.py`, `tools/packwii.py`, `wiicompiled-dvd-low-completion.patch`.
 
+### Estadios: modelos `PJ7M` y tabla `tbl`
+
+Cada estadio son dos entradas de `project.bin`:
+- `stadium_<código>.pack`: los gráficos. Entre 50 y 100 modelos `PJ7M` y sus texturas, unos 1,1 MB.
+- `stadium_<código>tbl.pack`: la colocación de cada modelo y la malla de colisión.
+
+Los códigos son los de los equipos (`col` = Coors Field, `nyy` = Yankee Stadium…), más `org01`–`org06`, `ml01`, `bullpen`, `bullpen2` y `season`. Hay además `stadium_sky_*` (cielos, sin tabla), `stadium_common`, `stadium_hanabi` y `stadium_debug`.
+
+Verificado (14 de octubre de 2026):
+- `tools/stadium_re.py check` recorre los 47 packs de estadio y cumplen las invariantes de abajo.
+- Cuatro cambios en una copia de Coors Field, cargada como mod en un partido, se ven en el juego (ver «Comprobado en el juego»).
+
+**Modelo `PJ7M`** (big-endian, punteros `0x40000000 | posición`):
+
+| Estructura | Contenido |
+|---|---|
+| Cabecera (`0x28`) | `'PJ7M'`, u32 `0x28`, → nombre (va justo antes), → raíz, 0, 0, u32 texturas, u32 posiciones (suma de todas las mallas), u32 triángulos, 0 |
+| Raíz | u32 9, → escena, → tabla de texturas, → tabla de paletas, ceros, `+0x40` → `"_Wmodel_<nombre>"` |
+| Escena | {1, → nodo}, {1, → ?}, {n, → texmaps}, {n, → materiales}, u32 `0x37` |
+| Nodo (`0x0C`) | u16 número de mallas, u16 0, → lista de mallas, → nombre del nodo de Maya (`pPlane650`…) |
+| Lista de mallas | entradas de 8 bytes: u16 material, u16 1, → malla |
+| Malla (`0x1C`) | u32 0, u32 tamaño de la display list, → display list, → POS, → NRM, → CLR0, → TEX0 |
+| Material (`0x34`) | u16 3, u16 primer texmap (`0xFFFF` sin textura), 3 colores RGBA8, `+0x1C` 8 ranuras u16 de texmap (`0xFFFF` = libre; siempre se usa una) |
+| Texmap (`0x4C`) | u16 índice de textura, `+0x0C` u16 ancho − 1 y alto − 1; los bytes `+2..+0x0C` son iguales en las 11.281 de todos los estadios |
+| Tablas de texturas y paletas | entradas de 8 bytes {→ cabecera, 0}, en paralelo. Las cabeceras son las de textura de modelo de la tabla de texturas de arriba. Sin paleta, el puntero es 0. |
+
+- **Vértices:** sin cuantizar.
+  - POS y NRM en f32 xyz, CLR0 en RGBA8, TEX0 en f32 uv.
+  - Las UV llegan hasta 32: las texturas se repiten.
+  - Cada array mide lo que pide el índice más alto de su display list; no hay campo de tamaño.
+  - Unas pocas normales valen (0, 0, 0).
+- **Display lists:**
+  - Alineadas a 32 bytes y rellenas con NOP.
+  - Solo usan `0x98` (strip, 182.126) y `0x90` (triángulos, 3.647), siempre con VAT 0.
+  - Cada vértice ocupa 9 bytes: u8 índice de matriz (`PNMTXIDX`: 0, o 3/6/9/12 solo en cielos y `common`) y u16 de POS, NRM, CLR0 y TEX0.
+- **Triángulos de la cabecera:** cuentan n − 2 por strip, degenerados incluidos (450 de 450 modelos comprobados).
+- **Sentido de los triángulos:** horario visto de frente (como GX). La normal geométrica es opuesta a la guardada en 11.093 de los 11.109 triángulos de Coors Field.
+- **Unidades:** decímetros. Y hacia arriba, el plato en el origen, −Z hacia el center field y +X hacia el right field.
+  - La goma del lanzador mide 6 (61 cm) y está a z ≈ −190.
+  - La valla del left field está a unos 1.085 (108 m).
+- **Texturas:** C4, C8, RGB5A3 y RGBA8.
+  - Se comparten entre modelos del mismo pack; Coors Field tiene 115.
+  - Las piezas `*_ALP_*` llevan texturas con alfa: manchas sobre el césped, tierra y luces.
+- **Sin transformación en el modelo:** casi todo está en coordenadas del mundo. Las piezas repetidas (banderas, fuentes) están en coordenadas locales y se colocan con la tabla.
+- **Nombres de pieza:** `DP_ground`, `DP_MIP_turf`, `DP_stand_L1`…`R3`, `DP_fence_L/R`, `DP_score`, `DP_auroravision`, `DP_Audience*`, `DP_FLG_flagNN`, `DP_*_lumine_*`, `DP_EVC_NOUPCAM_outside_*`…
+
+**Tabla `tbl`:**
+- **Raíz:** es el último objeto del archivo: u32 número de modelos y 11 punteros. Se encuentra buscando desde el final el número seguido del puntero a `0x20`.
+- **Punteros de la raíz, por orden:**
+  1. colocaciones;
+  2. registros de planos A (`0x18` bytes: nx, ny, nz, d y u16);
+  3. listas u16 de A (índices de modelo: ¿visibilidad?);
+  4. registros de planos B;
+  5. listas u16 de B (índices de triángulo de colisión: ¿árbol de colisión?);
+  6. vértices de colisión;
+  7. cabecera de colisión;
+  8. registros de posición más dirección (`0x18` bytes, sin identificar);
+  9. dos pares {→, 7} sin identificar;
+  10. lista de texturas del pack de gráficos;
+  11. sin identificar.
+- **Colocación** (`0x54` bytes, una por modelo): → cabecera `PJ7M` en el pack de gráficos, traslación xyz, rotación xyz en radianes, escala xyz, caja (mín. y máx.), esfera (centro y radio), u32 flags.
+  - Solo 12 de las 2.925 colocaciones de todos los estadios giran en X o Z. El orden de los ejes no está comprobado; el importador usa XYZ.
+- **Colisión:** u16 número de triángulos, u16 número de vértices, u32 0; luego triángulos de cuatro u16 (a, b, c, superficie) y vértices f32 xyz.
+  - Coors Field tiene 2.922 triángulos y 2.133 vértices.
+  - Hay 3 triángulos degenerados o repetidos.
+- **IDs de superficie** (por geometría en Coors Field y Yankee Stadium; su efecto en el juego está sin comprobar):
+
+| ID | Geometría | Probable |
+|---|---|---|
+| 0, 1, 2 | paredes verticales de 70 m, alrededor del campo | límites invisibles |
+| 5 | suelo a altura 0, del plato al fondo | césped |
+| 6, 7 | suelo a altura 0 | tierra y pista de aviso |
+| 8 | 25 m² a 16–21 m del plato, apenas elevado | montículo |
+| 9 | paredes bajas (hasta 4 m) | vallas y muros del campo |
+| 11 | lo más numeroso, de 40 a 170 m del plato, hasta 34 m de alto | gradas |
+| 13 | superficies horizontales elevadas | gradas y techos |
+| 14 | verticales a unos 108 m, hasta 25 m de alto | postes de foul |
+| 15 | pared a 15–16 m (Coors) o 25 m (Yankee) del plato | backstop |
+| 17, 18 | pocas caras | sin identificar (18 en Coors: plano a 138 m, ¿la fuente?) |
+
+**Comprobado en el juego** (14 de octubre de 2026): una copia modificada de `stadium_col.pack` y `stadium_coltbl.pack` en `project/` de un mod, en un partido del benchmark en Coors Field.
+- Subir 15 m las posiciones de `DP_stand_C` sube las gradas centrales.
+- Poner azul el color de vértice de `DP_ground` vuelve azul la tierra del infield.
+- Pasar a rojo el segundo color del material de `DP_MIP_turf` no cambia nada: el estadio se dibuja sin la luz de los materiales.
+- Cambiar la traslación de las colocaciones de `DP_FLG_*` pone las banderas en fila sobre el césped del center field. El juego usa la tabla, aunque la caja y la esfera de la colocación sigan en el sitio viejo.
+
+**Pendiente:**
+- los flags de la colocación (`0x500`, `0x1700`, `0x40000000`…);
+- qué elige la mezcla aditiva de las piezas `*_ADD_*`;
+- los bytes del texmap y del material que no varían;
+- los árboles de planos A y B;
+- el efecto en el juego de cada ID de superficie.
+
+**Herramientas:**
+- `tools/stadium_re.py` (`info`, `check`, `stats`);
+- el complemento de Blender `tools/blender/powerpros_stadium` (`docs/stadiums.md`).
+
 ## 6. Roster: `game_data.pack` y formato de jugador
 
 - **`/game_data.pack`** (dentro de `project.bin`, 278.176 bytes): `PACKWII ` + cabecera de `0x20` + **bloque de roster de `0x43E80` bytes**.
@@ -607,11 +704,13 @@ Fuentes: `wiicompiled-mlb-nand-es.patch`, `hle/mlb/sc_check_status.cpp`, `docs/m
   - `tools/function_data_refs.py`
   - `tools/projectbin.py` (lee y reconstruye `project.bin`)
   - `tools/packwii.py` (exporta e importa las texturas de un `.pack`)
+  - `tools/stadium_re.py` (comprueba los estadios: modelos `PJ7M` y tabla `tbl`) y el complemento de Blender `tools/blender/powerpros_stadium`
   - `tools/roster/` (convierte rosters)
 - **Puntos de vigilancia en el juego recompilado:** `WIICOMPILED_DEBUG_WATCH=<dirección>` informa de cada escritura en esa dirección, con la pila de llamadas. Así se encontró el reloj de las frases.
 - **Diagnóstico de audio:** `WIICOMPILED_AUDIO_DUMP=<archivo>` guarda la mezcla final para medir chasquidos.
 - **Pendiente de investigar:**
-  - objetos de los `.pack` aparte de las texturas: modelos, capas `SURF`/`SURG` y movimientos
+  - objetos de los `.pack` aparte de las texturas y los estadios: modelos de jugadores, capas `SURF`/`SURG` y movimientos
+  - lo pendiente de los estadios (flags de colocación, árboles de planos, efecto de cada superficie)
   - texto de los `.dat` `PCD`/`TCD`/`SID`
   - estructura de los equipos y las alineaciones más allá de lo mapeado
   - lógica de MLB Life

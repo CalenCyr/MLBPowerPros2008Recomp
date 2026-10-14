@@ -119,5 +119,5 @@ Un mod solo debe traer sus propios archivos o diferencias, **nunca copias del ju
 - **Sin probar todavía:** `riivolution/` en MLB. Usa el mismo código de Wiicompiled que ya funciona con Mario Kart Wii.
 - **Hecho:** volcar texturas sin editar `Config.toml`: «Capturar en juego» de Texture Studio (launcher → HERRAMIENTAS → EDITOR DE TEXTURAS).
 - **Pendiente:**
-  - modelos dentro de `PACKWII` (las texturas ya se editan con Texture Studio o `packwii.py`);
+  - modelos dentro de `PACKWII` (las texturas ya se editan con Texture Studio o `packwii.py`). Los estadios ya se pueden **importar** en Blender (`docs/stadiums.md`); falta exportarlos de vuelta al juego;
   - mods de código en C++ compilados por el Setup.

@@ -65,7 +65,7 @@ scene.collection.objects.link(cam)
 scene.camera = cam
 views = {
     "top": dict(loc=(0, 45, 250), rot=(0, 0, 0), ortho=170),
-    "plate": dict(loc=(0, -6, 3), rot=(math.radians(84), 0, 0), ortho=None),
+    "plate": dict(loc=(0, -6, 3), rot=(math.radians(94), 0, 0), ortho=None),
 }
 for name, v in views.items():
     cam.location = Vector(v["loc"])
