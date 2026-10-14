@@ -2,6 +2,7 @@
 // TextureStudio.exe --selftest: synthetic data only (no game content). Prints the first failures.
 #include "core.h"
 #include "gx.h"
+#include "images.h"
 #include "names.h"
 #include "pack.h"
 #include "projectbin.h"
@@ -157,6 +158,37 @@ void TestProjectAndNames(const std::filesystem::path& temp) {
     CHECK(q && q->paletteWildcard);
     CHECK(!ParseName("hola_64x32_aa_9") && !ParseName("tex1_64x32_zz_9") && !ParseName("tex1_64_aa_9"));
 }
+void TestImages(const std::filesystem::path& temp) {
+    Image img{3, 2, {}};
+    for (int i = 0; i < 6; ++i) img.rgba.insert(img.rgba.end(), {uint8_t(i * 40), 7, 200, uint8_t(255 - i)});
+    const auto png = temp / PathFromUtf8("año.png");   // non-ASCII file name (Review Focus 1)
+    std::string error;
+    CHECK(SavePng(png, img, &error));
+    const auto back = LoadImage(png, &error);
+    CHECK(back && back->width == 3 && back->height == 2 && back->rgba == img.rgba);
+
+    // RGBA8 DDS exactly as aurora's encode_rgba8_dds writes it.
+    std::vector<uint8_t> dds(128 + 4 * 2 * 1, 0);
+    std::memcpy(dds.data(), "DDS ", 4);
+    auto le = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; ++i) dds[o + i] = (v >> (8 * i)) & 0xFF; };
+    le(4, 124); le(12, 1); le(16, 2); le(76, 32); le(80, 0x41); le(88, 32);
+    le(92, 0xFF); le(96, 0xFF00); le(100, 0xFF0000); le(104, 0xFF000000u);
+    const uint8_t px[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    std::memcpy(dds.data() + 128, px, 8);
+    const auto ddsFile = temp / "t.dds";
+    std::ofstream(ddsFile, std::ios::binary).write(reinterpret_cast<const char*>(dds.data()), dds.size());
+    const auto d = LoadImage(ddsFile, &error);
+    CHECK(d && d->width == 2 && d->height == 1 && d->rgba == std::vector<uint8_t>(px, px + 8));
+
+    std::ofstream(temp / "roto.png", std::ios::binary) << "not a png";
+    CHECK(!LoadImage(temp / "roto.png", &error) && !error.empty());
+
+    CHECK(CheckReplacementSize(256, 128, 1024, 512) == SizeCheck::Ok);
+    CHECK(CheckReplacementSize(256, 128, 256, 128) == SizeCheck::Ok);
+    CHECK(CheckReplacementSize(256, 128, 600, 300) == SizeCheck::NotMultiple);
+    CHECK(CheckReplacementSize(256, 128, 1024, 1024) == SizeCheck::WrongAspect);
+    CHECK(CheckReplacementSize(1024, 1024, 8192, 8192) == SizeCheck::TooLarge);
+}
 } // namespace
 
 int RunSelftest() {
@@ -166,6 +198,7 @@ int RunSelftest() {
     TestGx();
     TestPack();
     TestProjectAndNames(temp);
+    TestImages(temp);
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }
