@@ -1,0 +1,100 @@
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index ff294a4..c7c52ec 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -258,6 +258,7 @@ struct Option {
+ 
+ constexpr int kOpenModsFolder = -2;
+ constexpr int kOpenRosterEditor = -3;
++constexpr int kOpenTextureStudio = -4;
+ constexpr int kModsTab = 4;  // after VIDEO, AUDIO, CONTROLES, INTERFAZ; HERRAMIENTAS follows it
+ 
+ constexpr const char* kModsHelp =
+@@ -297,6 +298,10 @@ constexpr const char* kRosterEditorHelp =
+     "PowerUp / PowerUp+ (Import Roster).\n\n"
+     "El editor se cierra junto con el juego.";
+ 
++constexpr const char* kTextureStudioHelp =
++    "Abre Power Pros Wii 2008 Texture Studio: mira las texturas del juego, expórtalas para editarlas "
++    "(Photoshop, escalado HD) y guárdalas como un mod de texturas sin tocar el juego.";
++
+ constexpr const char* kRosterPlayersLabel = "JUGADORES DEL ROSTER";
+ constexpr const char* kRosterPlayersHelp =
+     "Cómo entran los jugadores de los mods de roster.\n\n"
+@@ -374,6 +379,28 @@ void OpenRosterEditor() {
+ #endif
+ }
+ 
++// Power Pros Wii 2008 Texture Studio (tools/texture-studio) ships next to the game. It gets this
++// copy's config, user data, mods folder and executable, so it works for portable and installed copies.
++void OpenTextureStudio() {
++#if defined(_WIN32)
++    const auto exeDir = RuntimeConfigFile::ExecutableDirectory();
++    if (!exeDir) return;
++    const std::filesystem::path studio = *exeDir / "TextureStudio.exe";
++    std::error_code ec;
++    if (!std::filesystem::exists(studio, ec)) {
++        RT_LOG(RT_TAG_RUNTIME) << "launcher: Texture Studio is not installed (" << RuntimeConfigFile::PathToUtf8(studio) << ")"
++                               << std::endl;
++        return;
++    }
++    wchar_t self[MAX_PATH]{};
++    GetModuleFileNameW(nullptr, self, MAX_PATH);
++    const std::wstring args = L"--config \"" + RuntimeConfigFile::ResolveConfigPath().wstring() + L"\" --userdata \"" +
++                              RuntimeConfigFile::ApplicationDataDirectory().wstring() + L"\" --mods \"" +
++                              mods::Directory().wstring() + L"\" --game \"" + std::wstring(self) + L"\"";
++    ShellExecuteW(nullptr, L"open", studio.wstring().c_str(), args.c_str(), exeDir->wstring().c_str(), SW_SHOWNORMAL);
++#endif
++}
++
+ void OpenModsFolder() {
+     const std::filesystem::path dir = mods::Directory();
+     std::error_code ec;
+@@ -505,6 +532,7 @@ Result Run(int argc, char** argv) {
+     Tab toolsTab{"HERRAMIENTAS", {}};
+     toolsTab.options.push_back({"ABRIR CARPETA DE MODS", kModsHelp, {"Abrir"}, 0, false, kOpenModsFolder});
+     toolsTab.options.push_back({"EDITAR ROSTER (PowerUp+)", kRosterEditorHelp, {"Abrir"}, 0, false, kOpenRosterEditor});
++    toolsTab.options.push_back({"EDITOR DE TEXTURAS", kTextureStudioHelp, {"Abrir"}, 0, false, kOpenTextureStudio});
+     toolsTab.options.push_back({kRosterPlayersLabel, kRosterPlayersHelp, {"Nativos", "Como en el editor"},
+                                 RuntimeConfigFile::NativeRoster(true) ? 0 : 1});
+     for (size_t i = 0; i < installedMods.size(); ++i) {
+@@ -550,6 +578,10 @@ Result Run(int argc, char** argv) {
+             OpenRosterEditor();
+             return;
+         }
++        if (o.mod == kOpenTextureStudio) {
++            OpenTextureStudio();
++            return;
++        }
+         if (o.mod >= 0) {
+             mods::SetEnabled(installedMods[static_cast<size_t>(o.mod)].id, o.value != 0);
+             restart = true;
+@@ -610,9 +642,10 @@ Result Run(int argc, char** argv) {
+     const char* unfocused = std::getenv("WIICOMPILED_LAUNCHER_UNFOCUSED_INPUT");
+     const bool unfocusedInput = unfocused != nullptr && std::strcmp(unfocused, "1") == 0;
+     // Scripted tests without key input: WIICOMPILED_LAUNCHER_ROW selects a row of the open page and
+-    // WIICOMPILED_LAUNCHER_ACTION=roster-editor presses EDITAR ROSTER once.
++    // WIICOMPILED_LAUNCHER_ACTION=roster-editor / =texture-studio presses EDITAR ROSTER / EDITOR DE TEXTURAS once.
+     const char* testAction = std::getenv("WIICOMPILED_LAUNCHER_ACTION");
+     if (testAction != nullptr && std::strcmp(testAction, "roster-editor") == 0) OpenRosterEditor();
++    if (testAction != nullptr && std::strcmp(testAction, "texture-studio") == 0) OpenTextureStudio();
+ 
+     constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
+     int menu = 0;
+diff --git a/runtime/src/main.cpp b/runtime/src/main.cpp
+index 34d05a4..fdaf220 100644
+--- a/runtime/src/main.cpp
++++ b/runtime/src/main.cpp
+@@ -1382,6 +1382,12 @@ int RuntimeMain(int argc, char** argv) {
+         auroraConfig.allowTextureReplacements = RuntimeConfigFile::TextureReplacements(false);
+         auroraConfig.allowTextureDumps = auroraConfig.allowTextureReplacements &&
+                                          RuntimeConfigFile::TextureDumps(false);
++        // Texture Studio capture: WIICOMPILED_TEXTURE_DUMPS=1 dumps every unmatched texture for this run
++        // only, without touching the player's Config.toml.
++        if (const char* dumps = std::getenv("WIICOMPILED_TEXTURE_DUMPS"); dumps != nullptr && std::string_view(dumps) == "1") {
++            auroraConfig.allowTextureReplacements = true;
++            auroraConfig.allowTextureDumps = true;
++        }
+         // Enabled player mods: texture folders for aurora, disc/Riivolution overlays for the DVD layer.
+         mods::Apply(auroraConfig);
+         // No vsync knob: aurora always configures a non-blocking present mode.
