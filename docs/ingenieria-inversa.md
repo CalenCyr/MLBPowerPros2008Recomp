@@ -456,7 +456,12 @@ Verificado (14 de octubre de 2026):
 - **Construcción de los árboles:** planos alineados con los ejes y, en cada nodo, el corte que mejor reparte sin duplicar mucho; hojas de como mucho 127.
   - Con los triángulos de Coors Field sale un árbol de 240 nodos y 6.450 entradas; el del juego tiene 1.086 nodos y 13.047 entradas.
 - El exportador de Blender rehace el árbol A cuando una pieza cambia de caja, y escribe la colisión cuando se edita su malla.
-- **Comprobado fuera del juego:** ida y vuelta en Blender (`tools/blender/test_export.py`) y las mismas comprobaciones que los packs del juego. **Falta comprobarlo en un partido.**
+- **Comprobado fuera del juego:** ida y vuelta en Blender (`tools/blender/test_export.py`) y las mismas comprobaciones que los packs del juego.
+- **Comprobado en el juego** (14 de octubre de 2026): estadio nuevo «Polo Grounds», hecho con un modelo de SketchUp convertido con el complemento, con base AT&T Park, 7,8 MB de gráficos y colisión generada de 7.116 triángulos.
+  - El partido del benchmark carga y se juega a 60 FPS.
+  - El plato, la caja de bateo, las bases y el montículo del modelo coinciden con los jugadores.
+  - Un rodado recorre el campo nuevo con normalidad, y no faltan caras ni se ven las traseras.
+  - Sin ver todavía: un batazo contra las vallas o un home run (¿superficie 1?).
   - Hay 3 triángulos degenerados o repetidos.
 - **IDs de superficie** (por geometría en Coors Field y Yankee Stadium; su efecto en el juego está sin comprobar):
 
