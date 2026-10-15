@@ -1,5 +1,5 @@
 diff --git a/runtime/include/mods.h b/runtime/include/mods.h
-index 4a69ea5..e3f3a93 100644
+index 4a69ea5..4add124 100644
 --- a/runtime/include/mods.h
 +++ b/runtime/include/mods.h
 @@ -2,6 +2,7 @@
@@ -27,7 +27,7 @@ index 4a69ea5..e3f3a93 100644
  struct Mod {
      std::string id;  // folder name
      std::string name;
-@@ -40,7 +51,31 @@ struct Mod {
+@@ -40,7 +51,35 @@ struct Mod {
      bool enabled = false;
  
      bool changesRoster = false;  // roster/ or project/game_data.pack: saves are kept apart
@@ -40,7 +40,7 @@ index 4a69ea5..e3f3a93 100644
 +    std::string name;  // lower-case, e.g. "stadium_truist.pack"
 +    uint32_t id = 0;
 +    std::filesystem::path path;
-+};
+ };
 +constexpr uint32_t kFirstNewFile = 4388;  // above every id the game uses (its highest is 4387)
 +
 +// Stadiums added by the enabled mods whose files are all present. Valid after Apply.
@@ -52,7 +52,11 @@ index 4a69ea5..e3f3a93 100644
 +    uint32_t tbl = 0;
 +    uint32_t tblRoot = 0;  // file offset of the tbl root object
 +    uint32_t menu = 0;     // 0: the base stadium's menu pack
- };
++    uint32_t banner = 0;   // env_stadium_name_<code>.pack: the name banner (0: the base's)
++};
++
++// Writes the name banner pack of a new stadium (see stadium_banner.cpp); false without a font.
++bool WriteStadiumNameBanner(const std::filesystem::path& out, const std::string& name);
 +const std::vector<NewFile>& NewFiles();
 +const std::vector<NewStadium>& NewStadiums();
 +uint32_t StadiumNumber(const std::string& code);  // 0 for an unknown code
@@ -61,10 +65,10 @@ index 4a69ea5..e3f3a93 100644
  std::vector<Mod> Discover();
 diff --git a/runtime/src/hle/mlb/new_stadiums.cpp b/runtime/src/hle/mlb/new_stadiums.cpp
 new file mode 100644
-index 0000000..c944645
+index 0000000..cf0aac9
 --- /dev/null
 +++ b/runtime/src/hle/mlb/new_stadiums.cpp
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,215 @@
 +// MLB Power Pros 2008 (RL8E54) game-specific natives: stadiums added by mods (mods::NewStadiums).
 +//
 +// The game knows 40 stadiums. GetStadiumFiles (0x80C7AF48) reads their files from a 40-entry
@@ -101,6 +105,10 @@ index 0000000..c944645
 +constexpr uint32_t kListRoom = 38;
 +constexpr uint32_t kResourceManager = 0x8064ED54, kIsBusy = 0x8064FEE0, kRequest = 0x8064FEC0,
 +                   kIsLoaded = 0x8064FEE8, kShowMenuPack = 0x807A8EBC;
++// Name banner: slots of the screen's banner sprite, resolvers (file id, pack pointer) -> object, and
++// where mods::WriteStadiumNameBanner puts the texture and palette headers in its pack.
++constexpr uint32_t kBannerTexture = 0x2A24, kBannerPalette = 0x2A28, kResolveTexture = 0x8000C330,
++                   kResolvePalette = 0x8000C3E0, kBannerTextureAt = 0x20, kBannerPaletteAt = 0x8260;
 +
 +uint32_t R(uint32_t a) { return Memory::Read32(a); }
 +void W(uint32_t a, uint32_t v) { Memory::Write32(a, v); }
@@ -203,6 +211,13 @@ index 0000000..c944645
 +    if (haveNew && (screen != g.screen || R(screen + kCount) != g.gameCount + g.slots)) Attach(screen);
 +    const mods::NewStadium* extra = haveNew && g.slots != 0 ? Track(screen) : nullptr;
 +    g.picked = extra;
++    // Name banner: after each move the screen fetches the base stadium's from env_stadium_menu.pack
++    // into +0x2A24/+0x2A28 (texture, palette slots its sprite reads); put the new one back every frame.
++    if (extra != nullptr && extra->banner != 0 &&
++        Call(ctx, kIsLoaded, Call(ctx, kResourceManager), extra->banner) != 0) {
++        W(screen + kBannerTexture, Call(ctx, kResolveTexture, extra->banner, 0x40000000u | kBannerTextureAt));
++        W(screen + kBannerPalette, Call(ctx, kResolvePalette, extra->banner, 0x40000000u | kBannerPaletteAt));
++    }
 +
 +    const bool idle = Call(ctx, kIsBusy, Call(ctx, kResourceManager)) == 0;
 +    Memory::Write8(screen + kIdle, idle ? 1 : 0);
@@ -213,6 +228,7 @@ index 0000000..c944645
 +        const uint32_t menu = extra->menu != 0 ? extra->menu : R(kMenuTable + 4 * extra->base);
 +        if (!g.requested[index]) {
 +            Call(ctx, kRequest, Call(ctx, kResourceManager), menu);
++            if (extra->banner != 0) Call(ctx, kRequest, Call(ctx, kResourceManager), extra->banner);
 +            g.requested[index] = true;
 +            return;
 +        }
@@ -297,7 +313,7 @@ index e848c1c..477d140 100644
          Memory::Write8(common + 4, static_cast<uint8_t>(cpu->gpr[3]));
          Memory::Write8(config + 18, 0);
 diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
-index dfc0e9e..c7cbe04 100644
+index dfc0e9e..eee0718 100644
 --- a/runtime/src/mods.cpp
 +++ b/runtime/src/mods.cpp
 @@ -44,13 +44,45 @@ void PutBe32(std::vector<char>& data, size_t at, uint32_t value) {
@@ -468,7 +484,7 @@ index dfc0e9e..c7cbe04 100644
      }
      RecompMod::RegisterDvdOverlayRoot(Utf8(disc));
  }
-@@ -502,8 +585,79 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
+@@ -502,8 +585,80 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
  
  namespace {
  std::filesystem::path g_saveDirectory;
@@ -522,6 +538,7 @@ index dfc0e9e..c7cbe04 100644
 +            stadium.tbl = tbl->id;
 +            stadium.tblRoot = TblRoot(tbl->path);
 +            if (const NewFile* menu = FindNewFile("env_stadium_menu_" + decl.code + ".pack")) stadium.menu = menu->id;
++            if (const NewFile* banner = FindNewFile("env_stadium_name_" + decl.code + ".pack")) stadium.banner = banner->id;
 +            if (stadium.tblRoot == 0) {
 +                RT_LOG(RT_TAG_RUNTIME) << "mods: stadium \"" << decl.code << "\": no root in its tbl pack" << std::endl;
 +                continue;
@@ -548,11 +565,29 @@ index dfc0e9e..c7cbe04 100644
  std::filesystem::path SaveDirectoryFor(const std::vector<Mod>& all) {
      std::vector<std::string> ids;
      for (const Mod& mod : all) {
-@@ -545,7 +699,31 @@ void Apply(AuroraConfig& config) {
+@@ -545,7 +700,49 @@ void Apply(AuroraConfig& config) {
              }
          }
      }
 -    if (!packs.empty()) ApplyProjectPacks(packs, config.cachePath);
++    // A new stadium without its own name banner gets one drawn from its name (cached by name).
++    for (const Mod& mod : all) {
++        if (!mod.enabled) continue;
++        for (const StadiumDecl& decl : mod.stadiums) {
++            const std::string file = "env_stadium_name_" + decl.code + ".pack";
++            if (packs.count(file) != 0 || packs.count("stadium_" + decl.code + ".pack") == 0) continue;
++            std::string key;
++            for (const unsigned char c : decl.name) key += std::isalnum(c) ? static_cast<char>(c) : '_';
++            const std::filesystem::path banner =
++                (config.cachePath != nullptr ? std::filesystem::path(reinterpret_cast<const char8_t*>(config.cachePath))
++                                             : Directory().parent_path()) /
++                "mods" / "banners" / (decl.code + "-" + key + "-v4.pack");
++            std::error_code ec;
++            if (std::filesystem::is_regular_file(banner, ec) || WriteStadiumNameBanner(banner, decl.name)) {
++                packs.try_emplace(file, banner);
++            }
++        }
++    }
 +    if (!packs.empty()) {
 +        // Files the disc has are replaced; the rest become new files with free record ids.
 +        std::map<std::string, std::filesystem::path> replaced;
@@ -581,3 +616,234 @@ index dfc0e9e..c7cbe04 100644
      if (textureRoots.empty()) return;
      for (const std::string& root : textureRoots) texturePointers.push_back(root.c_str());
      config.textureReplacementRoots = texturePointers.data();
+diff --git a/runtime/src/stadium_banner.cpp b/runtime/src/stadium_banner.cpp
+new file mode 100644
+index 0000000..6fe510f
+--- /dev/null
++++ b/runtime/src/stadium_banner.cpp
+@@ -0,0 +1,225 @@
++// Name banner of a stadium added by a mod: a 512x64 C8 texture in the layout the stadium select
++// screen uses for the game's own names (env_stadium_menu.pack): texture header at 0x20, pixels at
++// 0x60, palette colours after them, palette header at 0x8260. Drawn with a system font (never a
++// game asset): bold slanted letters, green fill with a vertical gradient and a dark green outline.
++#include "mods.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <string>
++#include <vector>
++
++#define STB_TRUETYPE_IMPLEMENTATION
++#define STBTT_STATIC
++#include "imstb_truetype.h"
++
++namespace mods {
++namespace {
++
++constexpr int kWidth = 512, kHeight = 64;
++constexpr uint32_t kP = 0x40000000u;
++
++void Put32(std::vector<uint8_t>& d, size_t at, uint32_t v) {
++    for (int i = 0; i < 4; ++i) d[at + i] = static_cast<uint8_t>(v >> (24 - 8 * i));
++}
++
++void Put16(std::vector<uint8_t>& d, size_t at, uint16_t v) {
++    d[at] = static_cast<uint8_t>(v >> 8);
++    d[at + 1] = static_cast<uint8_t>(v);
++}
++
++std::vector<uint32_t> Codepoints(const std::string& text) {
++    std::vector<uint32_t> out;
++    for (size_t i = 0; i < text.size();) {
++        const auto c = static_cast<unsigned char>(text[i]);
++        const int n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
++        uint32_t cp = n == 1 ? c : c & (0xFF >> (n + 1));
++        for (int k = 1; k < n && i + k < text.size(); ++k) cp = (cp << 6) | (text[i + k] & 0x3F);
++        out.push_back(cp);
++        i += n;
++    }
++    return out;
++}
++
++std::vector<uint8_t> ReadFont() {
++#if defined(_WIN32)
++    const char* candidates[] = {"C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf",
++                                "C:/Windows/Fonts/segoeuib.ttf"};
++#else
++    const char* candidates[] = {"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
++                                "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"};
++#endif
++    for (const char* path : candidates) {
++        std::ifstream in(path, std::ios::binary);
++        std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++        if (!data.empty()) return data;
++    }
++    return {};
++}
++
++// Text coverage (0..1) at kWidth x kHeight, upper case and slanted, placed like the game's names:
++// capitals 23 px tall from y 7 (the lower part of the texture stays empty), centred, smaller only
++// when the name would not fit.
++std::vector<float> RenderText(const std::vector<uint8_t>& font, const std::string& text) {
++    std::vector<float> cover(kWidth * kHeight, 0.0f);
++    stbtt_fontinfo info;
++    if (!stbtt_InitFont(&info, font.data(), stbtt_GetFontOffsetForIndex(font.data(), 0))) return cover;
++    auto cps = Codepoints(text);
++    // Small capitals, like the game: every letter upper case, the ones inside a word at 80 %.
++    std::vector<float> size(cps.size(), 1.0f);
++    for (size_t i = 0; i < cps.size(); ++i) {
++        uint32_t& cp = cps[i];
++        const bool lower = (cp >= 'a' && cp <= 'z') || (cp >= 0xE0 && cp <= 0xFE && cp != 0xF7);
++        const bool upper = (cp >= 'A' && cp <= 'Z') || (cp >= 0xC0 && cp <= 0xDE && cp != 0xD7);
++        if (lower) cp -= 0x20;
++        if ((lower || upper) && i > 0 && cps[i - 1] != ' ') size[i] = 0.8f;
++    }
++    constexpr float kSlant = 0.15f, kMargin = 40.0f, kTop = 7.0f;
++    int boxX0 = 0, boxY0 = 0, boxX1 = 0, capUnits = 0;
++    stbtt_GetCodepointBox(&info, 'H', &boxX0, &boxY0, &boxX1, &capUnits);
++    float capHeight = 23.0f, scale = 0.0f, width = 0.0f;
++    for (;; capHeight -= 1.0f) {  // shrink until the name fits
++        scale = capHeight / static_cast<float>(capUnits > 0 ? capUnits : 1);
++        width = 0.0f;
++        for (size_t i = 0; i < cps.size(); ++i) {
++            int advance = 0, bearing = 0;
++            stbtt_GetCodepointHMetrics(&info, static_cast<int>(cps[i]), &advance, &bearing);
++            width += advance * scale * size[i];
++            if (i + 1 < cps.size()) width += stbtt_GetCodepointKernAdvance(&info, cps[i], cps[i + 1]) * scale * size[i];
++        }
++        if (width + kSlant * capHeight <= kWidth - 2 * kMargin || capHeight <= 12.0f) break;
++    }
++    const float baseline = kTop + capHeight;
++    float x = (kWidth - width) / 2.0f;
++    for (size_t i = 0; i < cps.size(); ++i) {
++        int w = 0, h = 0, xoff = 0, yoff = 0;
++        const float shift = x - std::floor(x);
++        unsigned char* glyph = stbtt_GetCodepointBitmapSubpixel(&info, scale * size[i], scale * size[i], shift, 0.0f,
++                                                                static_cast<int>(cps[i]), &w, &h, &xoff, &yoff);
++        for (int gy = 0; gy < h; ++gy) {
++            const int y = static_cast<int>(baseline) + yoff + gy;
++            if (y < 0 || y >= kHeight) continue;
++            const float slant = kSlant * (baseline - y);
++            for (int gx = 0; gx < w; ++gx) {
++                const int px = static_cast<int>(std::floor(x)) + xoff + gx + static_cast<int>(std::lround(slant));
++                if (px < 0 || px >= kWidth) continue;
++                float& c = cover[y * kWidth + px];
++                c = std::max(c, glyph[gy * w + gx] / 255.0f);
++            }
++        }
++        stbtt_FreeBitmap(glyph, nullptr);
++        int advance = 0, bearing = 0;
++        stbtt_GetCodepointHMetrics(&info, static_cast<int>(cps[i]), &advance, &bearing);
++        x += advance * scale * size[i];
++        if (i + 1 < cps.size()) x += stbtt_GetCodepointKernAdvance(&info, cps[i], cps[i + 1]) * scale * size[i];
++    }
++    return cover;
++}
++
++// RGB5A3 entry for an 8-bit colour with a 0..7 alpha level.
++uint16_t Rgb5a3(int r, int g, int b, int alpha7) {
++    if (alpha7 >= 7) return static_cast<uint16_t>(0x8000 | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
++    return static_cast<uint16_t>((alpha7 << 12) | ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
++}
++
++}  // namespace
++
++bool WriteStadiumNameBanner(const std::filesystem::path& out, const std::string& name) {
++    const std::vector<uint8_t> font = ReadFont();
++    if (font.empty()) return false;
++    const std::vector<float> fill = RenderText(font, name);
++    // Like the game's names: a dark outer outline, a white rim, then the letters in green.
++    auto grow = [&](float radius) {
++        std::vector<float> out(fill.size(), 0.0f);
++        const int r = static_cast<int>(std::ceil(radius));
++        for (int y = 0; y < kHeight; ++y) {
++            for (int x = 0; x < kWidth; ++x) {
++                float best = 0.0f;
++                for (int dy = -r; dy <= r; ++dy) {
++                    for (int dx = -r; dx <= r; ++dx) {
++                        const int sx = x + dx, sy = y + dy;
++                        if (sx < 0 || sy < 0 || sx >= kWidth || sy >= kHeight || dx * dx + dy * dy > radius * radius)
++                            continue;
++                        best = std::max(best, fill[sy * kWidth + sx]);
++                    }
++                }
++                out[y * kWidth + x] = best;
++            }
++        }
++        return out;
++    };
++    const std::vector<float> rim = grow(1.5f), outline = grow(3.6f);
++    // Palette: 32 colours (0 dark outline, 1 white rim, 2..31 green from the bottom to the top of the
++    // letters) x 8 alpha levels; each pixel takes the closest colour.
++    float colours[32][3] = {{14, 50, 24}, {255, 255, 255}};
++    for (int s = 2; s < 32; ++s) {
++        const float t = (s - 2) / 29.0f;
++        const float bottom[3] = {20, 92, 22}, top[3] = {128, 214, 88};
++        for (int c = 0; c < 3; ++c) colours[s][c] = bottom[c] + (top[c] - bottom[c]) * t;
++    }
++    std::vector<uint16_t> palette(256);
++    for (int s = 0; s < 32; ++s) {
++        for (int a = 0; a < 8; ++a) {
++            palette[s * 8 + a] = Rgb5a3(static_cast<int>(colours[s][0]), static_cast<int>(colours[s][1]),
++                                        static_cast<int>(colours[s][2]), a);
++        }
++    }
++    std::vector<uint8_t> index(kWidth * kHeight, 0);
++    for (int y = 0; y < kHeight; ++y) {
++        const float t = std::clamp(1.0f - (y - 6.0f) / 30.0f, 0.0f, 1.0f);  // letters span about y 6..36
++        const float* green = colours[2 + static_cast<int>(std::lround(t * 29.0f))];
++        for (int x = 0; x < kWidth; ++x) {
++            const size_t i = static_cast<size_t>(y) * kWidth + x;
++            const float o = outline[i], r = rim[i], f = fill[i];
++            float rgb[3];
++            for (int c = 0; c < 3; ++c) {
++                const float under = colours[1][c] * r + colours[0][c] * (1.0f - r);
++                rgb[c] = green[c] * f + under * (1.0f - f);
++            }
++            int best = 0;
++            float bestDistance = 1e9f;
++            for (int s = 0; s < 32; ++s) {
++                float distance = 0.0f;
++                for (int c = 0; c < 3; ++c) distance += (rgb[c] - colours[s][c]) * (rgb[c] - colours[s][c]);
++                if (distance < bestDistance) bestDistance = distance, best = s;
++            }
++            const int alpha = std::clamp(static_cast<int>(std::lround(std::max(o, f) * 7.0f)), 0, 7);
++            index[i] = static_cast<uint8_t>(best * 8 + alpha);
++        }
++    }
++
++    std::vector<uint8_t> d(0x8280, 0);
++    std::memcpy(d.data(), "PACKWII ", 8);
++    Put32(d, 0x14, 0x20);
++    Put16(d, 0x20, kHeight);
++    Put16(d, 0x22, kWidth);
++    Put32(d, 0x24, 9);              // GX C8
++    Put32(d, 0x28, kP | 0x60);
++    Put32(d, 0x34, 1);
++    Put32(d, 0x38, 1);
++    for (int by = 0; by < kHeight / 4; ++by) {      // C8 tiles of 8x4
++        for (int bx = 0; bx < kWidth / 8; ++bx) {
++            for (int y = 0; y < 4; ++y) {
++                for (int x = 0; x < 8; ++x) {
++                    d[0x60 + ((by * (kWidth / 8) + bx) * 32) + y * 8 + x] = index[(by * 4 + y) * kWidth + bx * 8 + x];
++                }
++            }
++        }
++    }
++    for (int i = 0; i < 256; ++i) Put16(d, 0x8060 + i * 2, palette[i]);
++    Put16(d, 0x8260, 256);
++    d[0x8264] = 0x81;
++    Put16(d, 0x8266, 0x6000);
++    Put32(d, 0x8268, kP | 0x8060);
++    std::error_code ec;
++    std::filesystem::create_directories(out.parent_path(), ec);
++    std::ofstream file(out, std::ios::binary | std::ios::trunc);
++    file.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()));
++    return static_cast<bool>(file);
++}
++
++}  // namespace mods

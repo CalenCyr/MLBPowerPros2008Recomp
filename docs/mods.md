@@ -101,7 +101,8 @@ base = "atl"             # estadio cuyos datos de juego usa (medidas, menú, par
 - La forma fácil de hacerlos es el complemento de Blender, opción «Estadio nuevo» al exportar (`docs/stadiums.md`).
 - `project/env_stadium_menu_<código>.pack` es opcional: una copia del pack de menú del estadio base (`env_stadium_menuNN.pack`, NN = número del estadio) con otra imagen. Sin él se ve la imagen del estadio base.
 - El juego guarda en partidas y configuración el número del estadio base, así que desactivar el mod nunca rompe nada: ese partido vuelve al estadio base.
-- Por ahora solo en Exhibición; el rótulo con el nombre sigue siendo el del estadio base.
+- Por ahora solo en Exhibición.
+- El rótulo con el nombre sale de `project/env_stadium_name_<código>.pack` si el mod lo trae (formato en `docs/ingenieria-inversa.md`). Si no, el runtime lo dibuja con el `name` del mod y una fuente del sistema.
 - Los archivos nuevos reciben números libres de `project.bin` (desde 4388), que el juego no usa.
 
 ## Partidas por roster
@@ -136,5 +137,5 @@ Un mod solo debe traer sus propios archivos o diferencias, **nunca copias del ju
 - **Sin probar todavía:** `riivolution/` en MLB. Usa el mismo código de Wiicompiled que ya funciona con Mario Kart Wii.
 - **Hecho:** volcar texturas sin editar `Config.toml`: «Capturar en juego» de Texture Studio (launcher → HERRAMIENTAS → EDITOR DE TEXTURAS).
 - **Pendiente:**
-  - modelos dentro de `PACKWII` (las texturas ya se editan con Texture Studio o `packwii.py`). Los estadios ya se pueden **importar** en Blender (`docs/stadiums.md`); falta exportarlos de vuelta al juego;
+  - modelos dentro de `PACKWII` (las texturas ya se editan con Texture Studio o `packwii.py`). Los estadios ya se importan y se exportan con Blender, colisión incluida, y se pueden hacer con modelos propios (`docs/stadiums.md`);
   - mods de código en C++ compilados por el Setup.
