@@ -6,7 +6,9 @@
 # tools/wiicompiled_rebind.py); -Fresh recreates the working copy from the pinned clone.
 # -RegenerateMap rebuilds config/wiicompiled/rl8e54-functions.map from the local dtk/DolRecomp analysis
 # (its rel-linked inputs came from tools/prepare_linked_rel.py, kept at git tag moderngekko-era).
-param([switch]$Build, [switch]$Fresh, [switch]$RegenerateMap, [int]$Threads = 6,
+# -PrepareOnly stops after patching and rebinding: a source tree without the game, for the Setup
+# payload (tools/setup/Make-Release.ps1).
+param([switch]$Build, [switch]$Fresh, [switch]$RegenerateMap, [switch]$PrepareOnly, [int]$Threads = 6,
       [string[]]$Groups = @('os', 'audio', 'storage', 'vi', 'gx', 'input', 'ios'))
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -60,7 +62,7 @@ if (-not (Test-Path "$src\.git")) {
     $Build = $true
 }
 $translator = "$src\translator\src\Translator.Cli\bin\Release\net8.0\Translator.Cli.dll"
-if ($Build -or -not (Test-Path $translator)) {
+if (-not $PrepareOnly -and ($Build -or -not (Test-Path $translator))) {
     dotnet build "$src\translator\src\Translator.Cli\Translator.Cli.csproj" -c Release | Out-Host
     Invoke-Checked 'dotnet build'
 }
@@ -95,6 +97,7 @@ if ($Fresh -or -not (Test-Path "$src\runtime\include\game_natives_rebound.h")) {
         $map config\wiicompiled\rl8e54-data.csv @Groups
     Invoke-Checked 'rebind'
 }
+if ($PrepareOnly) { return }
 
 $project = @('--project', 'config\wiicompiled\rl8e54.yml')
 $gen = "$work\generated"

@@ -41,6 +41,7 @@ function Invoke-Checked([string]$label) {
 
 if (-not (Test-Path "$src\.git")) {
     git clone -q (Join-Path $root 'local\vendor\PowerUpPlus') $src; Invoke-Checked 'git clone'
+    git -C $src checkout -q eb1a2c2; Invoke-Checked 'checkout eb1a2c2'
     foreach ($patch in Get-ChildItem (Join-Path $root 'tools\patches\powerupplus-*.patch') | Sort-Object Name) {
         git -C $src apply --whitespace=nowarn $patch.FullName; Invoke-Checked "patch $($patch.Name)"
     }
