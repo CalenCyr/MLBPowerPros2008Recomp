@@ -518,7 +518,7 @@ No está validado píxel a píxel contra Dolphin.
   7. Borra los temporales.
   - Comunica el progreso con líneas `@@ <porcentaje> <mensaje>` y los errores con `@@ERROR <mensaje>`.
   - El archivo va en UTF-8 con BOM, porque PowerShell 5.1 lee como ANSI los scripts sin BOM.
-- `Make-Payload.ps1`: arma el paquete desde un árbol parcheado y reasignado, y rechaza archivos del juego.
+- `Make-Payload.ps1`: arma el paquete desde un árbol parcheado y reasignado, y rechaza archivos del juego. Para una release se usa `Make-Release.ps1`, que prepara ese árbol desde un clon limpio (ver abajo).
   - Sus `Launcher\artifacts` salen de los scripts de Wiicompiled, reutilizados sin cambios: `Prepare-PortableTools.ps1`, `Prepare-Dependencies.ps1` y `Prepare-NativePrebuilt.ps1` (el último compila aurora y las dependencias con nuestros parches).
   - Recorta de llvm-mingw los sysroots que no son x86_64, el Python incluido y el runtime de Linux: el paquete pasa de 1.150 MB a 839 MB.
 - `config/wiicompiled/rl8e54-functions.map` (direcciones y nombres) se sube al repo. Así el jugador no necesita dtk, DolRecomp ni la base de firmas de Dolphin. `tools/wiicompiled-translate.ps1 -RegenerateMap` lo vuelve a generar.
@@ -541,10 +541,21 @@ No está validado píxel a píxel contra Dolphin.
 - **Ventana:** el título del juego pasa a "MLB Power Pros 2008", en `base_product.cpp` dentro del parche 21.
 
 **Pendiente:**
-- Probar en una PC limpia, sin las herramientas del proyecto.
-- Publicar la release. El repositorio está en GitHub (privado) desde el 13 de octubre; la release no se ha publicado. Tamaño medido el 14 de octubre: paquete de 963 MB, zip de 303 MB.
-- Generar el paquete desde un clon limpio en un solo paso. Hoy `-Source` apunta a un árbol ya parcheado, reasignado y con los artefactos de Wiicompiled.
+- Probar en otra PC real (hecho en esta, en limpio: ver abajo).
+- Publicar la release (`v0.1.0`, beta, solo Windows). El repositorio está en GitHub (privado) desde el 13 de octubre.
 - Linux y Switch.
+
+**Paquete desde un clon limpio (15 de octubre):** `tools/setup/Make-Release.ps1 [-Ref <commit>] [-Zip]` lo hace en un paso y solo con lo que está en git:
+1. clona el repositorio en `local\rc` (los cambios sin commit no entran);
+2. vuelve a crear el árbol de Wiicompiled desde el commit fijado con todos los parches y la reasignación (`wiicompiled-translate.ps1 -Fresh -PrepareOnly`, sin archivos del juego);
+3. ejecuta en él `Prepare-PortableTools`, `Prepare-Dependencies` y `Prepare-NativePrebuilt`, así el precompilado de aurora nunca queda viejo;
+4. ejecuta `Make-Payload.ps1` del clon.
+- Lo que no está en git (clones de Wiicompiled y PowerUp+, SDK de .NET 10, nodtool, cachés) se toma de `local\vendor`, `local\tools` y `local\cache` por uniones de directorio; cada cosa se fija por commit o hash. `powerupplus.ps1` ahora hace checkout del commit `eb1a2c2`.
+- **Medido:** unos 20 minutos; paquete de 902 MB, zip de 298 MB.
+- **Instalación limpia comprobada** con ese paquete, copiado a una carpeta nueva y con el Setup ejecutado con un PATH mínimo (sin dotnet, Python, git ni las herramientas del proyecto) desde la ISO del usuario:
+  - en español y en inglés: 4,5 y 4,3 minutos de principio a fin, sin errores; la ventana del Setup y los mensajes de progreso salen en el idioma elegido;
+  - el juego instalado (1,5 GB) abre el launcher y, sin él, llega al logo de KONAMI a 60 FPS con D3D12.
+- Queda sin probar otra PC (otra GPU, sin las herramientas instaladas en el sistema) y elegir el idioma con la píldora del Setup, que es lo único que lo escribe en `Config.toml`.
 
 ## Launcher con el arte de MoonInning (12 de octubre de 2026)
 

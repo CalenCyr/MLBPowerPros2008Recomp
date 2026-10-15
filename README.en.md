@@ -6,7 +6,7 @@ Unofficial native recompilation of MLB Power Pros 2008 for Wii (USA, `RL8E54`) o
 
 ## Install and play (Windows 10/11, 64-bit)
 
-1. Download `MLB Power Pros 2008 Setup.zip` from this repository's *Releases* page and unzip it into a folder of your choice. *(There is no published release yet; until then the package is built with `tools/setup/Make-Payload.ps1 -Zip`.)*
+1. Download `MLB Power Pros 2008 Setup.zip` from this repository's *Releases* page and unzip it into a folder of your choice. *(There is no published release yet; until then the package is built with `tools/setup/Make-Release.ps1 -Zip`.)*
 2. Open `MLBPowerPros2008-Setup.exe`, press **CHOOSE DISC** (**ELEGIR DISCO**) and select your copy of the game (ISO, NKit, RVZ, WBFS, WIA, GCZ or CISO).
 3. Press **INSTALL** (**INSTALAR**). The Setup checks that it is a clean dump of `RL8E54`, extracts it, translates the game code and compiles it **on your PC**. The first time it takes a few minutes.
 4. Press **PLAY** (**JUGAR**) (or use the desktop shortcut). Before each session the launcher appears so you can choose the graphics API, display, resolution, audio and controls.
@@ -19,7 +19,7 @@ From the launcher (SETTINGS (AJUSTES) → MODS / TOOLS (HERRAMIENTAS)) you can a
 
 **Nothing from the game is included or downloaded.** Neither this repository nor its releases contain the disc image, the executable, assets or translated code: the Setup only ships tools (translator, compiler, runtime source code) and everything from the game is generated on your computer from your own copy. Do not ask for or share game files.
 
-For whoever packages a release: `tools/setup/Make-Payload.ps1` builds the package (see its header) and checks that it contains nothing from the game; `tools/setup/LocalBuild.ps1` is what the Setup runs on the player's PC.
+For whoever packages a release: `tools/setup/Make-Release.ps1` builds the package from a clean clone with `Make-Payload.ps1` (see their headers) and checks that it contains nothing from the game; `tools/setup/LocalBuild.ps1` is what the Setup runs on the player's PC.
 
 The launcher, the Setup, Texture Studio and the Blender add-on are in Spanish and English: they follow Windows' (or Blender's) language and can be switched with their **IDIOMA / LANGUAGE** option or the **ES | EN** pill. The English documentation is in `docs/en/` and `README.en.md`.
 
@@ -49,7 +49,7 @@ The translator and the runtime are Wiicompiled's, pinned in `config/tools.lock.j
 .\tools\wiicompiled-bench.ps1 -Api vulkan               # frame time in the title demo
 ```
 
-- Release: `tools/setup/Make-Payload.ps1` builds the Setup; `tools/setup/LocalBuild.ps1` is what runs on the player's PC.
+- Release: `tools/setup/Make-Release.ps1` builds the Setup from a clean clone; `tools/setup/LocalBuild.ps1` is what runs on the player's PC.
 - Mods and roster: `docs/en/mods.md`, `docs/en/roster-2008.md`, `tools/projectbin.py`, `tools/roster/`, `tools/powerupplus.ps1`.
 - Textures: `docs/en/texture-studio.md`, `tools/texture-studio/` (`build.ps1`; `TextureStudio.exe --selftest`), `tools/packwii.py`.
 - Designs and work plans: `docs/superpowers/`.
