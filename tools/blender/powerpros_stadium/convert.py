@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Turn any model (glTF, OBJ, SketchUp through a glTF converter...) into pieces of an imported stadium.
 
-The game draws a stadium as a fixed list of pieces (PJ7M models) placed by the tbl, and culls each
-piece by its box. A new model is therefore spread over the existing pieces: every face goes to the
-piece whose box centre is nearest (ground-level flat faces to the ground piece). The game draws
+The game draws a stadium as a fixed list of pieces (PJ7M models) placed by the tbl, with a depth
+buffer far less precise than Blender's: surfaces a few cm apart flicker (separate_layers). The
+field goes to the ground piece and the rest of the model into one stand piece. The game draws
 stadiums unlit (texture x vertex colour), so the material colour and a simple sun are baked into
-the vertex colours. Faces of two-sided materials get their back too: the game culls back faces.
+the vertex colours. Each face is written once, turned to the field: coplanar front/back pairs
+fight in the game.
 The model must already be in the game's frame: metres, home plate at the origin, second base on +Y.
 """
 import math
@@ -20,6 +21,7 @@ TARGET = ("stand", "fence", "ground", "turf")
 SKIP = ("ALP", "ADD", "EVC", "NOUPCAM", "FLG", "Audience", "lumine", "LIGHT", "BCL", "ANT", "ZTEST",
         "score", "aurora", "board")
 SUN = Vector((0.35, -0.45, 0.82)).normalized()
+FIELD = Vector((0.0, 45.0))                          # a point of every field (home at the origin)
 
 
 class ConvertFailure(Exception):
@@ -41,10 +43,24 @@ def material_info(mat):
     return None, tuple(srgb(v) for v in bsdf.inputs["Base Color"].default_value[:3])
 
 
+def flags(obj):
+    try:
+        return int(obj.get("pp_placement_flags", "0"), 16)
+    except ValueError:
+        return 0
+
+
+def camera_dependent(obj):
+    """Placement flags 0x80000000 (pieces named NOUPCAM), 0x20000000 (EVC) and 0x40000000 (the upper
+    decks behind home, «2F»): the game seems to hide them in some cameras. Converted geometry put
+    there vanished in the pop-up camera behind the catcher."""
+    return flags(obj) & 0xE0000000 != 0
+
+
 def targets(coll):
     """(ground piece, other opaque pieces) of an imported stadium."""
     pieces = [o for o in coll.all_objects if o.get("pp_kind") == "model" and not any(s in o.name for s in SKIP)
-              and any(t in o.name.lower() for t in TARGET)]
+              and any(t in o.name.lower() for t in TARGET) and not camera_dependent(o)]
     if not pieces:
         raise ConvertFailure("El estadio no tiene gradas, vallas ni suelo donde poner el modelo")
 
@@ -53,7 +69,9 @@ def targets(coll):
         return (max(p.x for p in pts) - min(p.x for p in pts)) * (max(p.y for p in pts) - min(p.y for p in pts))
     grounds = [o for o in pieces if "ground" in o.name.lower() or "turf" in o.name.lower()]
     ground = max(grounds or pieces, key=footprint)
-    return ground, [o for o in pieces if o is not ground]
+    others = [o for o in pieces if o is not ground]
+    plain = [o for o in others if flags(o) == 0]          # stands without special flags, when there are
+    return ground, plain or others
 
 
 def box_centre(o):
@@ -65,8 +83,10 @@ def convert(coll, sources, replace=True, bake_light=True):
     """Spread the faces of `sources` (mesh objects in the game's frame) over the stadium's pieces.
     replace: the pieces lose their own geometry and the pieces left without any are deleted.
     Returns {piece name: faces}. The source objects are removed."""
+    # The field to the ground piece, the rest to one stand piece (whose box then covers the stadium,
+    # so the game never culls it).
     ground, others = targets(coll)
-    centres = {o.name: box_centre(o).xy for o in others}
+    target = max(others or [ground], key=lambda o: len(o.data.polygons))
     pieces = {o.name: o for o in [ground] + others}
     buckets, slots, plain, tex_mats = {}, {}, None, {}
 
@@ -107,16 +127,18 @@ def convert(coll, sources, replace=True, bake_light=True):
             c = sum(vs, Vector()) / len(vs)
             n = (normal_mw @ p.normal).normalized()
             flat = abs(n.z) > 0.95 and c.z < 1.0 and c.xy.length < 160
-            name = ground.name if flat else min(centres, key=lambda k: (centres[k] - c.xy).length) if centres else ground.name
+            name = ground.name if flat else target.name
             bm = bucket(name)
             gm = game_material(img)
             if gm not in slots[name]:
                 slots[name].append(gm)
             uvs = [tuple(uv.data[li].uv) for li in p.loop_indices] if uv else [(0.0, 0.0)] * len(vs)
+            # One copy per face, turned to the field: two coplanar faces (a two-sided face drawn twice,
+            # or the front and back faces SketchUp exporters write) fight in the game, and the one
+            # facing away can win (the stadium showed the green backs of its stands).
             double = mat is not None and not mat.use_backface_culling
-            sides = [False, True] if double else [False]
-            if flat:                                # the field is only seen from above
-                sides = [n.z < 0] if double else ([False] if n.z > 0 else [])
+            towards = (n.z > 0) if flat else (n.xy.dot(FIELD - c.xy) > 0)
+            sides = [not towards] if double else ([False] if towards or not flat else [])
             for flip in sides:
                 normal = -n if flip else n
                 light = 0.55 + 0.45 * max(0.0, normal.dot(SUN)) if bake_light else 1.0
@@ -135,13 +157,17 @@ def convert(coll, sources, replace=True, bake_light=True):
 
     result = {}
     if replace:                                 # the rest of the original stadium goes too
-        for obj in [o for o in coll.all_objects if o.get("pp_kind") == "model" and o.name not in buckets]:
+        for obj in [o for o in coll.all_objects if o.get("pp_kind") == "model" and o.name not in buckets
+                    and not o.get("pp_keep")]:                 # pieces marked pp_keep stay as they are
             pieces.pop(obj.name, None)
             bpy.data.objects.remove(obj)
     for name, obj in pieces.items():
         bm = buckets.get(name)
         if bm is None:
             continue
+        drop_back_twins(bm)
+        if name != ground.name:                 # the field keeps its layers on the ground
+            separate_layers(bm)
         bm.transform(obj.matrix_world.inverted())
         if replace:
             me = bpy.data.meshes.new(name)
@@ -163,6 +189,58 @@ def convert(coll, sources, replace=True, bake_light=True):
     for src in sources:
         bpy.data.objects.remove(src)
     return result
+
+
+def drop_back_twins(bm):
+    """Of faces with the same corners keep one, the one facing the field."""
+    seen, kill = {}, []
+    for f in bm.faces:
+        key = tuple(sorted((round(v.co.x, 3), round(v.co.y, 3), round(v.co.z, 3)) for v in f.verts))
+        c = f.calc_center_median()
+        towards = f.normal.z > 0 if abs(f.normal.z) > 0.95 else f.normal.xy.dot(FIELD - c.xy) > 0
+        other = seen.get(key)
+        if other is None:
+            seen[key] = (f, towards)
+        elif towards and not other[1]:
+            kill.append(other[0])
+            seen[key] = (f, towards)
+        else:
+            kill.append(f)
+    bmesh.ops.delete(bm, geom=kill, context="FACES")
+    return len(kill)
+
+
+def separate_layers(bm, gap=0.25, reach=0.25):
+    """Faces stacked a few cm in front of another one facing the same way (windows on a wall, a
+    sign, seats on a slope) flicker in the game: at 150 m its depth buffer cannot tell 2 cm apart
+    (z-fighting; Blender can). Move the front face out to `gap` from the one behind it."""
+    import collections
+    planes = collections.defaultdict(list)
+    for f in bm.faces:
+        if f.calc_area() < 1e-4:
+            continue
+        n = f.normal.copy()
+        planes[(round(n.x * 10), round(n.y * 10), round(n.z * 10))].append(
+            (n.dot(f.verts[0].co), f, n, f.calc_center_median()))
+    moved = 0
+    for group in planes.values():
+        group.sort(key=lambda t: t[0])
+        for i, (d0, f0, n0, c0) in enumerate(group):
+            lo0 = [min(v.co[k] for v in f0.verts) for k in range(3)]
+            hi0 = [max(v.co[k] for v in f0.verts) for k in range(3)]
+            for d1, f1, n1, c1 in group[i + 1:]:
+                if d1 - d0 > reach:
+                    break
+                if d1 - d0 < 1e-4 or n0.dot(n1) < 0.995 or not all(
+                        min(v.co[k] for v in f1.verts) <= hi0[k] + 0.01 and max(v.co[k] for v in f1.verts) >= lo0[k] - 0.01
+                        for k in range(3)):
+                    continue
+                push = gap - (d1 - d0)
+                if push > 0:
+                    for v in f1.verts:
+                        v.co += n1 * push
+                    moved += 1
+    return moved
 
 
 def _append(dst, src, material_offset):

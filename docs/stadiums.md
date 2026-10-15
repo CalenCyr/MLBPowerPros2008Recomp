@@ -60,7 +60,7 @@ Qué hace al exportar:
 - Escribe `mods\<nombre>\project\stadium_<código>.pack` y `stadium_<código>tbl.pack`, más un `mod.toml`.
 - **Solo reescribe las piezas que cambiaste**; el resto queda idéntico al original. Lo nuevo se añade al final del pack.
 - Una pieza borrada se queda sin geometría.
-- Una imagen editada o nueva se guarda como textura RGB5A3. Si sus lados no son potencias de 2, se reescala a la más cercana (4 a 1024).
+- Una imagen editada o nueva se guarda como textura RGB5A3. Si sus lados no son potencias de 2, se reescala a la más cercana, de 4 a 256 píxeles: como las del juego, que no tiene mipmaps en los estadios y a distancia una textura grande se ve ruidosa.
 - Si mueves una pieza, actualiza su caja y su esfera en la tabla, para que el juego no la oculte cuando entra en cámara, y rehace el árbol con el que el juego reparte las piezas.
 - **Colisión:** si cambiaste la malla «Colisión» (moverla, editar sus caras o cambiar su superficie), la escribe entera y rehace el árbol de colisión del juego.
   - La **superficie** de cada cara sale del número final del nombre de su material: «Superficie 9» es valla. Para cambiar una cara de tipo, asígnale otro material «Superficie N».
@@ -85,10 +85,11 @@ Puedes llevar al juego un estadio que no existe en él.
    - Compruébalo con las bases de tu modelo: del plato a primera y a tercera hay 27,43 m (90 pies), y a la goma 18,44 m. Muchos modelos no están a escala: si tus bases están más lejos, escala todo el modelo hasta que cuadren.
    - Es importante porque el juego no lee del estadio dónde están las bases ni la caja de bateo: pone a los jugadores siempre en el mismo sitio, y tu modelo tiene que coincidir con él.
 4. Selecciona los objetos de tu modelo y pulsa **Convertir objetos en piezas** (panel Power Pros, tecla N):
-   - Cada cara va a la pieza del estadio más cercana (gradas, vallas o suelo), porque el juego solo dibuja las piezas que ya tiene el estadio.
+   - El suelo del campo va a la pieza de suelo del estadio y todo lo demás a una pieza de gradas, porque el juego solo dibuja las piezas que ya tiene el estadio.
    - El color de cada material y un sol suave se guardan en el color de los vértices, porque el juego dibuja los estadios sin luz.
-   - Las caras de materiales de dos caras se duplican por detrás, porque el juego no dibuja la parte de atrás de las caras.
-   - Con **Quitar el estadio original** (activado por defecto), las piezas del estadio base desaparecen y solo queda tu modelo.
+   - Cada cara queda una sola vez y mirando al campo. De dos caras en el mismo sitio (las dos caras de una pared, como las exporta SketchUp) queda la que mira al campo.
+   - Las superficies pegadas a menos de 25 cm de otra paralela, como ventanas o letreros, se separan hasta 25 cm, para que no parpadeen.
+   - Con **Quitar el estadio original** (activado por defecto), las piezas del estadio base desaparecen y solo queda tu modelo. Las piezas con la propiedad `pp_keep` se conservan, por ejemplo una pieza de público en la que hayas puesto tu propio público.
 5. Pulsa **Generar colisión**. Crea la malla «Colisión» de tu estadio:
    - el suelo (césped si es verde, tierra si no) y el montículo;
    - las vallas, siguiendo la pared más cercana al campo en todas direcciones;
@@ -101,8 +102,35 @@ Puedes llevar al juego un estadio que no existe en él.
 
 Límites:
 - La colisión puede tener hasta 65.535 triángulos.
-- Las texturas pasan a RGB5A3 y potencias de 2 de hasta 1024. Muchas texturas grandes suben el tamaño del pack.
+- Las texturas pasan a RGB5A3 y potencias de 2 de hasta 256 píxeles.
 - El generador de colisión supone un campo de béisbol normal: suelo a la altura 0, el centro del campo unos 45 m por delante del plato y paredes alrededor.
+
+## Cómo hacer un modelo que funcione bien en el juego
+
+Lo aprendido al meter el Polo Grounds, un modelo de SketchUp descargado (14 y 15 de octubre de 2026). Ese modelo, hecho para verse en SketchUp, dio muchos problemas en el juego; uno pensado para el juego desde el principio se ahorra casi todos.
+
+**Lo que el juego necesita (comprobado):**
+- **El campo en su sitio:** plato en el origen, bases a 90 pies, goma a 60 pies 6 pulgadas y montículo con el centro a 18,51 m. El juego pone a los jugadores siempre ahí; tu modelo no lo cambia.
+- **Escala real en metros.** Las vallas quedan donde estén en tu modelo: si el modelo está a otra escala, las distancias cambian.
+- **Colores en el color de los vértices o en texturas:** el juego no ilumina los estadios. El color de un material sin textura solo llega si el convertidor lo guarda en los vértices.
+- **Nada de superficies pegadas:** dos caras paralelas a menos de unos centímetros (una ventana sobre una pared, un letrero, una textura de asientos sobre la grada) parpadean a 100–150 m. El búfer de profundidad del juego es mucho menos preciso que el de Blender. Deja al menos 25 cm o haz el detalle con textura.
+- **Una cara por superficie:** sin caras dobles en el mismo sitio. En SketchUp, pinta solo la cara delantera.
+- **Texturas pequeñas:** de 32 a 256 píxeles, como las del juego. Una textura grande, como una foto de asientos de 512 px, se ve ruidosa a distancia porque los estadios no tienen mipmaps.
+- **Sin geometría fina:** filas de sillas, barandillas o mástiles de pocos cm miden menos de un píxel a distancia y salen rotos. Los asientos son una rampa con textura de asientos, y los mástiles deben tener al menos unos 30 cm.
+- **Pocos triángulos:** un estadio del juego tiene unos 10.000. Uno de 40.000 funciona en PC, pero cuesta más dibujarlo y que se vea limpio.
+
+**Recomendación para hacerlo desde cero (en Blender):**
+1. Importa el estadio base del juego. Su campo, sus medidas y sus piezas son tu plantilla de escala y de estilo.
+2. Modela las gradas como rampas lisas (unos 18°, como las del juego) y aplícales una textura de asientos pequeña que se repita.
+3. Para el público, coloca caras sobre las rampas y dentro de las piezas de público del estadio base (`DP_AudienceF_*`, tumbadas sobre la grada, y `DP_AudienceS_*`, carteles verticales), con sus mismos materiales. Las del juego repiten la textura cada 6 m de ancho y cada 3–4 m de alto.
+4. Paredes, techos y fachadas: cajas sencillas con colores lisos o texturas pequeñas; detalles grandes, nada de piezas de centímetros.
+5. Ajusta las vallas a las medidas que quieras (líneas, jardines intermedios, centro) y pon los letreros de distancia a 25 cm de la pared.
+6. Convierte, genera la colisión, revisa las vallas y exporta como estadio nuevo.
+
+**Sin resolver todavía:**
+- El público puesto en las piezas de público de AT&T no se llegó a ver en un partido (en Blender sí). Falta saber cuándo dibuja el juego esas piezas.
+- El efecto de los flags de colocación (`0x40000000` en las gradas altas detrás del plato, `0x80000000`/`0x20000000` en las piezas `NOUPCAM`/`EVC`, `0x1600`/`0x1700` en el público). El convertidor no pone nada en piezas con los tres primeros.
+- Si la pelota y el home run usan la colisión nueva o datos del estadio base: un home run al centro del Polo Grounds cayó a 400 pies, que es lo que medían allí sus vallas.
 
 ## Reglas
 

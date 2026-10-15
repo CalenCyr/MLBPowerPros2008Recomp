@@ -490,6 +490,23 @@ Verificado (14 de octubre de 2026):
 - **Tablas de texturas y paletas:** acaban con una entrada de 8 bytes a cero, en los 82 modelos de Coors Field. El juego las recorre hasta esa entrada: al copiarlas a otro sitio sin ella, las texturas con paleta del modelo salen blancas. Ampliar el array de texmaps o el de materiales (que usan su contador de la escena) funciona.
 - **Lista de texturas del `tbl`:** entradas {→ textura, → paleta, u32, u32}. Los dos u32 (`0xAC800`, `0xB2540`…) parecen direcciones de TMEM: texturas precargadas. Sin comprobar.
 
+**Meter un modelo externo** (Polo Grounds de SketchUp, 14 y 15 de octubre de 2026; partidos del benchmark):
+- **Tamaños de los estadios del juego**, en los 47 packs:
+  - como mucho 24.768 bytes de display list, 573 vértices por llamada de dibujo, 1.303 posiciones por malla y 29 mallas por modelo;
+  - texturas de 32 a 256 píxeles.
+  El exportador trocea las mallas a 600 triángulos, 1.300 posiciones y 570 vértices por llamada, y reduce las texturas nuevas a 256 píxeles. Sin trocear, lo que faltaba en pantalla se explicó luego por las superficies pegadas, no por el tamaño: el troceado es por prudencia.
+- **Profundidad:** superficies paralelas a 0–2 cm (ventanas sobre una pared, una textura de asientos sobre la grada, las dos caras de una pared) parpadean o se tapan a 100–150 m; en Blender se ven bien. Separarlas o dejar una sola cara lo arregla.
+- **Caras traseras:** el modelo, con las dos caras de cada pared en el mismo sitio, mostraba la de atrás tapando la buena. Con una sola cara mirando al campo se ve bien. No está comprobado si el juego descarta caras traseras en los estadios.
+- **Texturas grandes** (512 px o más) a 100 m se ven ruidosas: los estadios no usan mipmaps.
+- **`0x80047874`** no dibuja modelos. Pone `GXSetZMode(1, GX_ALWAYS, …)`, cambia la escritura de color y alfa y dibuja un cuadrado: es un borrado de pantalla.
+- **Público del estadio:**
+  - `DP_AudienceF_*` son caras casi horizontales sobre las gradas (normal z ≈ 0,95), con texturas de 128 × 64 que se repiten cada 6 m de ancho y 4 m de alto;
+  - `DP_AudienceS_*` son carteles verticales que se repiten cada 6 × 3 m;
+  - las gradas usan una textura de asientos de 128 × 128 cada 25 m.
+  - Caras nuevas en esas piezas, con sus materiales, se ven en Blender, pero en el partido de prueba no aparecieron. Sin resolver.
+- **Una textura con paleta de otra pieza:** reutilizarla en una pieza distinta (tablas de textura y paleta ampliadas) la dibujó negra. Convertida a RGB5A3 se ve.
+- **Orden de las piezas:** reconstruir el árbol A como una sola hoja en el orden de la tabla no cambió nada visible.
+
 **Lista de estadios del juego** (14 de octubre de 2026, por los datos del REL; para añadir estadios):
 - **Números de archivo:** el juego no guarda nombres de archivo. Pide las entradas de `project.bin` por número de registro: Coors Field = 75, su tabla = 76. Hay 4.681 registros, de los que 2.424 tienen nombre: quedan 2.256 libres para archivos nuevos.
 - **Tabla de estadios:** `ovl_main.rel` `+0x92A450` (en memoria `0x80E9F9D0`, sección 5). Son 40 entradas de 12 bytes: {u32 número del pack gráfico, u32 número del `tbl`, puntero a la raíz del `tbl` (`0x40000000 | posición`)}.

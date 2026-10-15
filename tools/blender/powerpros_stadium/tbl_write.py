@@ -124,8 +124,16 @@ class TblWriter:
         struct.pack_into(">I", self.d, self.root + 4 + 4 * stadium_tbl.ROOT_FIELDS.index(field), P | offset)
 
     def set_model_tree(self):
-        """Tree A again from the placement boxes as they are now (after pieces moved or changed)."""
-        nodes, entries = build_tree(placement_boxes(stadium_tbl.parse_table(self.d)))
+        """Tree A again for the placements as they are now (after pieces moved or changed): one leaf
+        with every placement in table order. The game seems to draw the pieces in the order it finds
+        them in this tree: a spatial split put the crowd pieces (which do not write depth) before the
+        stands, which then covered them. Only stadiums with more than 127 pieces get a split tree."""
+        boxes = placement_boxes(stadium_tbl.parse_table(self.d))
+        if len(boxes) <= MAX_LEAF:
+            far = max(b[2][0] for b in boxes) + 1.0
+            nodes, entries = [((1.0, 0.0, 0.0, -far), (0, 0, len(boxes)), (0, len(boxes), 0))], [i for i, _, _ in boxes]
+        else:
+            nodes, entries = build_tree(boxes)
         tree, lists = pack_tree(nodes, entries)
         self.set_pointer("planes_a", self.append(tree))
         self.set_pointer("lists_a", self.append(lists, 4))         # right after the nodes, like the game

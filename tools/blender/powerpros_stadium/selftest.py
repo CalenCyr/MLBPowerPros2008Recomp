@@ -122,7 +122,42 @@ def main():
     pl = stadium_tbl.parse_table(t).placements[0]
     assert (pl.translation, pl.scale, pl.sphere, pl.flags, pl.model) == ((4, 5, 6), (2, 2, 2), (0.5, 0.5, 0.5, 1), 0x500, 0x30)
     check_trees(t)
+    check_split()
+    check_painter()
     print("selftest OK")
+
+
+def check_painter():
+    """Floor first (lowest first), then the rest from far to near the field centre."""
+    pos = [(0, 50, -1000), (10, 50, -1000), (0, 80, -1000),      # stand 55 m beyond the centre
+           (0, 50, -600), (10, 50, -600), (0, 80, -600),         # stand 15 m beyond it
+           (0, 1, 0), (10, 1, 0), (0, 1, -10),                   # chalk line, 0.1 m high
+           (0, 0, 0), (10, 0, 0), (0, 0, -10)]                   # grass
+    order = [3, 0, 2, 1]                                          # near stand, far stand, line, grass
+    m = pj7m_write.MeshData(0, pos, [(0, 1, 0)], [(255, 255, 255, 255)], [(0, 0)],
+                            [(3 * t + k, 0, 0, 0) for t in order for k in range(3)])
+    out = pj7m_write.painter_order([m], (0.0, 0.0, -450.0))
+    firsts = [out[0].positions[c[0]] for c in out[0].corners[::3]]
+    assert firsts == [pos[9], pos[6], pos[0], pos[3]], firsts
+    # Both sides of one wall beyond the centre: the side seen from the field is drawn last.
+    wall = [(0, 50, -1000), (10, 50, -1000), (0, 80, -1000)]
+    twins = pj7m_write.MeshData(0, wall, [(0, 1, 0)], [(255, 255, 255, 255)], [(0, 0)],
+                                [(0, 0, 0, 0), (2, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 0), (1, 0, 0, 0), (2, 0, 0, 0)])
+    out = pj7m_write.painter_order([twins], (0.0, 0.0, -450.0))
+    assert [c[0] for c in out[0].corners] == [0, 1, 2, 0, 2, 1], out[0].corners
+
+
+def check_split():
+    """A mesh far beyond the game's sizes comes out in parts within them, same triangles."""
+    n = 1500
+    positions = [(float(i), 0.0, float(i % 7)) for i in range(n + 2)]
+    corners = [(i + k, 0, 0, i % 3) for i in range(n) for k in (0, 1, 2)]
+    m = pj7m_write.MeshData(4, positions, [(0, 1, 0)], [(255, 255, 255, 255)], [(0, 0), (1, 0), (0, 1)], corners)
+    parts = pj7m_write.split_mesh(m, max_triangles=400, max_positions=500)
+    assert len(parts) == 4 and all(p.material == 4 for p in parts)
+    assert all(len(p.corners) // 3 <= 400 and len(p.positions) <= 500 for p in parts)
+    got = [(p.positions[c[0]], p.uvs[c[3]]) for p in parts for c in p.corners]
+    assert got == [(positions[c[0]], m.uvs[c[3]]) for c in corners]
 
 
 def check_trees(t):

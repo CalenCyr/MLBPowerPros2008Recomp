@@ -14,6 +14,12 @@ from . import pj7m
 P = 0x40000000
 BUDGET = 20 * 1024 * 1024          # graphics pack size that is known to load in a match
 MAX_INDEX = 0xFFFF
+# The game's own stadium meshes never exceed 24,768 display-list bytes, 573 vertices per draw and
+# 1,303 positions; a mesh far beyond that (500 KB, 58,000 vertices in one draw) is only partly
+# drawn in a match. Bigger meshes are split into several meshes of the same material.
+MESH_TRIANGLES = 600               # 16 KB of display list
+MESH_POSITIONS = 1300
+DRAW_VERTICES = 3 * 190
 
 
 @dataclass
@@ -91,20 +97,25 @@ class PackWriter:
 
     # ---- geometry ------------------------------------------------------------------------------
 
-    def set_meshes(self, model, meshes):
-        """Replace all meshes of a model. Returns (positions, triangles) written."""
+    def set_meshes(self, model, meshes, centre=None):
+        """Replace all meshes of a model. Returns (positions, triangles) written. With `centre`
+        (game space, a point of the field) the triangles are written in painter's order."""
         d = self.d
         root, scene = self._pointers(model)
         node = pj7m.ptr(d, scene + 4)
         entries, npos, ntri = b"", 0, 0
+        if centre is None:
+            meshes = [part for m in meshes for part in split_mesh(m)]
+        else:
+            meshes = painter_order(meshes, centre)
         for m in meshes:
             for name, values in (("positions", m.positions), ("normals", m.normals),
                                  ("colors", m.colors), ("uvs", m.uvs)):
                 if len(values) > MAX_INDEX + 1:
                     raise ValueError(f"{model.name}: {len(values)} {name} in one material (max {MAX_INDEX + 1})")
             dl = bytearray()
-            for i in range(0, len(m.corners), 3 * 21845):            # u16 vertex count per draw
-                chunk = m.corners[i:i + 3 * 21845]
+            for i in range(0, len(m.corners), DRAW_VERTICES):
+                chunk = m.corners[i:i + DRAW_VERTICES]
                 dl += struct.pack(">BH", 0x90, len(chunk))
                 for p, n, c, t in chunk:
                     dl += struct.pack(">BHHHH", 0, p, n, c, t)
@@ -123,6 +134,63 @@ class PackWriter:
         self.u32(model.offset + 0x1C, npos)
         self.u32(model.offset + 0x20, ntri)
         return npos, ntri
+
+
+def painter_key(positions, tri, centre):
+    """Draw order for surfaces the depth buffer cannot separate (coplanar or a few cm apart at
+    stadium distances): field-level floor first, lowest first (lines over dirt over grass), then
+    the rest from far to near the field, the side facing the field last."""
+    pts = [positions[c[0]] for c in tri]
+    y = sum(p[1] for p in pts) / 3
+    if max(p[1] for p in pts) < 10.0:                       # within 1 m of the ground (decimetres)
+        return (0, y)
+    dx = sum(p[0] for p in pts) / 3 - centre[0]
+    dz = sum(p[2] for p in pts) / 3 - centre[2]
+    # Same place (the two sides of a wall): the side facing the field last. Visible side of a GX
+    # (clockwise) triangle: -(b - a) x (c - a).
+    u = [pts[1][k] - pts[0][k] for k in range(3)]
+    v = [pts[2][k] - pts[0][k] for k in range(3)]
+    nx, nz = -(u[1] * v[2] - u[2] * v[1]), -(u[0] * v[1] - u[1] * v[0])
+    facing = 1 if nx * -dx + nz * -dz > 0 else 0
+    return (1, -round((dx * dx + dz * dz) ** 0.5, 2), facing)
+
+
+def painter_order(meshes, centre):
+    """Split meshes and order every triangle and part by painter_key."""
+    parts = []
+    for m in meshes:
+        tris = [m.corners[i:i + 3] for i in range(0, len(m.corners), 3)]
+        keys = [painter_key(m.positions, t, centre) for t in tris]
+        order = sorted(range(len(tris)), key=keys.__getitem__)
+        sorted_mesh = MeshData(m.material, m.positions, m.normals, m.colors, m.uvs,
+                               [c for i in order for c in tris[i]])
+        for part in split_mesh(sorted_mesh):
+            parts.append((painter_key(part.positions, part.corners[:3], centre), part))
+    parts.sort(key=lambda kp: kp[0])
+    return [p for _, p in parts]
+
+
+def split_mesh(m, max_triangles=MESH_TRIANGLES, max_positions=MESH_POSITIONS):
+    """MeshData within the game's sizes: consecutive triangles, each part with its own arrays."""
+    if len(m.corners) // 3 <= max_triangles and len(m.positions) <= max_positions:
+        return [m]
+    parts, part, maps = [], None, None
+    for t in range(0, len(m.corners), 3):
+        tri = m.corners[t:t + 3]
+        new_pos = len({c[0] for c in tri} - maps[0].keys()) if part else 3
+        if part is None or len(part.corners) // 3 >= max_triangles or len(part.positions) + new_pos > max_positions:
+            part, maps = MeshData(m.material, [], [], [], []), ({}, {}, {}, {})
+            parts.append(part)
+        for c in tri:
+            idx = []
+            for k, (src, dst) in enumerate(((m.positions, part.positions), (m.normals, part.normals),
+                                            (m.colors, part.colors), (m.uvs, part.uvs))):
+                if c[k] not in maps[k]:
+                    maps[k][c[k]] = len(dst)
+                    dst.append(src[c[k]])
+                idx.append(maps[k][c[k]])
+            part.corners.append(tuple(idx))
+    return parts
 
 
 def set_placement(table, record_offset, translation, rotation, scale, bbox, sphere):

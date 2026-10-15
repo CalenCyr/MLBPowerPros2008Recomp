@@ -26,6 +26,9 @@ class ExportFailure(Exception):
     pass
 
 
+FIELD_CENTRE = (0.0, 0.0, -450.0)          # game space: 45 m in front of home plate
+
+
 def to_game(v):
     """Blender metres, Z up -> game decimetres, Y up (inverse of importer.to_blender)."""
     return (10.0 * v[0], 10.0 * v[2], -10.0 * v[1])
@@ -48,8 +51,11 @@ def image_of(mat):
     return None
 
 
+MAX_TEXTURE = 256      # the game's stadium textures are 32-256 px: bigger ones (no mipmaps) shimmer far away
+
+
 def pow2(n):
-    return 1 << max(2, min(10, round(math.log2(max(n, 1)))))
+    return 1 << max(2, min(MAX_TEXTURE.bit_length() - 1, round(math.log2(max(n, 1)))))
 
 
 class Exporter:
@@ -227,7 +233,7 @@ class Exporter:
                 continue
             if mesh_changed:
                 meshes = self.mesh_groups(obj, model)
-                self.w.set_meshes(pj7m.parse_model(self.w.d, off), meshes)
+                self.w.set_meshes(pj7m.parse_model(self.w.d, off), meshes, FIELD_CENTRE)
                 self.stats["pieces"] += 1
                 points = [p for m in meshes for p in m.positions]
             else:

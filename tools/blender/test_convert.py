@@ -75,10 +75,10 @@ bpy.context.view_layer.objects.active = field
 pieces_before = sum(1 for o in stadium.all_objects if o.get("pp_kind") == "model")
 check(bpy.ops.object.powerpros_convert(replace=True, bake_light=True) == {"FINISHED"}, "convert finishes")
 pieces = [o for o in stadium.all_objects if o.get("pp_kind") == "model"]
-check(0 < len(pieces) < pieces_before, f"model spread over {len(pieces)} of {pieces_before} pieces, the rest removed")
 check(not any(n in bpy.data.objects for n in ("campo", "tierra", "valla", "gradas")), "source objects removed")
-ground = next(o for o in pieces if len(o.data.polygons) and all(abs(v.co.z) < 0.1 for v in o.data.vertices))
-check(ground is not None, f"the field went to a ground piece ({ground.name})")
+check(len(pieces) == 2, f"the model is two pieces, field and the rest: {[o.name for o in pieces]}")
+ground = next((o for o in pieces if all(abs(v.co.z) < 0.1 for v in o.data.vertices)), None)
+check(ground is not None, "the field went to its own (ground) piece")
 greens = [c.color for c in ground.data.color_attributes["Color"].data]
 check(any(c[1] > c[0] * 1.5 for c in greens), "material colour baked into the vertex colours")
 
