@@ -97,7 +97,7 @@ index c0d2e2d..bf6fa4b 100644
      return Get().displayMode.value_or(std::move(fallback));
  }
 diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
-index 3ee2c2b..25e720b 100644
+index 3ee2c2b..93339f9 100644
 --- a/runtime/src/launcher.cpp
 +++ b/runtime/src/launcher.cpp
 @@ -171,6 +171,7 @@ constexpr std::array<std::array<float, 4>, 3> kArtSparks{{{-27, -30, -12, -9}, {
@@ -108,15 +108,26 @@ index 3ee2c2b..25e720b 100644
      ImTextureID settings = 0;
      ImTextureID mainBlur = 0;  // for the bars of other window shapes
      ImTextureID settingsBlur = 0;
-@@ -217,7 +218,23 @@ ImTextureID BlurredTexture(const std::vector<unsigned char>& pixels, int w, int
+@@ -217,7 +218,33 @@ ImTextureID BlurredTexture(const std::vector<unsigned char>& pixels, int w, int
      return aurora_imgui_add_texture(static_cast<uint32_t>(sw), static_cast<uint32_t>(sh), bytes.data());
  }
  
 -ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred = nullptr) {
-+// main.png has the button labels (JUGAR, AJUSTES, MODS, SALIR) and the footer hints painted in. For
-+// English they are covered: each label row takes the pill's colour from a clean column just before the
-+// arrow (the pills only change colour from top to bottom), and the footer takes the background from
-+// further right.
++// main.png also has the footer hints painted in. The launcher draws its own (they follow the keyboard
++// or pad in use), so the painted ones go in both languages: the band takes the background from further
++// right.
++void EraseArtFooter(std::vector<unsigned char>& pixels, int w, int h) {
++    for (int y = 872; y < 928 && y < h; ++y) {
++        for (int x = 60; x < 520 && x + 460 < w; ++x) {
++            unsigned char* d = pixels.data() + (static_cast<size_t>(y) * w + x) * 4;
++            std::memcpy(d, d + 460 * 4, 4);
++        }
++    }
++}
++
++// main.png has the button labels (JUGAR, AJUSTES, MODS, SALIR) painted in. For English they are
++// covered: each label row takes the pill's colour from a clean column just before the
++// arrow (the pills only change colour from top to bottom).
 +void EraseArtWords(std::vector<unsigned char>& pixels, int w, int h) {
 +    auto px = [&](int x, int y) { return pixels.data() + (static_cast<size_t>(y) * w + x) * 4; };
 +    for (const ArtRect& r : kArtButtons) {
@@ -124,8 +135,7 @@ index 3ee2c2b..25e720b 100644
 +        for (int y = static_cast<int>(r.y0) + 9; y < static_cast<int>(r.y1) - 9 && y < h; ++y)
 +            for (int x = static_cast<int>(r.x0) + 118; x < source && x < w; ++x) std::memcpy(px(x, y), px(source, y), 4);
 +    }
-+    for (int y = 872; y < 928 && y < h; ++y)
-+        for (int x = 60; x < 520 && x + 460 < w; ++x) std::memcpy(px(x, y), px(x + 460, y), 4);
++    EraseArtFooter(pixels, w, h);
 +}
 +
 +ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred = nullptr,
@@ -133,7 +143,7 @@ index 3ee2c2b..25e720b 100644
      const std::u8string name = path.u8string();
      SDL_Surface* loaded = SDL_LoadPNG(reinterpret_cast<const char*>(name.c_str()));
      if (loaded == nullptr) return 0;
-@@ -230,6 +247,7 @@ ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred
+@@ -230,6 +257,7 @@ ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred
                      static_cast<const unsigned char*>(rgba->pixels) + static_cast<size_t>(y) * static_cast<size_t>(rgba->pitch),
                      static_cast<size_t>(rgba->w) * 4);
      }
@@ -141,15 +151,17 @@ index 3ee2c2b..25e720b 100644
      const ImTextureID texture = aurora_imgui_add_texture(static_cast<uint32_t>(rgba->w), static_cast<uint32_t>(rgba->h), pixels.data());
      if (blurred != nullptr) *blurred = BlurredTexture(pixels, rgba->w, rgba->h);
      SDL_DestroySurface(rgba);
-@@ -242,6 +260,7 @@ Art LoadArt() {
+@@ -241,7 +269,8 @@ Art LoadArt() {
+     const char* base = SDL_GetBasePath();
      if (base == nullptr) return art;
      const std::filesystem::path dir = std::filesystem::path(reinterpret_cast<const char8_t*>(base)) / "launcher";
-     art.main = LoadTexture(dir / "main.png", &art.mainBlur);
+-    art.main = LoadTexture(dir / "main.png", &art.mainBlur);
++    art.main = LoadTexture(dir / "main.png", &art.mainBlur, EraseArtFooter);
 +    art.mainEn = LoadTexture(dir / "main.png", nullptr, EraseArtWords);
      art.settings = LoadTexture(dir / "settings.png", &art.settingsBlur);
      art.ok = art.main != 0 && art.settings != 0;
      return art;
-@@ -262,7 +281,7 @@ constexpr int kOpenRosterEditor = -3;
+@@ -262,7 +291,7 @@ constexpr int kOpenRosterEditor = -3;
  constexpr int kOpenTextureStudio = -4;
  constexpr int kModsTab = 4;  // after VIDEO, AUDIO, CONTROLES, INTERFAZ; HERRAMIENTAS follows it
  
@@ -158,7 +170,7 @@ index 3ee2c2b..25e720b 100644
      "Abre la carpeta mods. Cada mod va en su propia carpeta, con un mod.toml opcional "
      "(name, author, version, description) y alguna de estas carpetas:\n\n"
      "  textures   texturas al estilo Dolphin\n"
-@@ -272,9 +291,19 @@ constexpr const char* kModsHelp =
+@@ -272,9 +301,19 @@ constexpr const char* kModsHelp =
      "  roster   roster de PowerUp / PowerUp+ (.dat)\n\n"
      "Los mods que cambian el roster tienen partidas propias: cada combinación guarda las suyas y, "
      "sin ellos, vuelven tus partidas normales.\n\n"
@@ -180,7 +192,7 @@ index 3ee2c2b..25e720b 100644
      "MLB Power Pros 2008 - mods\r\n\r\n"
      "Cada mod va en su propia carpeta dentro de esta, por ejemplo mods\\UniformesHD\\.\r\n"
      "Dentro puede tener:\r\n"
-@@ -290,26 +319,54 @@ constexpr const char* kModsReadme =
+@@ -290,26 +329,54 @@ constexpr const char* kModsReadme =
      "Partidas: los mods que cambian el roster (roster\\ o un game_data.pack en project\\) tienen\r\n"
      "sus propias partidas (MLB Life, Season, League...) para cada combinacion, guardadas en\r\n"
      "ModSaves junto a los datos del usuario. Sin esos mods vuelven tus partidas normales; los de\r\n"
@@ -243,7 +255,7 @@ index 3ee2c2b..25e720b 100644
  
  // A page that waits for PowerUp+'s server and then goes to it, so the browser never shows an error
  // while the server starts.
-@@ -406,7 +463,7 @@ void OpenModsFolder() {
+@@ -406,7 +473,7 @@ void OpenModsFolder() {
      const std::filesystem::path dir = mods::Directory();
      std::error_code ec;
      std::filesystem::create_directories(dir, ec);
@@ -252,7 +264,7 @@ index 3ee2c2b..25e720b 100644
      if (!std::filesystem::exists(readme, ec)) std::ofstream(readme, std::ios::binary) << kModsReadme;
  #if defined(_WIN32)
      ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-@@ -419,17 +476,31 @@ struct Tab {
+@@ -419,17 +486,31 @@ struct Tab {
      const char* footer = nullptr;
  };
  
@@ -287,7 +299,7 @@ index 3ee2c2b..25e720b 100644
      return std::string("Wii · ") + region + " · " + id;
  }
  
-@@ -465,6 +536,7 @@ bool Relaunch() {
+@@ -465,6 +546,7 @@ bool Relaunch() {
  Result Run(int argc, char** argv) {
      g_argc = argc;
      g_argv = argv;
@@ -295,7 +307,7 @@ index 3ee2c2b..25e720b 100644
      if (AutomatedRun() || !RuntimeConfigFile::LauncherOnStartup(true)) {
          return Result::Play;
      }
-@@ -485,95 +557,126 @@ Result Run(int argc, char** argv) {
+@@ -485,95 +567,126 @@ Result Run(int argc, char** argv) {
          if (option.backend == aurora_get_backend()) runningApi = option.label;
      }
  
@@ -469,7 +481,7 @@ index 3ee2c2b..25e720b 100644
          modHelp.push_back(std::move(help));
          modsTab.options.push_back({m.name.c_str(), modHelp.back().c_str(), YesNo(), m.enabled ? 1 : 0, true,
                                     static_cast<int>(i)});
-@@ -582,8 +685,8 @@ Result Run(int argc, char** argv) {
+@@ -582,8 +695,8 @@ Result Run(int argc, char** argv) {
      std::vector<Tab> tabs{
          {"VIDEO", {api, quality, display, resolution, fsr, filtering, aspect, fps}},
          {"AUDIO", {volume, mute}},
@@ -480,7 +492,7 @@ index 3ee2c2b..25e720b 100644
      };
      tabs.push_back(std::move(modsTab));
      tabs.push_back(std::move(toolsTab));
-@@ -610,6 +713,7 @@ Result Run(int argc, char** argv) {
+@@ -610,6 +723,7 @@ Result Run(int argc, char** argv) {
      matchPreset();
  
      bool restart = false;
@@ -488,7 +500,7 @@ index 3ee2c2b..25e720b 100644
      auto apply = [&](int tab, int index) {
          const Option& o = option(tab, index);
          if (o.mod == kOpenModsFolder) {
-@@ -654,7 +758,14 @@ Result Run(int argc, char** argv) {
+@@ -654,7 +768,14 @@ Result Run(int argc, char** argv) {
          if (label == mute.label) RuntimeConfigFile::SetAudioMuted(o.value != 0);
          if (label == wiimote.label) RuntimeConfigFile::SetWiiRemotesEnabled(o.value != 0);
          if (label == launcherOption.label) RuntimeConfigFile::SetLauncherOnStartup(o.value != 0);
@@ -504,7 +516,7 @@ index 3ee2c2b..25e720b 100644
          restart = restart || o.restart;
      };
      auto change = [&](int tab, int index, int delta) {
-@@ -674,7 +785,7 @@ Result Run(int argc, char** argv) {
+@@ -674,7 +795,7 @@ Result Run(int argc, char** argv) {
      ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
      const Art art = LoadArt();
  
@@ -513,16 +525,27 @@ index 3ee2c2b..25e720b 100644
      // WIICOMPILED_LAUNCHER_SELECT=<api config name>: pick that API and press Play (scripted tests of
      // the save-and-relaunch path; the relaunched copy skips the launcher).
      if (const char* select = std::getenv("WIICOMPILED_LAUNCHER_SELECT"); select != nullptr && *select != '\0') {
-@@ -701,7 +812,7 @@ Result Run(int argc, char** argv) {
+@@ -700,8 +821,18 @@ Result Run(int argc, char** argv) {
+     const char* testAction = std::getenv("WIICOMPILED_LAUNCHER_ACTION");
      if (testAction != nullptr && std::strcmp(testAction, "roster-editor") == 0) OpenRosterEditor();
      if (testAction != nullptr && std::strcmp(testAction, "texture-studio") == 0) OpenTextureStudio();
++    // =language-es / =language-en: switch the language once, as if chosen in INTERFAZ (the launcher is
++    // rebuilt on the same page; the rebuilt one finds the language already set and does nothing).
++    if (testAction != nullptr && std::strncmp(testAction, "language-", 9) == 0) {
++        for (size_t i = 0; i < kLanguageCodes.size(); ++i) {
++            if (std::strcmp(kLanguageCodes[i], testAction + 9) == 0 && option(3, 1).value != static_cast<int>(i)) {
++                option(3, 1).value = static_cast<int>(i);
++                apply(3, 1);
++            }
++        }
++    }
  
 -    constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
 +    const std::array<const char*, 3> kMenu{Tr("JUGAR", "PLAY"), Tr("AJUSTES", "SETTINGS"), Tr("SALIR", "EXIT")};
      int menu = 0;
      int tab = page && std::strcmp(page, "controls") == 0 ? 2 : toolsPage ? kModsTab + 1 : modsOnly ? kModsTab : 0;
      if (tab == 2) settingsOpen = true;
-@@ -711,6 +822,13 @@ Result Run(int argc, char** argv) {
+@@ -711,6 +842,13 @@ Result Run(int argc, char** argv) {
      int scroll = 0;
      int pageRows = 6;
      if (const char* testRow = std::getenv("WIICOMPILED_LAUNCHER_ROW")) row = std::atoi(testRow);
@@ -536,7 +559,7 @@ index 3ee2c2b..25e720b 100644
      static const bool navProbe = [] {
          const char* value = std::getenv("WIICOMPILED_LAUNCHER_PROBE");
          return value && std::strcmp(value, "nav") == 0 && RuntimeConfigFile::PortableRootDirectory().has_value();
-@@ -753,7 +871,8 @@ Result Run(int argc, char** argv) {
+@@ -753,7 +891,8 @@ Result Run(int argc, char** argv) {
              auto hit = [&](const ArtRect& r) { return Hovered(at(r.x0, r.y0), at(r.x1, r.y1)); };
              // Other window shapes: a blurred, darkened copy of the art covers the window, and a soft
              // shadow separates it from the art.
@@ -546,7 +569,7 @@ index 3ee2c2b..25e720b 100644
              const ImTextureID blur = settingsOpen ? art.settingsBlur : art.mainBlur;
              const float cover = std::max(w / kArtW, h / kArtH);
              const ImVec2 co((w - kArtW * cover) * 0.5f, (h - kArtH * cover) * 0.5f);
-@@ -801,7 +920,7 @@ Result Run(int argc, char** argv) {
+@@ -801,7 +940,7 @@ Result Run(int argc, char** argv) {
                      const float e = 8.0f + 5.0f * pulse;
                      dl->AddRectFilled(at(c.x - hw - e, c.y - hh - e), at(c.x + hw + e, c.y + hh + e),
                                        Rgba(255, 246, 150, static_cast<int>(110 + 80 * pulse)), (hh + e) * s);
@@ -555,7 +578,7 @@ index 3ee2c2b..25e720b 100644
                                          at(c.x + hw, c.y + hh), ImVec2(r.x0 / kArtW, r.y0 / kArtH),
                                          ImVec2(r.x1 / kArtW, r.y1 / kArtH), IM_COL32_WHITE, hh * s);
                      // The art's yellow "selected" sparks, beside whichever button is selected.
-@@ -813,14 +932,30 @@ Result Run(int argc, char** argv) {
+@@ -813,14 +952,30 @@ Result Run(int argc, char** argv) {
                          dl->AddLine(a, b, Rgba(255, 222, 40), 9.0f * s);
                      }
                  }
@@ -590,7 +613,7 @@ index 3ee2c2b..25e720b 100644
                      ShadowedText(dl, g_text, 25 * s, at(134, 818), IM_COL32_WHITE, disc.c_str());
                  } else {
                      ShadowedText(dl, g_text, 25 * s, at(100, 818), Rgba(255, 170, 150), gameLine.c_str());
-@@ -830,13 +965,13 @@ Result Run(int argc, char** argv) {
+@@ -830,13 +985,13 @@ Result Run(int argc, char** argv) {
                  ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - vw, at(0, 822).y), Rgba(200, 225, 255),
                               version.c_str());
                  if (restart) {
@@ -607,7 +630,7 @@ index 3ee2c2b..25e720b 100644
                  ShadowedText(dl, g_text, 22 * s, at(1050, 887), Rgba(200, 225, 255), launcher_controls::DeviceLabel());
                  const int n = static_cast<int>(kArtButtons.size());
                  if (Up() || Left()) menu = (menu + n - 1) % n;
-@@ -869,11 +1004,12 @@ Result Run(int argc, char** argv) {
+@@ -869,11 +1024,12 @@ Result Run(int argc, char** argv) {
                  const char* line2;
              };
              const std::array<Item, 3> items{{
@@ -625,7 +648,7 @@ index 3ee2c2b..25e720b 100644
              }};
              const float pillW = 250 * u;
              const float pillH = 88 * u;
-@@ -923,7 +1059,7 @@ Result Run(int argc, char** argv) {
+@@ -923,7 +1079,7 @@ Result Run(int argc, char** argv) {
              if (menu == 0) {
                  if (discReady) {
                      DrawCheck(dl, ImVec2(ix, ia.y + 72 * u), 20 * u, Rgba(150, 255, 120));
@@ -634,7 +657,7 @@ index 3ee2c2b..25e720b 100644
                      ShadowedText(dl, g_text, 22 * u, ImVec2(ix + 190 * u, ia.y + 69 * u), Rgba(190, 225, 255),
                                   gameLine.c_str());
                  } else {
-@@ -937,7 +1073,7 @@ Result Run(int argc, char** argv) {
+@@ -937,7 +1093,7 @@ Result Run(int argc, char** argv) {
              ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - vs.x, ib.y - 40 * u), Rgba(190, 225, 255),
                           version.c_str());
              if (restart) {
@@ -643,7 +666,7 @@ index 3ee2c2b..25e720b 100644
                  const ImVec2 ns = TextSize(g_text, 20 * u, note);
                  ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - ns.x, ia.y + 22 * u), Rgba(255, 224, 120), note);
              }
-@@ -945,9 +1081,9 @@ Result Run(int argc, char** argv) {
+@@ -945,9 +1101,9 @@ Result Run(int argc, char** argv) {
              // Button hints.
              float hx = w * 0.06f;
              const float hy = h - 50 * u;
@@ -656,7 +679,7 @@ index 3ee2c2b..25e720b 100644
  
              if (!settingsOpen) {
                  const int n = static_cast<int>(items.size());
-@@ -962,6 +1098,7 @@ Result Run(int argc, char** argv) {
+@@ -962,6 +1118,7 @@ Result Run(int argc, char** argv) {
          }
  
          if (launcher_controls::ProbeTick() || (navProbe && navProbeTick())) choice = Choice::Quit;
@@ -664,7 +687,7 @@ index 3ee2c2b..25e720b 100644
          aurora_set_present_schedule(0, 0);
          aurora_end_frame();
          nextFrame += std::chrono::microseconds(16667);
-@@ -971,6 +1108,12 @@ Result Run(int argc, char** argv) {
+@@ -971,6 +1128,12 @@ Result Run(int argc, char** argv) {
  
      aurora_set_skip_unready_pipelines(savedSkipPipelines);
      ImGui::GetIO().ConfigFlags = savedNavFlags;
