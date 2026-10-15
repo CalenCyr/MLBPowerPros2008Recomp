@@ -281,7 +281,16 @@ Fuentes: desensamblado (`0x80027A54`, `0x80027BF8`, `0x80038E50`-`0x8003A41C`); 
 | `0x34` | inicio de los datos, en `0x3D800` (el archivo acaba justo en `0x18390000`) |
 
 - **Registros** de `0x1C` bytes: 0, offset del nombre, tamaño en sectores, alineación (`0x800`), 0, 0, tamaño en bytes.
-- **Tabla de orden:** pares (registro, sector de inicio relativo a `0x3D800`), ordenados por sector. El par 0 no se usa y la lista acaba en (0, 0).
+- **Tabla de orden:** está dividida en **cubos**. Lo confirma el código del juego: montaje `0x80059E7C`, índice `0x8005A334`, búsqueda `0x800599E4`.
+  - Las posiciones de los cubos dentro de la tabla de orden están en la tabla de `[0x18]` (`0x5800`); su número, en `[0x20]` (2).
+  - Cada cubo es: u32 número de entradas, u32 0 y los pares (número de archivo, sector de inicio relativo a `0x3D800`), ordenados por sector.
+  - El disco tiene un cubo vacío en `+0` y otro en `+8` con los 2.423 archivos.
+  - `tools/projectbin.py` lee la cabecera de ese cubo, (2423, 0), como un primer par sin nombre. Es inofensivo para listar, extraer y reconstruir.
+  - **Añadir archivos exige subir el contador del último cubo.** Sin eso, el juego no encuentra el archivo nuevo y lee desde el sector 0 (comprobado).
+- **Tabla de números de archivo** (`0x800`, [`0x0C`] = 4.625 huecos):
+  - La casilla i guarda la posición del registro i − 1 en la tabla de registros.
+  - El juego la indexa con número + 1, así que el archivo número n es el registro n.
+  - El juego pide los archivos por número, nunca por nombre: no hay nombres de archivo en el ejecutable.
 - **Nombres:** rutas terminadas en NUL que empiezan por `/`.
 - **Tipos:**
   - `.pack`: 2.356 empiezan por `PACKWII ` y 2 por `PACKPS2` (`team_logo.pack`, little-endian). Formato abajo.
@@ -451,9 +460,38 @@ Verificado (14 de octubre de 2026):
   - **Orden:** el de los equipos de MLB por división: BAL, BOS, NYY, TB, TOR, CWS, CLE, DET, KC, MIN, LAA, OAK, SEA, TEX, ATL, FLA, NYM, PHI, WSH, CHC, CIN, HOU, MIL, PIT, STL, ARI, COL, LAD, SD, SF. Siguen `org01`–`org06`, `ml01`, `bullpen`, `bullpen2` y `season`.
   - Justo después hay una vtable: la tabla no se puede alargar en su sitio.
 - **`0x80C7AF48`** (`GetStadiumFiles`, nombre propio): copia `tabla[(número − 1) × 12]` a su primer argumento. El número de estadio va de 1 a 40 y no se comprueba. Es la única referencia a la tabla en el código.
+- **Las pantallas de elección de estadio son dos:**
+  - **Exhibición:** constructor en `0x80CD29xx`, sin el widget de lista genérico.
+    - Lista de números en `+0x296C`, número de entradas en `+0x2968` y cursor en `+0x2938`, con sitio para 38 entradas. Detrás vienen campos en uso.
+    - La lista se construye con los 30 de MLB (vía `0x807A8BE8(equipo)`) más `org01`–`org06` y `ml01` si están desbloqueados (`0x805C719C(0x2E..0x34)`) o son el estadio de casa.
+    - El cursor se mueve dentro de la función de actualización: +1 o −1, dando la vuelta con el número de entradas.
+    - `0x80CD3F6C` (`ShowStadium`) muestra la entrada tras cada movimiento:
+      - pide una vez el pack de menú del estadio (`0x80EA23D8[número]`, marca en `+0x2941 + número`);
+      - cuando está cargado lo dibuja con `0x807A8EBC` en los dos objetos de vista de `+0x2A18` (modo 1) y `+0x2A1C` (modo 2);
+      - guarda el estadio mostrado en `+0x293C`.
+  - **La otra pantalla** (vtable `0x80D3DE58`, constructor `0x805C6DC4`, lista en `+0x5250` y widget de lista en `+0x5538`) no es la de Exhibición: no se usa al elegir estadio en Exhibición (comprobado con un registro). Probablemente es la de Arrange o Temporada.
+- **`0x807A8EBC(vista, modo, estadio)`:** dibuja las texturas del pack de menú del estadio.
+  - Usa la tabla `0x80D99E38` (28 bytes por estadio: pack de menú y punteros a sus texturas).
+  - Guarda en caché el último (modo, estadio) en `+0xDC`/`+0xE0`.
 - **Imágenes del menú de estadios:** `ovl_main.rel` `+0x7C8814` (`0x80D3DD94`) guarda 37 números de archivo `env_stadium_menu01`…`36` y `100`. Lo usan funciones de `0x805C6DDC` a `0x805C8660` (pantalla de elección de estadio), con la base en `0x80D3DD90`.
 - **`env_order_stadiumNN`:** `ovl_main.rel` `+0x7DCD0C` (`0x80D5228C`), entradas de 20 bytes {número de archivo, cuatro punteros dentro del pack}. Lo usan `0x80672F20` a `0x8067312C`.
-- **Para un estadio 37 seleccionable hace falta, por lo menos:**
+- **Estadios nuevos** (hecho el 14 de octubre de 2026; parche `wiicompiled-new-stadiums`, `runtime/src/hle/mlb/new_stadiums.cpp`):
+  - Un mod declara `[[stadium]]` en `mod.toml` y trae `project/stadium_<código>.pack` y `stadium_<código>tbl.pack`, y opcionalmente `env_stadium_menu_<código>.pack`.
+  - El runtime da a esos archivos números libres desde 4388 (el mayor del juego es 4387) y los añade al último cubo del `project.bin` con mods.
+  - **`ShowStadium` sustituida:**
+    - pone los estadios nuevos en los huecos libres de la lista, como una ventana que se desplaza (pasar el último hueco muestra el siguiente), así que no hay límite;
+    - el hueco lleva el número del estadio base, así que medidas, partidas y el resto del juego ven un estadio que conocen;
+    - muestra el pack de menú del estadio nuevo cambiando por un momento la entrada de `0x80D99E38`.
+  - **`GetStadiumFiles` sustituida:** devuelve los archivos del estadio nuevo cuando era el elegido y el partido es de Exhibición.
+  - **Comprobado:**
+    - en el carrusel de Exhibición, izquierda desde Fenway muestra la entrada nueva con su imagen;
+    - al confirmarla, el partido carga «Coors Field 2» desde sus archivos 4389/4390;
+    - con dos mods de estadio a la vez, el benchmark carga cualquiera de los dos (`WIICOMPILED_MATCH_BENCH_STADIUM=<código>`).
+  - **Pendiente:**
+    - el rótulo con el nombre y la línea «Home of the…» siguen siendo los del estadio base, porque salen del pack común `0x8E2`;
+    - la otra pantalla de elección de estadio;
+    - Temporada, Liga y MLB Life eligen estadio por equipo.
+- **Lo que hacía falta (cumplido arriba salvo lo pendiente):**
   - poder añadir archivos nuevos a `project.bin`;
   - sustituir `GetStadiumFiles` y las funciones que leen las otras dos tablas por versiones nativas con entradas extra;
   - encontrar en la pantalla de elección el número de estadios (36 más «aleatorio»);

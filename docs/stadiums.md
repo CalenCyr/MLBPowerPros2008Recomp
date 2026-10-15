@@ -51,8 +51,10 @@ Las propiedades personalizadas `pp_*` de objetos y materiales guardan los datos 
 3. Rellena el diálogo:
    - **Nombre del mod**;
    - **Carpeta de mods**: si importaste desde la carpeta del juego, ya viene puesta (`<juego>\mods`);
-   - **Reemplaza a**: el mismo estadio, u otro. Por ejemplo, puedes poner tu Coors Field editado en el hueco de Turner Field.
-4. Activa el mod en **MODS** del launcher y juega un partido en ese estadio.
+   - **Tipo**:
+     - **Estadio nuevo** (predeterminado): se **añade** a la elección de estadio de Exhibición y no quita ninguno. Pide un **código** corto (letras minúsculas, números o _, por ejemplo `truist`) y un **nombre**. Usa los datos de juego del estadio importado: medidas, menú y partidas;
+     - **Reemplazar un estadio**: sustituye al mismo estadio o a otro. Por ejemplo, puedes poner tu Coors Field editado en el hueco de Turner Field.
+4. Activa el mod en **MODS** del launcher. Un estadio nuevo aparece en Exhibición al elegir estadio, después de los del juego (con la izquierda desde el primero llegas antes).
 
 Qué hace al exportar:
 - Escribe `mods\<nombre>\project\stadium_<código>.pack` y `stadium_<código>tbl.pack`, más un `mod.toml`.

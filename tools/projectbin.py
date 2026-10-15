@@ -1,15 +1,22 @@
 """Read and rebuild MLB Power Pros 2008's PROJECT.BIN archive (files/project.bin on the disc).
 
 Layout (big-endian, sectors of 0x800 bytes), found by reading the file and checked on all 2,424
-entries of RL8E54:
-  0x00     u32 version (2), u32 sector size (0x800), u32 ?, u32 hash slots (0x1211)
-  0x10     u32 hash table offset (0x40), u32 record table offset (0x6000), u32 ?, u32 ?
-  0x20     u32 ?, u32 ?, u32 order table offset (0x26000), u32 name table offset (0x2B000)
-  0x30     u32 ?, u32 data offset (0x3D800)
+entries of RL8E54; the game's own reading (mount 0x80059E7C, index 0x8005A334, lookup 0x800599E4)
+confirmed the id table and the order buckets:
+  0x00     u32 version (2), u32 sector size (0x800), u32 header sectors (0xA), u32 file ids (0x1211)
+  0x10     u32 records sectors (0x40), u32 record table offset (0x6000), u32 bucket table offset
+           (0x5800), u32 its sectors (1)
+  0x20     u32 bucket count (2), u32 order sectors (0xA), u32 order table offset (0x26000),
+           u32 name table offset (0x2B000)
+  0x30     u32 name sectors (0x25), u32 data offset (0x3D800)
+  0x800    file id table: slot i (from 1) holds the record-table offset of record i - 1; the game
+           reads slot id + 1, so file id n is record n. It asks for files by id, never by name
   records  0x1C bytes each: u32 0, u32 name offset (into the name table), u32 size in sectors,
            u32 alignment (0x800), u32 0, u32 0, u32 size in bytes
-  order    pairs u32 record index, u32 start sector (relative to the data offset), sorted by
-           sector; pair 0 is unused, the count is the number of named records + 1
+  order    buckets (offsets from the order table in the bucket table): u32 count, u32 0, then
+           count pairs u32 file id, u32 start sector (relative to the data offset). The disc has an
+           empty bucket at 0 and one with all 2,423 files at 8; this module reads the bucket header
+           (2423, 0) as a nameless first pair, which is harmless for list/extract/build.
   names    NUL-terminated paths ("/ClaimTheTitle.pack"); offset 0 is the empty name
 Files are .pack (PACKWII, two PACKPS2), .dat and .arc. Only data moves when a file is replaced:
 the header, hash table and name table are kept as they are.

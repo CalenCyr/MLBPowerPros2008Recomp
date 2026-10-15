@@ -87,6 +87,23 @@ python tools/packwii.py import pack/env_mainmenu.pack png mimod/project/env_main
 
 No subas ni compartas los PNG exportados ni los `.pack` del juego. Un mod reparte solo los `.pack` que modificó, igual que con los uniformes.
 
+## Estadios nuevos
+
+Un mod puede **añadir** estadios: aparecen como entradas nuevas en la elección de estadio de Exhibición, después de los del juego, y no quitan ninguno.
+
+```toml
+[[stadium]]
+code = "truist"          # sus archivos: project/stadium_truist.pack y project/stadium_truisttbl.pack
+name = "Truist Park"
+base = "atl"             # estadio cuyos datos de juego usa (medidas, menú, partidas)
+```
+
+- La forma fácil de hacerlos es el complemento de Blender, opción «Estadio nuevo» al exportar (`docs/stadiums.md`).
+- `project/env_stadium_menu_<código>.pack` es opcional: una copia del pack de menú del estadio base (`env_stadium_menuNN.pack`, NN = número del estadio) con otra imagen. Sin él se ve la imagen del estadio base.
+- El juego guarda en partidas y configuración el número del estadio base, así que desactivar el mod nunca rompe nada: ese partido vuelve al estadio base.
+- Por ahora solo en Exhibición; el rótulo con el nombre sigue siendo el del estadio base.
+- Los archivos nuevos reciben números libres de `project.bin` (desde 4388), que el juego no usa.
+
 ## Partidas por roster
 
 Una carrera de MLB Life, una temporada o una liga empezadas con un roster modificado solo tienen sentido con ese roster. Por eso los mods que cambian el roster tienen partidas propias. Cuentan como tales los que traen `roster/` o un `game_data.pack` en `project/`.

@@ -57,6 +57,12 @@ class PP_OT_export_stadium(bpy.types.Operator):
     mod_name: StringProperty(name="Nombre del mod", default="Mi estadio")
     mods_folder: StringProperty(name="Carpeta de mods", subtype="DIR_PATH",
                                 description="La carpeta mods junto al juego instalado")
+    mode: EnumProperty(name="Tipo", items=[
+        ("new", "Estadio nuevo", "Se añade como una entrada más en la elección de estadio; no quita ninguno"),
+        ("replace", "Reemplazar un estadio", "Sustituye a un estadio del juego")])
+    new_code: StringProperty(name="Código", default="miestadio",
+                             description="Identificador corto: letras minúsculas, números o _ (p. ej. truist)")
+    new_name: StringProperty(name="Nombre", default="Mi estadio")
     target: EnumProperty(name="Reemplaza a", items=[("same", "El mismo estadio", "")] +
                          [(c, n, "") for c, n in names.STADIUMS])
 
@@ -74,7 +80,13 @@ class PP_OT_export_stadium(bpy.types.Operator):
         layout = self.layout
         layout.prop(self, "mod_name")
         layout.prop(self, "mods_folder")
-        layout.prop(self, "target")
+        layout.prop(self, "mode", expand=True)
+        if self.mode == "new":
+            layout.prop(self, "new_code")
+            layout.prop(self, "new_name")
+            layout.label(text="Usa los datos de juego (medidas, menú) del estadio importado.")
+        else:
+            layout.prop(self, "target")
         layout.label(text="Solo se reescriben las piezas que cambiaste.")
 
     def execute(self, context):
@@ -82,9 +94,13 @@ class PP_OT_export_stadium(bpy.types.Operator):
         if not self.mods_folder:
             self.report({"ERROR"}, "Elige la carpeta mods del juego")
             return {"CANCELLED"}
-        target = coll["pp_stadium"] if self.target == "same" else self.target
+        if self.mode == "new":
+            target, new_name = self.new_code.strip().lower(), self.new_name.strip() or "Mi estadio"
+        else:
+            target, new_name = (coll["pp_stadium"] if self.target == "same" else self.target), None
         try:
-            st = exporter.export_stadium(coll, bpy.path.abspath(self.mods_folder), self.mod_name.strip() or "Mi estadio", target)
+            st = exporter.export_stadium(coll, bpy.path.abspath(self.mods_folder), self.mod_name.strip() or "Mi estadio",
+                                         target, new_name)
         except (exporter.ExportFailure, ValueError) as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}

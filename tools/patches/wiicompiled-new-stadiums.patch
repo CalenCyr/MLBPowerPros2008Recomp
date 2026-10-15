@@ -1,0 +1,583 @@
+diff --git a/runtime/include/mods.h b/runtime/include/mods.h
+index 4a69ea5..e3f3a93 100644
+--- a/runtime/include/mods.h
++++ b/runtime/include/mods.h
+@@ -2,6 +2,7 @@
+ 
+ #include <aurora/aurora.h>
+ 
++#include <cstdint>
+ #include <filesystem>
+ #include <string>
+ #include <vector>
+@@ -24,6 +25,16 @@
+ // is used. Texture, uniform and other mods share the normal saves.
+ namespace mods {
+ 
++// A stadium a mod adds (not replaces): [[stadium]] in mod.toml with code = "x" and the files
++// project/stadium_x.pack and project/stadium_xtbl.pack (optionally project/env_stadium_menu_x.pack,
++// a copy of the base stadium's menu pack with new pictures). base = the stadium whose game data
++// (dimensions, menu layout, saves) it uses, by code ("col", "atl", "org01"...).
++struct StadiumDecl {
++    std::string code;
++    std::string name;
++    std::string base;
++};
++
+ struct Mod {
+     std::string id;  // folder name
+     std::string name;
+@@ -40,7 +51,31 @@ struct Mod {
+     bool enabled = false;
+ 
+     bool changesRoster = false;  // roster/ or project/game_data.pack: saves are kept apart
++    std::vector<StadiumDecl> stadiums;
++};
++
++// A file of the modded PROJECT.BIN that the disc does not have: project/ files with a new name get
++// a free record (file ids from kFirstNewFile up, in name order). The game asks for files by id.
++struct NewFile {
++    std::string name;  // lower-case, e.g. "stadium_truist.pack"
++    uint32_t id = 0;
++    std::filesystem::path path;
++};
++constexpr uint32_t kFirstNewFile = 4388;  // above every id the game uses (its highest is 4387)
++
++// Stadiums added by the enabled mods whose files are all present. Valid after Apply.
++struct NewStadium {
++    std::string code;
++    std::string name;
++    uint32_t base = 0;     // stadium number 1..40 (the game's stadium table order)
++    uint32_t gfx = 0;      // file ids
++    uint32_t tbl = 0;
++    uint32_t tblRoot = 0;  // file offset of the tbl root object
++    uint32_t menu = 0;     // 0: the base stadium's menu pack
+ };
++const std::vector<NewFile>& NewFiles();
++const std::vector<NewStadium>& NewStadiums();
++uint32_t StadiumNumber(const std::string& code);  // 0 for an unknown code
+ 
+ std::filesystem::path Directory();
+ std::vector<Mod> Discover();
+diff --git a/runtime/src/hle/mlb/new_stadiums.cpp b/runtime/src/hle/mlb/new_stadiums.cpp
+new file mode 100644
+index 0000000..c944645
+--- /dev/null
++++ b/runtime/src/hle/mlb/new_stadiums.cpp
+@@ -0,0 +1,203 @@
++// MLB Power Pros 2008 (RL8E54) game-specific natives: stadiums added by mods (mods::NewStadiums).
++//
++// The game knows 40 stadiums. GetStadiumFiles (0x80C7AF48) reads their files from a 40-entry
++// table. The Exhibition stadium select screen builds a carousel of stadium numbers at +0x296C
++// (count +0x2968, cursor +0x2938, room for 38: 30 MLB + the unlocked originals) and shows the
++// entry under the cursor with ShowStadium (0x80CD3F6C) after every move.
++//
++// New stadiums are extra carousel entries after the game's. The list has 1 to 8 free slots, so
++// they scroll through them as a window: ShowStadium sees the cursor enter or leave the slots and
++// moves the window instead (pressing right on the last slot shows the next new stadium). A slot
++// holds the new stadium's base stadium number, so the rest of the game (dimensions, saves) sees a
++// stadium it knows; only its files and menu pictures differ:
++//   - ShowStadium loads and shows the new stadium's menu pack in place of the base's;
++//   - GetStadiumFiles returns the new stadium's files when it was the one picked (Exhibition).
++// docs/ingenieria-inversa.md, section 5, "Lista de estadios del juego".
++#include <algorithm>
++#include <cstdint>
++#include <cstdio>
++#include <vector>
++
++#include "abi_bridge.h"
++#include "hle_stubs.h"
++#include "memory.h"
++#include "mods.h"
++
++namespace {
++
++constexpr uint32_t kStadiumTable = 0x80E9F9D0;   // 40 x {gfx file id, tbl file id, tbl root pointer}
++constexpr uint32_t kMenuTable = 0x80EA23D8;      // [number] -> stadium menu pack file id (this screen)
++constexpr uint32_t kDisplayTable = 0x80D99E38;   // (number - 1) * 0x1C: {menu pack id, texture pointers}
++constexpr uint32_t kMatchConfig = 0x8104E1D8;    // -> config; +13 mode (0 Exhibition), +31 stadium
++constexpr uint32_t kCursor = 0x2938, kShown = 0x293C, kIdle = 0x2940, kRequested = 0x2941, kCount = 0x2968,
++                   kList = 0x296C, kDisplay1 = 0x2A18, kDisplay2 = 0x2A1C;
++constexpr uint32_t kListRoom = 38;
++constexpr uint32_t kResourceManager = 0x8064ED54, kIsBusy = 0x8064FEE0, kRequest = 0x8064FEC0,
++                   kIsLoaded = 0x8064FEE8, kShowMenuPack = 0x807A8EBC;
++
++uint32_t R(uint32_t a) { return Memory::Read32(a); }
++void W(uint32_t a, uint32_t v) { Memory::Write32(a, v); }
++
++uint32_t Call(CpuContext* cpu, uint32_t target, uint32_t a = 0, uint32_t b = 0, uint32_t c = 0) {
++    cpu->gpr[3] = a;
++    cpu->gpr[4] = b;
++    cpu->gpr[5] = c;
++    InvokeIndirectCpu(target, cpu);
++    return cpu->gpr[3];
++}
++
++struct State {
++    uint32_t screen = 0;
++    uint32_t gameCount = 0;  // the game's own entries
++    uint32_t slots = 0;      // free list slots used for new stadiums
++    uint32_t window = 0;     // first new stadium in the slots
++    uint32_t cursor = 0;     // cursor seen at the previous call
++    std::vector<bool> requested;
++    int32_t shownExtra = -1;
++    const mods::NewStadium* picked = nullptr;  // new stadium under the cursor
++    const mods::NewStadium* forced = nullptr;  // WIICOMPILED_MATCH_BENCH_STADIUM
++} g;
++
++void FillSlots(uint32_t screen) {
++    const auto& stadiums = mods::NewStadiums();
++    for (uint32_t i = 0; i < g.slots; ++i) W(screen + kList + 4 * (g.gameCount + i), stadiums[g.window + i].base);
++}
++
++// First call for a freshly built carousel: append the window of new stadiums.
++void Attach(uint32_t screen) {
++    const auto& stadiums = mods::NewStadiums();
++    g.screen = screen;
++    g.gameCount = std::min(R(screen + kCount), kListRoom);
++    g.slots = std::min<uint32_t>(kListRoom - g.gameCount, static_cast<uint32_t>(stadiums.size()));
++    g.window = 0;
++    g.requested.assign(stadiums.size(), false);
++    g.shownExtra = -1;
++    g.picked = nullptr;
++    FillSlots(screen);
++    W(screen + kCount, g.gameCount + g.slots);
++    g.cursor = R(screen + kCursor);
++}
++
++// Turns a move onto/off the slots into a window scroll; returns the new stadium under the cursor.
++const mods::NewStadium* Track(uint32_t screen) {
++    const auto& stadiums = mods::NewStadiums();
++    const uint32_t total = static_cast<uint32_t>(stadiums.size());
++    const uint32_t first = g.gameCount, last = g.gameCount + g.slots - 1;
++    uint32_t cursor = R(screen + kCursor);
++    const uint32_t before = g.cursor;
++    uint32_t window = g.window;
++    if (before == last && cursor == 0 && window + g.slots < total) {          // right past the last slot
++        ++window;
++        cursor = last;
++    } else if (before == first && cursor == first - 1 && window > 0 && first > 0) {  // left past the first
++        --window;
++        cursor = first;
++    } else if (before == 0 && cursor == last) {                                // wrapped left from the start
++        window = total - g.slots;
++    } else if (before == first - 1 && cursor == first) {                       // entered from the left
++        window = 0;
++    }
++    if (window != g.window) {
++        g.window = window;
++        FillSlots(screen);
++    }
++    W(screen + kCursor, cursor);
++    g.cursor = cursor;
++    return cursor >= first && cursor <= last ? &stadiums[g.window + (cursor - first)] : nullptr;
++}
++
++}  // namespace
++
++namespace new_stadiums {
++
++// For the match benchmark: the base stadium number of new stadium `code`, which the next match
++// then loads; 0 if there is no such stadium.
++uint32_t ForceForMatch(const char* code) {
++    for (const auto& stadium : mods::NewStadiums()) {
++        if (stadium.code == code) {
++            g.forced = &stadium;
++            return stadium.base;
++        }
++    }
++    return 0;
++}
++
++}  // namespace new_stadiums
++
++// ShowStadium(screen, number, force) (0x80CD3F6C) of the Exhibition stadium select. The game's
++// version: when the resource manager is idle it loads the stadium's menu pack once (flag at
++// +0x2941 + number), and once loaded draws it on both display objects (modes 1 and 2) unless it is
++// already the one shown (+0x293C). Same here, plus the new stadiums.
++extern "C" void MLB_ShowStadium_80CD3F6C(CpuContext* ctx) {
++    const uint32_t screen = ctx->gpr[3];
++    const uint32_t number = ctx->gpr[4];
++    const uint32_t force = ctx->gpr[5];
++    const bool haveNew = !mods::NewStadiums().empty();
++    if (haveNew && (screen != g.screen || R(screen + kCount) != g.gameCount + g.slots)) Attach(screen);
++    const mods::NewStadium* extra = haveNew && g.slots != 0 ? Track(screen) : nullptr;
++    g.picked = extra;
++
++    const bool idle = Call(ctx, kIsBusy, Call(ctx, kResourceManager)) == 0;
++    Memory::Write8(screen + kIdle, idle ? 1 : 0);
++    if (idle && force == 0) return;
++
++    if (extra != nullptr) {
++        const size_t index = static_cast<size_t>(extra - mods::NewStadiums().data());
++        const uint32_t menu = extra->menu != 0 ? extra->menu : R(kMenuTable + 4 * extra->base);
++        if (!g.requested[index]) {
++            Call(ctx, kRequest, Call(ctx, kResourceManager), menu);
++            g.requested[index] = true;
++            return;
++        }
++        if (g.shownExtra == static_cast<int32_t>(index) || Call(ctx, kIsLoaded, Call(ctx, kResourceManager), menu) == 0) {
++            return;
++        }
++        // Draw it as the base stadium with its menu pack swapped in; the display objects cache the
++        // last (mode, stadium) at +0xDC/+0xE0, so invalidate them before and after.
++        const uint32_t entry = kDisplayTable + (extra->base - 1) * 0x1C;
++        const uint32_t saved = R(entry);
++        W(entry, menu);
++        for (const uint32_t at : {kDisplay1, kDisplay2}) W(R(screen + at) + 0xE0, 0xFFFFFFFFu);
++        Call(ctx, kShowMenuPack, R(screen + kDisplay1), 1, extra->base);
++        Call(ctx, kShowMenuPack, R(screen + kDisplay2), 2, extra->base);
++        W(entry, saved);
++        for (const uint32_t at : {kDisplay1, kDisplay2}) W(R(screen + at) + 0xE0, 0xFFFFFFFFu);
++        W(screen + kShown, 0xFFFFFFFFu);
++        g.shownExtra = static_cast<int32_t>(index);
++        return;
++    }
++    g.shownExtra = -1;
++    const uint32_t file = R(kMenuTable + 4 * number);
++    if (Memory::Read8(screen + kRequested + number) == 0) {
++        Call(ctx, kRequest, Call(ctx, kResourceManager), file);
++        Memory::Write8(screen + kRequested + number, 1);
++    } else if (Call(ctx, kIsLoaded, Call(ctx, kResourceManager), file) != 0 && R(screen + kShown) != number) {
++        Call(ctx, kShowMenuPack, R(screen + kDisplay1), 1, number);
++        Call(ctx, kShowMenuPack, R(screen + kDisplay2), 2, number);
++        W(screen + kShown, number);
++    }
++}
++PPC_NATIVE_OVERRIDE_VOID(80CD3F6C, MLB_ShowStadium_80CD3F6C, (CpuContext* ctx), (ctx));
++
++// GetStadiumFiles(out, number) (0x80C7AF48): out = table[number - 1] (gfx id, tbl id, tbl root).
++extern "C" void MLB_GetStadiumFiles_80C7AF48(CpuContext* ctx) {
++    const uint32_t out = ctx->gpr[3];
++    const uint32_t number = ctx->gpr[4];
++    const uint32_t entry = kStadiumTable + (number - 1) * 12;
++    uint32_t gfx = R(entry), tbl = R(entry + 4), root = R(entry + 8);
++    const mods::NewStadium* stadium = g.forced != nullptr ? g.forced : g.picked;
++    const uint32_t config = R(kMatchConfig);
++    const bool exhibition = config != 0 && Memory::Read8(config + 13) == 0;
++    if (stadium != nullptr && stadium->base == number && exhibition) {
++        gfx = stadium->gfx;
++        tbl = stadium->tbl;
++        root = 0x40000000u | stadium->tblRoot;
++        std::fprintf(stderr, "[stadiums] loading \"%s\" (files %u/%u) for stadium %u\n", stadium->name.c_str(), gfx,
++                     tbl, number);
++        std::fflush(stderr);
++    }
++    W(out, gfx);
++    W(out + 4, tbl);
++    W(out + 8, root);
++}
++PPC_NATIVE_OVERRIDE_VOID(80C7AF48, MLB_GetStadiumFiles_80C7AF48, (CpuContext* ctx), (ctx));
+diff --git a/runtime/src/match_benchmark.cpp b/runtime/src/match_benchmark.cpp
+index e848c1c..477d140 100644
+--- a/runtime/src/match_benchmark.cpp
++++ b/runtime/src/match_benchmark.cpp
+@@ -11,6 +11,9 @@ extern "C" void func_80C8BAF0(CpuContext*);
+ extern "C" void func_80973828(CpuContext*);
+ extern "C" void func_807A8BE8(CpuContext*);
+ extern "C" void func_80898674(CpuContext*);
++namespace new_stadiums {
++uint32_t ForceForMatch(const char* code);  // hle/mlb/new_stadiums.cpp
++}
+ #endif
+ namespace match_benchmark {
+ static std::atomic<uint32_t> currentScene{0};
+@@ -108,6 +111,13 @@ void OnGuestFrame(CpuContext* cpu) {
+         }
+         cpu->gpr[3] = 27;
+         func_807A8BE8(cpu);
++        // WIICOMPILED_MATCH_BENCH_STADIUM=<code>: play in a stadium added by an enabled mod.
++        if (const char* code = std::getenv("WIICOMPILED_MATCH_BENCH_STADIUM"); code != nullptr && *code != '\0') {
++            const uint32_t base = new_stadiums::ForceForMatch(code);
++            if (base != 0) cpu->gpr[3] = base;
++            std::fprintf(stderr, "[match-bench] new stadium \"%s\": %s\n", code,
++                         base != 0 ? "selected" : "not found among the enabled mods");
++        }
+         Memory::Write8(config + 31, static_cast<uint8_t>(cpu->gpr[3]));
+         Memory::Write8(common + 4, static_cast<uint8_t>(cpu->gpr[3]));
+         Memory::Write8(config + 18, 0);
+diff --git a/runtime/src/mods.cpp b/runtime/src/mods.cpp
+index dfc0e9e..c7cbe04 100644
+--- a/runtime/src/mods.cpp
++++ b/runtime/src/mods.cpp
+@@ -44,13 +44,45 @@ void PutBe32(std::vector<char>& data, size_t at, uint32_t value) {
+     for (int i = 0; i < 4; ++i) data[at + i] = static_cast<char>(value >> (24 - 8 * i));
+ }
+ 
++std::vector<NewFile> g_newFiles;
++std::vector<NewStadium> g_newStadiums;
++
++// Names (lower-case, no leading slash) and record indices of the disc's PROJECT.BIN entries.
++struct ProjectIndex {
++    std::map<std::string, uint32_t> names;
++    std::vector<bool> used;  // by record index
++};
++
++bool ReadProjectIndex(const std::filesystem::path& original, ProjectIndex& index) {
++    std::ifstream src(original, std::ios::binary);
++    std::vector<char> head(0x40);
++    if (!src.read(head.data(), static_cast<std::streamsize>(head.size()))) return false;
++    const uint32_t recordsOff = Be32(head, 0x14), orderOff = Be32(head, 0x28), namesOff = Be32(head, 0x2C),
++                   dataOff = Be32(head, 0x34);
++    if (!(recordsOff < orderOff && orderOff < namesOff && namesOff < dataOff)) return false;
++    std::vector<char> header(dataOff);
++    src.seekg(0);
++    if (!src.read(header.data(), static_cast<std::streamsize>(header.size()))) return false;
++    index.used.assign((orderOff - recordsOff) / 0x1C, false);
++    for (uint32_t slot = 1; orderOff + slot * 8 + 8 <= namesOff; ++slot) {
++        const uint32_t record = Be32(header, orderOff + slot * 8);
++        if (record == 0 && Be32(header, orderOff + slot * 8 + 4) == 0) break;
++        if (record >= index.used.size()) return false;
++        index.used[record] = true;
++        std::string name(header.data() + namesOff + Be32(header, recordsOff + record * 0x1C + 4));
++        index.names[Lower(name.substr(name.rfind('/') == 0 ? 1 : 0))] = record;
++    }
++    return true;
++}
++
+ // Writes `out` as a copy of PROJECT.BIN with the entries named in `replacements` (lower-case path
+-// without the leading slash, e.g. "pwm_mdl_uniform_mlb_chc_00.pack") swapped in. Same layout as
+-// tools/projectbin.py: 0x1C-byte records at [0x14] (name offset, sectors, alignment, bytes), an
+-// order table at [0x28] of (record, start sector) pairs, names at [0x2C], data from [0x34] in
+-// 0x800-byte sectors. Only record sizes and start sectors change.
++// without the leading slash, e.g. "pwm_mdl_uniform_mlb_chc_00.pack") swapped in and the `added`
++// files appended under their new record ids (no name: the game asks for files by id). Same layout
++// as tools/projectbin.py: 0x1C-byte records at [0x14] (name offset, sectors, alignment, bytes), an
++// order table at [0x28] of (record, start sector) pairs ending with (0, 0), names at [0x2C], data
++// from [0x34] in 0x800-byte sectors. Only record sizes, start sectors and the new records change.
+ bool BuildProjectBin(const std::filesystem::path& original, const std::map<std::string, std::filesystem::path>& replacements,
+-                     const std::filesystem::path& out, std::string& error) {
++                     const std::vector<NewFile>& added, const std::filesystem::path& out, std::string& error) {
+     constexpr uint32_t kSector = 0x800;
+     std::ifstream src(original, std::ios::binary);
+     std::vector<char> head(0x40);
+@@ -76,7 +108,8 @@ bool BuildProjectBin(const std::filesystem::path& original, const std::map<std::
+     std::vector<char> data;
+     uint32_t sector = 0;
+     size_t used = 0;
+-    for (uint32_t slot = 1; orderOff + slot * 8 + 8 <= namesOff; ++slot) {
++    uint32_t slot = 1;
++    for (; orderOff + slot * 8 + 8 <= namesOff; ++slot) {
+         const uint32_t index = Be32(header, orderOff + slot * 8);
+         const uint32_t start = Be32(header, orderOff + slot * 8 + 4);
+         if (index == 0 && start == 0) break;
+@@ -102,6 +135,42 @@ bool BuildProjectBin(const std::filesystem::path& original, const std::map<std::
+         PutBe32(header, orderOff + slot * 8 + 4, sector);
+         sector += sectors;
+     }
++    // The game reads the order table as buckets (offsets at header [0x18], count [0x20]): a u32
++    // entry count, a pad word, then the (file id, start sector) pairs; the disc has one bucket
++    // with all 2423 files. New files go at the end of the last bucket, whose count grows.
++    const uint32_t buckets = Be32(header, 0x20);
++    const uint32_t lastBucket = orderOff + Be32(header, Be32(header, 0x18) + 4 * buckets);
++    if (!added.empty() && lastBucket + 8 + 8 * Be32(header, lastBucket) != orderOff + slot * 8) {
++        error = "unexpected PROJECT.BIN order buckets";
++        return false;
++    }
++    if (!added.empty()) PutBe32(header, lastBucket, Be32(header, lastBucket) + static_cast<uint32_t>(added.size()));
++    for (const NewFile& file : added) {
++        // Keep a (0, 0) entry after the last file, like the disc.
++        if (orderOff + (slot + 1) * 8 + 8 > namesOff) {
++            error = "PROJECT.BIN order table is full; too many new files";
++            return false;
++        }
++        const size_t record = recordsOff + static_cast<size_t>(file.id) * 0x1C;
++        if (record + 0x1C > orderOff) {
++            error = "new file id out of range";
++            return false;
++        }
++        std::ifstream in(file.path, std::ios::binary);
++        data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
++        const uint32_t bytes = static_cast<uint32_t>(data.size());
++        const uint32_t sectors = (bytes + kSector - 1) / kSector;
++        data.resize(static_cast<size_t>(sectors) * kSector, '\0');
++        dst.write(data.data(), static_cast<std::streamsize>(data.size()));
++        for (uint32_t at = 0; at < 0x1C; at += 4) PutBe32(header, record + at, 0);  // name offset 0: no name
++        PutBe32(header, record + 8, sectors);
++        PutBe32(header, record + 0xC, kSector);
++        PutBe32(header, record + 0x18, bytes);
++        PutBe32(header, orderOff + slot * 8, file.id);
++        PutBe32(header, orderOff + slot * 8 + 4, sector);
++        ++slot;
++        sector += sectors;
++    }
+     if (used != replacements.size()) {
+         RT_LOG(RT_TAG_RUNTIME) << "mods: " << replacements.size() - used
+                                << " project/ file(s) match no PROJECT.BIN entry and were ignored" << std::endl;
+@@ -148,6 +217,16 @@ std::vector<Mod> Discover() {
+                 text("version", mod.version);
+                 text("description", mod.description);
+                 text("roster_ids", mod.rosterIds);
++                if (document.contains("stadium") && document.at("stadium").is_array()) {
++                    for (const toml::value& entry : document.at("stadium").as_array()) {
++                        if (!entry.is_table()) continue;
++                        StadiumDecl stadium;
++                        stadium.code = Lower(toml::find_or<std::string>(entry, "code", ""));
++                        stadium.name = toml::find_or<std::string>(entry, "name", stadium.code);
++                        stadium.base = Lower(toml::find_or<std::string>(entry, "base", "col"));
++                        if (!stadium.code.empty()) mod.stadiums.push_back(std::move(stadium));
++                    }
++                }
+             } catch (const std::exception& error) {
+                 RT_LOG(RT_TAG_RUNTIME) << "mods: ignoring unreadable " << Utf8(manifest) << ": " << error.what()
+                                        << std::endl;
+@@ -455,7 +534,8 @@ std::filesystem::path ApplyRoster(const Mod& mod, const char* cachePath) {
+ // project/ packs of the enabled mods, merged into a per-user copy of PROJECT.BIN that is served as a
+ // disc overlay. The copy is rebuilt only when the original or any pack changes (size and time).
+ // ponytail: a full 406 MB copy; a virtual file in the DVD layer would avoid it if disk space matters.
+-void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs, const char* cachePath) {
++void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs, const std::vector<NewFile>& added,
++                       const char* cachePath) {
+     namespace fs = std::filesystem;
+     const fs::path original = RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin";
+     const fs::path disc = (cachePath != nullptr ? fs::path(reinterpret_cast<const char8_t*>(cachePath))
+@@ -468,8 +548,9 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
+         return Utf8(path) + " " + std::to_string(static_cast<unsigned long long>(fs::file_size(path, ec))) + " " +
+                std::to_string(static_cast<long long>(time)) + "\n";
+     };
+-    std::string sources = describe(original);
++    std::string sources = "format 2\n" + describe(original);  // bump when BuildProjectBin's output changes
+     for (const auto& [name, path] : packs) sources += name + " = " + describe(path);
++    for (const NewFile& file : added) sources += file.name + " @" + std::to_string(file.id) + " = " + describe(file.path);
+     std::string previous;
+     if (std::ifstream in(stamp, std::ios::binary); in) previous.assign(std::istreambuf_iterator<char>(in), {});
+     if (previous != sources || !fs::is_regular_file(merged, ec)) {
+@@ -477,7 +558,7 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
+         const fs::path partial = disc / "project.bin.partial";
+         const auto started = std::chrono::steady_clock::now();
+         std::string error;
+-        if (!BuildProjectBin(original, packs, partial, error)) {
++        if (!BuildProjectBin(original, packs, added, partial, error)) {
+             RT_LOG(RT_TAG_RUNTIME) << "mods: cannot build the modded PROJECT.BIN: " << error << std::endl;
+             fs::remove(partial, ec);
+             return;
+@@ -488,12 +569,14 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
+             return;
+         }
+         std::ofstream(stamp, std::ios::binary) << sources;
+-        RT_LOG(RT_TAG_RUNTIME) << "mods: built PROJECT.BIN with " << packs.size() << " replaced pack(s) in "
++        RT_LOG(RT_TAG_RUNTIME) << "mods: built PROJECT.BIN with " << packs.size() << " replaced and "
++                               << added.size() << " new pack(s) in "
+                                << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - started).count()
+                                << " ms" << std::endl;
+     } else {
+-        RT_LOG(RT_TAG_RUNTIME) << "mods: reusing PROJECT.BIN with " << packs.size() << " replaced pack(s)" << std::endl;
++        RT_LOG(RT_TAG_RUNTIME) << "mods: reusing PROJECT.BIN with " << packs.size() << " replaced and " << added.size()
++                               << " new pack(s)" << std::endl;
+     }
+     RecompMod::RegisterDvdOverlayRoot(Utf8(disc));
+ }
+@@ -502,8 +585,79 @@ void ApplyProjectPacks(const std::map<std::string, std::filesystem::path>& packs
+ 
+ namespace {
+ std::filesystem::path g_saveDirectory;
++
++// The game's stadium table order (0x80E9F9D0): number = position + 1.
++constexpr const char* kStadiumCodes[] = {
++    "bal", "bos", "nyy", "tb", "tor", "cws", "cle", "det", "kc", "min", "laa", "oka", "sea", "tex",
++    "atl", "fla", "nym", "phi", "wsh", "chc", "cin", "hou", "mil", "pit", "st", "ari", "col", "lad",
++    "sd", "sf", "org01", "org02", "org03", "org04", "org05", "org06", "ml01", "bullpen", "bullpen2", "season"};
++
++const NewFile* FindNewFile(const std::string& name) {
++    for (const NewFile& file : g_newFiles) {
++        if (file.name == name) return &file;
++    }
++    return nullptr;
++}
++
++// Root of a stadium tbl pack: the last u32 count (< 0x1000) followed by the pointer to 0x20.
++uint32_t TblRoot(const std::filesystem::path& path) {
++    std::ifstream in(path, std::ios::binary);
++    const std::vector<char> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    for (size_t at = (data.size() & ~size_t{3}); at >= 0x24; at -= 4) {
++        const size_t o = at - 8;
++        const uint32_t count = Be32(data, o);
++        if (Be32(data, o + 4) == 0x40000020u && count > 0 && count < 0x1000) return static_cast<uint32_t>(o);
++    }
++    return 0;
++}
++
++void RegisterNewStadiums(const std::vector<Mod>& all) {
++    g_newStadiums.clear();
++    for (const Mod& mod : all) {
++        if (!mod.enabled) continue;
++        for (const StadiumDecl& decl : mod.stadiums) {
++            const bool taken = std::any_of(g_newStadiums.begin(), g_newStadiums.end(),
++                                           [&](const NewStadium& s) { return s.code == decl.code; });
++            const NewFile* gfx = FindNewFile("stadium_" + decl.code + ".pack");
++            const NewFile* tbl = FindNewFile("stadium_" + decl.code + "tbl.pack");
++            if (taken || gfx == nullptr || tbl == nullptr) {
++                RT_LOG(RT_TAG_RUNTIME) << "mods: stadium \"" << decl.code << "\" of \"" << mod.name
++                                       << "\" skipped (" << (taken ? "code already used" : "missing project/stadium_"
++                                       + decl.code + ".pack or tbl.pack, or the disc already has it") << ")" << std::endl;
++                continue;
++            }
++            NewStadium stadium;
++            stadium.code = decl.code;
++            stadium.name = decl.name;
++            stadium.base = StadiumNumber(decl.base);
++            if (stadium.base == 0) stadium.base = StadiumNumber("col");
++            stadium.gfx = gfx->id;
++            stadium.tbl = tbl->id;
++            stadium.tblRoot = TblRoot(tbl->path);
++            if (const NewFile* menu = FindNewFile("env_stadium_menu_" + decl.code + ".pack")) stadium.menu = menu->id;
++            if (stadium.tblRoot == 0) {
++                RT_LOG(RT_TAG_RUNTIME) << "mods: stadium \"" << decl.code << "\": no root in its tbl pack" << std::endl;
++                continue;
++            }
++            RT_LOG(RT_TAG_RUNTIME) << "mods: new stadium \"" << stadium.name << "\" (" << stadium.code << ") base "
++                                   << stadium.base << " files " << stadium.gfx << "/" << stadium.tbl << " menu "
++                                   << stadium.menu << std::endl;
++            g_newStadiums.push_back(std::move(stadium));
++        }
++    }
++}
+ }  // namespace
+ 
++const std::vector<NewFile>& NewFiles() { return g_newFiles; }
++const std::vector<NewStadium>& NewStadiums() { return g_newStadiums; }
++
++uint32_t StadiumNumber(const std::string& code) {
++    for (uint32_t i = 0; i < std::size(kStadiumCodes); ++i) {
++        if (code == kStadiumCodes[i]) return i + 1;
++    }
++    return 0;
++}
++
+ std::filesystem::path SaveDirectoryFor(const std::vector<Mod>& all) {
+     std::vector<std::string> ids;
+     for (const Mod& mod : all) {
+@@ -545,7 +699,31 @@ void Apply(AuroraConfig& config) {
+             }
+         }
+     }
+-    if (!packs.empty()) ApplyProjectPacks(packs, config.cachePath);
++    if (!packs.empty()) {
++        // Files the disc has are replaced; the rest become new files with free record ids.
++        std::map<std::string, std::filesystem::path> replaced;
++        g_newFiles.clear();
++        ProjectIndex index;
++        if (ReadProjectIndex(RuntimeConfigFile::ResolvedDvdRoot() / "files" / "project.bin", index)) {
++            uint32_t next = kFirstNewFile;
++            for (const auto& [name, path] : packs) {
++                if (index.names.count(name) != 0) {
++                    replaced.emplace(name, path);
++                    continue;
++                }
++                while (next < index.used.size() && index.used[next]) ++next;
++                if (next >= index.used.size()) {
++                    RT_LOG(RT_TAG_RUNTIME) << "mods: no free PROJECT.BIN record for " << name << std::endl;
++                    continue;
++                }
++                g_newFiles.push_back({name, next++, path});
++            }
++        } else {
++            replaced = packs;
++        }
++        ApplyProjectPacks(replaced, g_newFiles, config.cachePath);
++        RegisterNewStadiums(all);
++    }
+     if (textureRoots.empty()) return;
+     for (const std::string& root : textureRoots) texturePointers.push_back(root.c_str());
+     config.textureReplacementRoots = texturePointers.data();

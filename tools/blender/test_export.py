@@ -49,7 +49,8 @@ px[:, 1] *= 0.4
 ground_img.pixels.foreach_set(px.ravel())
 
 bpy.context.view_layer.objects.active = objs["DP_ground"]
-result = bpy.ops.export_scene.powerpros_stadium(mod_name="BlenderTest", mods_folder=mods_dir, target="same")
+result = bpy.ops.export_scene.powerpros_stadium(mod_name="BlenderTest", mods_folder=mods_dir, mode="replace",
+                                                target="same")
 check(result == {"FINISHED"}, "export finishes")
 
 out = Path(mods_dir) / "BlenderTest" / "project"
@@ -80,5 +81,20 @@ untouched = pj7m.parse_model(gfx, offsets["DP_MIP_turf"])
 check(all(m.dl < len(orig) for m in untouched.meshes), "untouched DP_MIP_turf still points at the original data")
 check(gfx[:len(orig)].count(b"PJ7M") == orig.count(b"PJ7M"), "original model headers kept in place")
 check((Path(mods_dir) / "BlenderTest" / "mod.toml").is_file(), "mod.toml written")
+# The same edits as a new stadium: own file names and a [[stadium]] entry based on Coors Field.
+result = bpy.ops.export_scene.powerpros_stadium(mod_name="BlenderNuevo", mods_folder=mods_dir, mode="new",
+                                                new_code="coors3", new_name="Coors Field 3")
+check(result == {"FINISHED"}, "new-stadium export finishes")
+new_dir = Path(mods_dir) / "BlenderNuevo"
+check((new_dir / "project" / "stadium_coors3.pack").read_bytes() == gfx, "new stadium graphics = the edited pack")
+check((new_dir / "project" / "stadium_coors3tbl.pack").is_file(), "new stadium tbl written")
+toml = (new_dir / "mod.toml").read_text(encoding="utf-8")
+check('[[stadium]]' in toml and 'code = "coors3"' in toml and 'base = "col"' in toml, "mod.toml declares the stadium")
+try:  # in background mode an operator's ERROR report raises
+    refused = bpy.ops.export_scene.powerpros_stadium(mod_name="BlenderNuevo", mods_folder=mods_dir, mode="new",
+                                                     new_code="nyy", new_name="x") == {"CANCELLED"}
+except RuntimeError as error:
+    refused = "ya es un estadio del juego" in str(error)
+check(refused, "a code the game already has is refused")
 print("RESULT:", "FAIL" if failures else "PASS")
 sys.exit(1 if failures else 0)

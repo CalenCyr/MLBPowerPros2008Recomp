@@ -12,7 +12,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from . import fingerprint, importer, packwii, pj7m, pj7m_write, stadium_tbl
+from . import fingerprint, importer, names, packwii, pj7m, pj7m_write, stadium_tbl
 
 try:
     from . import projectbin
@@ -236,11 +236,33 @@ class Exporter:
         return bytes(self.w.d), bytes(self.tbl) if self.tbl is not None else None
 
 
-def export_stadium(coll, mods_folder, mod_name, target_code):
+def valid_code(code):
+    return 2 <= len(code) <= 16 and all(c.isascii() and (c.isalnum() or c == "_") for c in code) and code.islower()
+
+
+def add_stadium_to_toml(toml, code, name, base):
+    """Append a [[stadium]] entry to mod.toml unless that code is already there."""
+    text = toml.read_text(encoding="utf-8") if toml.exists() else ""
+    if f'code = "{code}"' in text:
+        return
+    safe = name.replace("\\", "").replace('"', "'")
+    block = f'\n[[stadium]]\ncode = "{code}"\nname = "{safe}"\nbase = "{base}"\n'
+    toml.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8")
+
+
+def export_stadium(coll, mods_folder, mod_name, target_code, new_name=None):
+    """Write the mod. target_code: the stadium the packs replace, or with new_name the code of a
+    stadium the mod adds (files stadium_<code>.pack/tbl.pack, [[stadium]] in mod.toml, based on the
+    imported one; the runtime shows it as an extra entry of the stadium select carousel)."""
     code = coll.get("pp_stadium")
     project_bin = coll.get("pp_project_bin")
     if not code or not project_bin or not Path(project_bin).is_file():
         raise ExportFailure("Esta colección no es un estadio importado (o ya no encuentro su project.bin)")
+    if new_name is not None:
+        if not valid_code(target_code):
+            raise ExportFailure("El código del estadio nuevo debe tener de 2 a 16 letras minúsculas, números o _")
+        if target_code in names.NAMES or target_code in ("common", "debug", "hanabi") or target_code.startswith("sky_"):
+            raise ExportFailure(f"«{target_code}» ya es un estadio del juego: elige otro código")
     archive = projectbin.Archive(project_bin)
     gfx, tbl = archive.read(f"stadium_{code}.pack"), archive.read(f"stadium_{code}tbl.pack")
     ex = Exporter(gfx, tbl)
@@ -254,6 +276,8 @@ def export_stadium(coll, mods_folder, mod_name, target_code):
     if not toml.exists():
         toml.write_text(f'name = "{mod_name}"\ndescription = "Estadio hecho con el complemento de Blender"\n',
                         encoding="utf-8")
+    if new_name is not None:
+        add_stadium_to_toml(toml, target_code, new_name, code)
     ex.stats["size"] = len(gfx_out)
     ex.stats["over_budget"] = len(gfx_out) > pj7m_write.BUDGET
     ex.stats["folder"] = str(folder)
