@@ -15,6 +15,8 @@ import bmesh
 import bpy
 from mathutils import Vector
 
+from .i18n import T
+
 # Pieces that receive the model: stands, fences and ground, never the special ones (alpha, additive,
 # camera-dependent, crowd, lights, the video board the game may draw into, bases, z-test pieces).
 TARGET = ("stand", "fence", "ground", "turf")
@@ -62,7 +64,8 @@ def targets(coll):
     pieces = [o for o in coll.all_objects if o.get("pp_kind") == "model" and not any(s in o.name for s in SKIP)
               and any(t in o.name.lower() for t in TARGET) and not camera_dependent(o)]
     if not pieces:
-        raise ConvertFailure("El estadio no tiene gradas, vallas ni suelo donde poner el modelo")
+        raise ConvertFailure(T("El estadio no tiene gradas, vallas ni suelo donde poner el modelo",
+                               "The stadium has no stands, fences or ground to put the model on"))
 
     def footprint(o):
         pts = [o.matrix_world @ Vector(c) for c in o.bound_box]
@@ -153,7 +156,7 @@ def convert(coll, sources, replace=True, bake_light=True):
                     loop[bm.loops.layers.uv["UVMap"]].uv = uvs[i]
                     loop[bm.loops.layers.float_color["Color"]] = col
     if not buckets:
-        raise ConvertFailure("Los objetos elegidos no tienen caras")
+        raise ConvertFailure(T("Los objetos elegidos no tienen caras", "The selected objects have no faces"))
 
     result = {}
     if replace:                                 # the rest of the original stadium goes too
@@ -266,7 +269,9 @@ def check_frame(objects):
         return None
     size = max(max(p[i] for p in pts) - min(p[i] for p in pts) for i in range(2))
     if size > 2000:
-        return f"El modelo mide {size:.0f} m: ¿está en milímetros? Escálalo a metros primero"
+        return T(f"El modelo mide {size:.0f} m: ¿está en milímetros? Escálalo a metros primero",
+                 f"The model is {size:.0f} m across: is it in millimetres? Scale it to metres first")
     if size < 20:
-        return f"El modelo mide {size:.1f} m: demasiado pequeño para un estadio"
+        return T(f"El modelo mide {size:.1f} m: demasiado pequeño para un estadio",
+                 f"The model is {size:.1f} m across: too small for a stadium")
     return None

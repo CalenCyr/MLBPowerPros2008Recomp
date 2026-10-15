@@ -94,7 +94,7 @@ try:  # in background mode an operator's ERROR report raises
     refused = bpy.ops.export_scene.powerpros_stadium(mod_name="BlenderNuevo", mods_folder=mods_dir, mode="new",
                                                      new_code="nyy", new_name="x") == {"CANCELLED"}
 except RuntimeError as error:
-    refused = "ya es un estadio del juego" in str(error)
+    refused = "ya es un estadio del juego" in str(error) or "is already a stadium of the game" in str(error)
 check(refused, "a code the game already has is refused")
 
 # Collision: import with it, raise the field walls (surface 9) 3 m, make one of their faces a foul

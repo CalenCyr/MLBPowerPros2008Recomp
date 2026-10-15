@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Stadium codes of MLB Power Pros 2008 (stadium_<code>.pack) and readable names."""
+from .i18n import T
 
-STADIUMS = [
+TEAMS = [
     ("ari", "Arizona Diamondbacks — Chase Field"),
     ("atl", "Atlanta Braves — Turner Field"),
     ("bal", "Baltimore Orioles — Camden Yards"),
@@ -32,16 +33,21 @@ STADIUMS = [
     ("tex", "Texas Rangers — Rangers Ballpark"),
     ("tor", "Toronto Blue Jays — Rogers Centre"),
     ("wsh", "Washington Nationals"),
-    ("org01", "Estadio original 1"),
-    ("org02", "Estadio original 2"),
-    ("org03", "Estadio original 3"),
-    ("org04", "Estadio original 4"),
-    ("org05", "Estadio original 5"),
-    ("org06", "Estadio original 6"),
-    ("ml01", "ml01 (por identificar)"),
-    ("bullpen", "Bullpen"),
-    ("bullpen2", "Bullpen 2"),
-    ("season", "season (por identificar)"),
 ]
 
-NAMES = dict(STADIUMS)
+
+def stadiums():
+    """(code, readable name) of every stadium, in the add-on's language."""
+    return (TEAMS
+            + [(f"org{n:02}", T(f"Estadio original {n}", f"Original stadium {n}")) for n in range(1, 7)]
+            + [("ml01", T("ml01 (por identificar)", "ml01 (unidentified)")),
+               ("bullpen", "Bullpen"),
+               ("bullpen2", "Bullpen 2"),
+               ("season", T("season (por identificar)", "season (unidentified)"))])
+
+
+CODES = [c for c, _ in stadiums()]
+
+
+def name(code):
+    return dict(stadiums()).get(code, code)

@@ -9,6 +9,7 @@ import numpy as np
 from mathutils import Euler, Matrix
 
 from . import fingerprint, names, pj7m, stadium_tbl, textures
+from .i18n import T
 
 try:
     from . import projectbin                 # copied into the add-on zip by build_addon.py
@@ -44,8 +45,10 @@ def find_project_bin(path):
     for c in candidates:
         if c.is_file():
             return c, folder if config.is_file() else None
-    raise ImportFailure("No encuentro project.bin. Elige la carpeta del juego instalado con el Setup "
-                        "(la que tiene UserData) o el archivo files/project.bin.")
+    raise ImportFailure(T("No encuentro project.bin. Elige la carpeta del juego instalado con el Setup "
+                          "(la que tiene UserData) o el archivo files/project.bin.",
+                          "project.bin not found. Pick the game folder installed by the Setup "
+                          "(the one with UserData) or the file files/project.bin."))
 
 
 def to_blender(v):
@@ -210,7 +213,7 @@ def import_stadium(context, path, code, collision=True):
     gfx = archive.read(f"stadium_{code}.pack")
     tbl = archive.read(f"stadium_{code}tbl.pack")
     if gfx is None:
-        raise ImportFailure(f"project.bin no tiene stadium_{code}.pack")
+        raise ImportFailure(T(f"project.bin no tiene stadium_{code}.pack", f"project.bin has no stadium_{code}.pack"))
     table = stadium_tbl.parse_table(tbl) if tbl else None
     if table is None:
         offsets = pj7m.find_models(gfx)
@@ -219,7 +222,7 @@ def import_stadium(context, path, code, collision=True):
         placements = table.placements
         offsets = [pl.model for pl in placements]
 
-    coll = bpy.data.collections.new(names.NAMES.get(code, code))
+    coll = bpy.data.collections.new(names.name(code))
     coll["pp_stadium"] = code
     coll["pp_project_bin"] = str(project_bin)
     if game_folder is not None:

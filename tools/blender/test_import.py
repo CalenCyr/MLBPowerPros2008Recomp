@@ -3,6 +3,7 @@
 
 blender --background --factory-startup --python tools/blender/test_import.py -- <addon.zip> <project.bin> <code> <out dir>
 Run with BLENDER_USER_RESOURCES pointing at a scratch folder so the player's Blender is untouched.
+Also checks the language preference (Spanish/English texts).
 Prints PASS/FAIL lines and exits 1 on failure; renders <code>-top.png and <code>-plate.png.
 """
 import importlib
@@ -30,6 +31,34 @@ pkg = "bl_ext.user_default.powerpros_stadium"
 pj7m = importlib.import_module(pkg + ".pj7m")
 tbl_mod = importlib.import_module(pkg + ".stadium_tbl")
 projectbin = importlib.import_module(pkg + ".projectbin")
+i18n = importlib.import_module(pkg + ".i18n")
+
+# Language preference: labels, enum items and reports follow it at once (classes registered again).
+prefs = bpy.context.preferences.addons[pkg].preferences
+op = bpy.ops.import_scene.powerpros_stadium
+for lang, label, prop, org, report in (("EN", "Import stadium", "Stadium", "Original stadium 1", "project.bin not found"),
+                                       ("ES", "Importar estadio", "Estadio", "Estadio original 1", "No encuentro project.bin")):
+    prefs.language = lang
+    rna = op.get_rna_type()
+    items = {i.identifier: i.name for i in rna.properties["stadium"].enum_items}
+    check((rna.name, rna.properties["stadium"].name, items["org01"]) == (label, prop, org),
+          f"{lang}: operator label {rna.name!r}, property {rna.properties['stadium'].name!r}, item {items['org01']!r}")
+    try:  # in background mode an operator's ERROR report raises
+        op(filepath=str(out_dir / "no-such-folder" / "project"), stadium="col")
+        error = ""
+    except RuntimeError as e:
+        error = str(e)
+    check(report in error, f"{lang}: error report {error.strip()!r}")
+prefs.language = "AUTO"
+auto = "Importar estadio" if i18n.blender_is_spanish() else "Import stadium"
+check(op.get_rna_type().name == auto, f"AUTO follows Blender's interface language (locale {bpy.app.translations.locale!r})")
+view = bpy.context.preferences.view
+blender_language = view.language
+for lang, label in (("es", "Importar estadio"), ("en_US", "Import stadium")):
+    view.language = lang
+    prefs.language, prefs.language = "EN", "AUTO"          # register again under the new locale
+    check(op.get_rna_type().name == label, f"AUTO with Blender in {lang}: {op.get_rna_type().name!r}")
+view.language = blender_language
 
 for obj in list(bpy.data.objects):
     bpy.data.objects.remove(obj)

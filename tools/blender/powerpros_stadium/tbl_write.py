@@ -17,6 +17,7 @@ import bisect
 import struct
 
 from . import stadium_tbl
+from .i18n import T
 
 P = 0x40000000
 NODE_SIZE = 0x1C
@@ -35,7 +36,8 @@ def build_tree(boxes, leaf=8):
 
     def leaf_of(items):
         if len(items) > MAX_LEAF:
-            raise TreeError(f"{len(items)} elementos que no se pueden separar (máximo {MAX_LEAF} por hoja)")
+            raise TreeError(T(f"{len(items)} elementos que no se pueden separar (máximo {MAX_LEAF} por hoja)",
+                              f"{len(items)} items that cannot be split apart (at most {MAX_LEAF} per leaf)"))
         start = len(entries)
         entries.extend(i for i, _, _ in items)
         return (0, start, len(items))
@@ -86,7 +88,8 @@ def build_tree(boxes, leaf=8):
     items = list(boxes)
     node(items, split(items), 0)                # the root is always a node
     if len(entries) > MAX_LIST:
-        raise TreeError(f"El árbol necesita {len(entries)} entradas (máximo {MAX_LIST})")
+        raise TreeError(T(f"El árbol necesita {len(entries)} entradas (máximo {MAX_LIST})",
+                          f"The tree needs {len(entries)} entries (at most {MAX_LIST})"))
     return nodes, entries
 
 
@@ -141,8 +144,10 @@ class TblWriter:
     def set_collision(self, vertices, triangles, leaf=12):
         """vertices: game-space xyz; triangles: (a, b, c, surface id). Rebuilds tree B too."""
         if len(vertices) > 0xFFFF or len(triangles) > 0xFFFF:
-            raise TreeError(f"Colisión demasiado grande: {len(triangles)} triángulos, {len(vertices)} vértices "
-                            "(máximo 65535 de cada)")
+            raise TreeError(T(f"Colisión demasiado grande: {len(triangles)} triángulos, {len(vertices)} vértices "
+                              "(máximo 65535 de cada)",
+                              f"Collision too big: {len(triangles)} triangles, {len(vertices)} vertices "
+                              "(at most 65535 of each)"))
         head = struct.pack(">HHI", len(triangles), len(vertices), 0)
         head += b"".join(struct.pack(">4H", *t) for t in triangles)
         self.set_pointer("collision", self.append(head))
@@ -155,5 +160,6 @@ class TblWriter:
     def finish(self):
         self.d.extend(b"\0" * (-len(self.d) % 32))
         if stadium_tbl.find_root(self.d) != self.root:
-            raise TreeError("Los datos nuevos se confunden con la raíz de la tabla")
+            raise TreeError(T("Los datos nuevos se confunden con la raíz de la tabla",
+                              "The new data would be mistaken for the table root"))
         return bytes(self.d)

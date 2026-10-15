@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "powerpros_stadium"
-version = "0.3.0"
-name = "Estadios de MLB Power Pros 2008"
-tagline = "Importa y exporta los estadios de MLB Power Pros 2008"
+version = "0.4.0"
+name = "MLB Power Pros 2008 Stadiums"
+tagline = "Import and export the stadiums of MLB Power Pros 2008"
 maintainer = "MLBPowerPros2008Recomp"
 type = "add-on"
 license = ["SPDX:GPL-3.0-or-later"]
@@ -11,4 +11,4 @@ blender_version_min = "4.2.0"
 tags = ["Import-Export"]
 
 [permissions]
-files = "Lee el project.bin de tu juego instalado"
+files = "Reads the project.bin of your installed game"

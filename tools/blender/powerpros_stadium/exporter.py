@@ -15,6 +15,7 @@ import numpy as np
 from mathutils import Matrix, Vector
 
 from . import fingerprint, importer, names, packwii, pj7m, pj7m_write, stadium_tbl, tbl_write
+from .i18n import T
 
 try:
     from . import projectbin
@@ -83,7 +84,7 @@ class Exporter:
         if img.name not in self.new_textures:
             w, h = img.size
             if w == 0 or h == 0:
-                raise ExportFailure(f"La imagen {img.name} está vacía")
+                raise ExportFailure(T(f"La imagen {img.name} está vacía", f"The image {img.name} is empty"))
             px = np.empty(w * h * 4, np.float32)
             img.pixels.foreach_get(px)
             rgba = (px.reshape(h, w, 4)[::-1] * 255 + 0.5).astype(np.uint8)        # top row first
@@ -303,12 +304,15 @@ def export_stadium(coll, mods_folder, mod_name, target_code, new_name=None):
     code = coll.get("pp_stadium")
     project_bin = coll.get("pp_project_bin")
     if not code or not project_bin or not Path(project_bin).is_file():
-        raise ExportFailure("Esta colección no es un estadio importado (o ya no encuentro su project.bin)")
+        raise ExportFailure(T("Esta colección no es un estadio importado (o ya no encuentro su project.bin)",
+                              "This collection is not an imported stadium (or its project.bin is gone)"))
     if new_name is not None:
         if not valid_code(target_code):
-            raise ExportFailure("El código del estadio nuevo debe tener de 2 a 16 letras minúsculas, números o _")
-        if target_code in names.NAMES or target_code in ("common", "debug", "hanabi") or target_code.startswith("sky_"):
-            raise ExportFailure(f"«{target_code}» ya es un estadio del juego: elige otro código")
+            raise ExportFailure(T("El código del estadio nuevo debe tener de 2 a 16 letras minúsculas, números o _",
+                                  "The new stadium code must have 2 to 16 lowercase letters, digits or _"))
+        if target_code in names.CODES or target_code in ("common", "debug", "hanabi") or target_code.startswith("sky_"):
+            raise ExportFailure(T(f"«{target_code}» ya es un estadio del juego: elige otro código",
+                                  f"'{target_code}' is already a stadium of the game: pick another code"))
     archive = projectbin.Archive(project_bin)
     gfx, tbl = archive.read(f"stadium_{code}.pack"), archive.read(f"stadium_{code}tbl.pack")
     ex = Exporter(gfx, tbl)
@@ -320,8 +324,8 @@ def export_stadium(coll, mods_folder, mod_name, target_code, new_name=None):
         (folder / "project" / f"stadium_{target_code}tbl.pack").write_bytes(tbl_out)
     toml = folder / "mod.toml"
     if not toml.exists():
-        toml.write_text(f'name = "{mod_name}"\ndescription = "Estadio hecho con el complemento de Blender"\n',
-                        encoding="utf-8")
+        description = T("Estadio hecho con el complemento de Blender", "Stadium made with the Blender add-on")
+        toml.write_text(f'name = "{mod_name}"\ndescription = "{description}"\n', encoding="utf-8")
     if new_name is not None:
         add_stadium_to_toml(toml, target_code, new_name, code)
     ex.stats["size"] = len(gfx_out)
