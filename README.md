@@ -176,6 +176,10 @@ Two rules keep it honest:
 
 It is a study project: expect rough edges, and mistakes a specialist would not have made.
 
+## Contributing
+
+Contributions are very welcome: bug reports, testing on other GPUs and controllers, code, reverse engineering, docs and translations. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: nothing from the game goes into the repository, runtime changes are patches, and every claim says how it was checked.
+
 ## Legal
 
 A fan project, not affiliated with, endorsed or sponsored by Konami, 2K, Major League Baseball, the MLBPA or Nintendo. *MLB Power Pros*, *Wii* and the team and player names are trademarks of their owners and are named only to say what this software works with. The repository and its releases contain no copyrighted game data, keys or firmware, and do not help anyone obtain them: you need your own copy of the game.
