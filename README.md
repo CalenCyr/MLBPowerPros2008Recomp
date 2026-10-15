@@ -1,185 +1,185 @@
 # MLB Power Pros 2008 Recomp
 
-*English version: [README.en.md](README.en.md)*
+*Versión en español: [README.es.md](README.es.md)*
 
-Una **recompilación estática** de *MLB Power Pros 2008* (Wii, USA, `RL8E54`) a un programa nativo de Windows x64, sobre el traductor y el runtime de [Wiicompiled](https://github.com/patchzyy/Wiicompiled), con launcher propio, mods y herramientas para editar texturas, rosters y estadios.
+A **static recompilation** of *MLB Power Pros 2008* (Wii, USA, `RL8E54`) into a native Windows x64 program, built on the translator and runtime of [Wiicompiled](https://github.com/patchzyy/Wiicompiled), with its own launcher, mods and tools to edit textures, rosters and stadiums.
 
-**No es un emulador:** no hay intérprete de CPU ni JIT. El código PowerPC del juego (`main.dol` y `ovl_main.rel`) se traduce a C++ antes de jugar y se compila para la PC; lo que daba la consola (sistema operativo, gráficos, audio, disco, memoria NAND, mandos) lo reimplementa el runtime.
+**It is not an emulator:** there is no CPU interpreter and no JIT. The game's PowerPC code (`main.dol` and `ovl_main.rel`) is translated to C++ ahead of time and compiled for the PC; what the console provided (operating system, graphics, audio, disc, NAND memory, controllers) is re-implemented by the runtime.
 
 > [!IMPORTANT]
-> **Este repositorio no contiene nada del juego:** ni la imagen del disco, ni el ejecutable, ni assets (texturas, modelos, audio, video, fuentes), ni código traducido, ni partidas. Hace falta tu propia copia legal del juego. El Setup traduce y compila el juego **en tu PC** a partir de tu copia, y nada de eso sale de ella. No pidas ni compartas archivos del juego.
+> **This repository contains nothing from the game:** no disc image, no executable, no assets (textures, models, audio, video, fonts), no translated code and no saves. You need your own legal copy of the game. The Setup translates and compiles the game **on your PC** from your copy, and none of it leaves your PC. Do not ask for or share game files.
 
 > [!NOTE]
-> **Hecho casi por completo con IA.** Casi todo el código, las herramientas, la ingeniería inversa y la documentación los escribió Claude (Anthropic) mediante Claude Code, dirigido, probado y revisado por una persona. Ver [Cómo se hizo](#cómo-se-hizo).
+> **Made almost entirely with AI.** Nearly all of the code, tools, reverse engineering and documentation were written by Claude (Anthropic) through Claude Code, directed, tested and reviewed by a person. See [How this was made](#how-this-was-made).
 
-![El launcher: jugar, ajustes, mods y salir](docs/media/launcher-es.jpg)
+![The launcher: play, settings, mods and exit](docs/media/launcher-en.jpg)
 
-## Estado (octubre de 2026)
+## Status (October 2026)
 
-**Beta, solo Windows.** Lo que dice esta tabla está medido en la PC de desarrollo; lo que no se comprobó, lo dice.
+**Beta, Windows only.** What this table says was measured on the development PC; what was not checked, it says so.
 
-| Área | Estado |
+| Area | State |
 |---|---|
-| Arranque → correa → menús | funciona, a 60 FPS |
-| Partidos (Exhibición), Home Run, alineaciones | funcionan; se juegan partidos completos. Partido de prueba automático: 60 FPS con Direct3D 12 y con Vulkan |
-| Temporada, Liga, MLB Life | se alcanzan (MLB Life también con rosters de mods); sin pruebas sistemáticas de cada modo |
-| Gráficos | Direct3D 12 o Vulkan (elección automática), resolución interna de 1x a 4x, AMD FSR 1, filtro anisotrópico hasta 16x, ajustes de calidad |
-| Audio | completo, comentarista incluido |
-| Mandos | cualquier mando por SDL3, o teclado y ratón, como mando de GameCube; hasta 4 jugadores; reasignación al estilo de Dolphin; nombres de botones de PlayStation o Xbox |
-| Mods | texturas (también en HD), archivos de `project.bin` (por ejemplo uniformes), rosters de 2008, estadios editados en Blender y **estadios nuevos** en Exhibición. Sin probar: `riivolution/` |
-| Instalación | el Setup verifica tu copia, la extrae, la traduce y la compila: unos **4,5 minutos** (12 hilos). Verificada en limpio, en español y en inglés, en la PC de desarrollo; **falta probarla en otra PC** |
-| Código traducido | 48.219 funciones de `main.dol` y `ovl_main.rel`, ninguna sin soporte; 314 funciones del sistema enlazadas a código nativo |
-| Idiomas | launcher, Setup, Texture Studio y complemento de Blender en español e inglés (según el sistema, o a elegir); documentación en los dos idiomas |
-| Discord Rich Presence | inactivo hasta tener un ID de aplicación propio (ver [Configuración](#configuración)) |
-| Linux, Switch (homebrew) | planeados, sin empezar |
+| Boot → strap screen → menus | works, at 60 FPS |
+| Matches (Exhibition), Home Run, lineups | work; full matches are played. Automated test match: 60 FPS with Direct3D 12 and with Vulkan |
+| Season, League, MLB Life | reachable (MLB Life also with modded rosters); no systematic tests of each mode |
+| Graphics | Direct3D 12 or Vulkan (picked automatically), internal resolution 1x to 4x, AMD FSR 1, anisotropic filtering up to 16x, quality presets |
+| Audio | complete, commentator included |
+| Controllers | any controller through SDL3, or keyboard and mouse, as a GameCube controller; up to 4 players; Dolphin-style remapping; PlayStation or Xbox button names |
+| Mods | textures (HD too), `project.bin` files (uniforms, for example), 2008 rosters, stadiums edited in Blender and **new stadiums** in Exhibition. Untested: `riivolution/` |
+| Installation | the Setup verifies your copy, extracts, translates and compiles it: about **4.5 minutes** (12 threads). Verified clean, in Spanish and English, on the development PC; **not yet tested on another PC** |
+| Translated code | 48,219 functions from `main.dol` and `ovl_main.rel`, none unsupported; 314 system functions bound to native code |
+| Languages | launcher, Setup, Texture Studio and Blender add-on in Spanish and English (system language, or your choice); documentation in both languages |
+| Discord Rich Presence | inactive until it has its own application ID (see [Configuration](#configuration)) |
+| Linux, Switch (homebrew) | planned, not started |
 
-### Problemas conocidos
+### Known issues
 
-- Estadios nuevos: la línea «Home of the…» es la del estadio base, solo aparecen en Exhibición (no en Temporada, Liga ni MLB Life) y el público hecho a mano no se dibuja.
-- La resolución interna 4x pinta casi a 4K: en GPUs modestas (por ejemplo una RX 5500) lleva la GPU al 80 % o más. «Según la ventana» es lo recomendado.
-- Cambiar la API gráfica o los mods con el juego abierto pide reiniciarlo (el launcher lo hace solo).
-- En pruebas automáticas se vieron 2 cierres sin error al arrancar (de unos 9, el 13 de octubre); después de un arreglo no se repitieron, pero la causa no está demostrada.
+- New stadiums: the "Home of the…" line is the base stadium's, they only appear in Exhibition (not in Season, League or MLB Life) and a hand-made crowd is not drawn.
+- 4x internal resolution renders at almost 4K: on modest GPUs (an RX 5500, for example) it takes the GPU to 80% or more. "Match window" is recommended.
+- Changing the graphics API or the mods while the game is open needs a restart (the launcher does it for you).
+- Automated tests saw 2 silent exits at startup (out of about 9, on October 13); after a fix they did not happen again, but the cause is not proven.
 
-## Instalar y jugar
+## Install and play
 
-Requisitos: Windows 10/11 de 64 bits, una GPU con Direct3D 12 o Vulkan, tu copia de *MLB Power Pros 2008* para Wii (USA, `RL8E54`) y unos 2,5 GB libres (el Setup ocupa 900 MB y el juego instalado 1,5 GB).
+Requirements: Windows 10/11 64-bit, a GPU with Direct3D 12 or Vulkan, your copy of *MLB Power Pros 2008* for Wii (USA, `RL8E54`) and about 2.5 GB free (900 MB for the Setup, 1.5 GB for the installed game).
 
-1. Descarga `MLB Power Pros 2008 Setup.zip` de la página de *Releases* y descomprímelo en una carpeta tuya. *(La primera, `v0.1.0` beta, aún no está publicada.)*
-2. Abre `MLBPowerPros2008-Setup.exe`, pulsa **ELEGIR DISCO** y elige tu copia (ISO, NKit, RVZ, WBFS, WIA, GCZ o CISO).
-3. Pulsa **INSTALAR**. El Setup comprueba que sea un volcado limpio de `RL8E54`, lo extrae, traduce el código y lo compila en tu PC.
-4. Pulsa **JUGAR** o usa el acceso directo del escritorio. Antes de cada partida se abre el launcher: API gráfica, pantalla, resolución, audio, controles, mods y herramientas.
+1. Download `MLB Power Pros 2008 Setup.zip` from the *Releases* page and unzip it into a folder of yours. *(The first one, `v0.1.0` beta, is not published yet.)*
+2. Open `MLBPowerPros2008-Setup.exe`, press **CHOOSE DISC** and pick your copy (ISO, NKit, RVZ, WBFS, WIA, GCZ or CISO).
+3. Press **INSTALL**. The Setup checks that it is a clean `RL8E54` dump, extracts it, translates the code and compiles it on your PC.
+4. Press **PLAY** or use the desktop shortcut. The launcher opens before each session: graphics API, display, resolution, audio, controls, mods and tools.
 
-![El Setup: elige tu disco; no incluye nada del juego](docs/media/setup-es.jpg)
+![The Setup: choose your disc; no game files included](docs/media/setup-en.jpg)
 
-## Cómo funciona
+## How it works
 
 ```
-tu copia del juego ──► nodtool ──► main.dol + ovl_main.rel (+ los archivos del disco)
-                                        │
-                                        ▼
-               Translator.Cli (Wiicompiled)      PowerPC ─► C++, una función de C++ por función del juego
-                                        │
-                                        ▼
-               clang (llvm-mingw) ──► MLBPowerPros2008.exe
-                                        │
-               runtime (Wiicompiled + parches de este proyecto):
-                 HLE del SDK de Wii        OS, hilos, alarmas, DVD, NAND, IOS, audio AX/DSP, VI, mandos
-                 aurora                    GX ─► WebGPU (Dawn) ─► Direct3D 12 / Vulkan
-                 nativos de MLB            cargador del REL, launcher, mods, roster, estadios nuevos
+your copy of the game ──► nodtool ──► main.dol + ovl_main.rel (+ the disc files)
+                                          │
+                                          ▼
+                 Translator.Cli (Wiicompiled)      PowerPC ─► C++, one C++ function per game function
+                                          │
+                                          ▼
+                 clang (llvm-mingw) ──► MLBPowerPros2008.exe
+                                          │
+                 runtime (Wiicompiled + this project's patches):
+                   Wii SDK HLE               OS, threads, alarms, DVD, NAND, IOS, AX/DSP audio, VI, controllers
+                   aurora                    GX ─► WebGPU (Dawn) ─► Direct3D 12 / Vulkan
+                   MLB natives               REL loader, launcher, mods, roster, new stadiums
 ```
 
-Tres capas de distinta naturaleza:
+Three layers of a different nature:
 
-- **El código del juego** se recompila, no se emula. Es una traducción mecánica: completa y fiel, pero no es código fuente legible.
-- **Las llamadas al sistema** de la Wii se reimplementan en Windows. Wiicompiled se hizo para Mario Kart Wii; aquí se reasignan sus 314 funciones nativas a las direcciones de MLB con un mapa de funciones propio (`config/wiicompiled/rl8e54-functions.map`), y los fallos propios de MLB se corrigen con parches.
-- **Los gráficos** se traducen a nivel de API (GX), no de hardware: aurora dibuja con WebGPU sobre Direct3D 12 o Vulkan.
+- **The game code** is recompiled, not emulated. It is a mechanical translation: complete and faithful, but not readable source code.
+- **The Wii's system calls** are re-implemented on Windows. Wiicompiled was made for Mario Kart Wii; here its 314 native functions are rebound to MLB's addresses with this project's own function map (`config/wiicompiled/rl8e54-functions.map`), and MLB's own failures are fixed with patches.
+- **Graphics** are translated at the API level (GX), not at the hardware level: aurora draws with WebGPU on Direct3D 12 or Vulkan.
 
-Todos los cambios al runtime son **parches reproducibles** sobre el commit fijado de Wiicompiled (`tools/patches/wiicompiled-*.patch`, ver `config/tools.lock.json`).
+Every change to the runtime is a **reproducible patch** on Wiicompiled's pinned commit (`tools/patches/wiicompiled-*.patch`, see `config/tools.lock.json`).
 
-## Funciones
+## Features
 
-**Launcher propio** (antes de cada partida, también con mando)
-- Vídeo: API gráfica, ventana o pantalla completa, resolución interna, AMD FSR 1, filtro anisotrópico, ajustes de calidad.
-- Audio, controles al estilo de Dolphin (puertas de los sticks, zona muerta, prueba de sticks) y opciones de interfaz.
-- Mods: se activan o desactivan con un interruptor por carpeta.
-- Herramientas: abre el editor de rosters y el Texture Studio.
-- Arte original del pack de interfaz MoonInning (no es contenido del juego).
+**Own launcher** (before each session, controller-friendly)
+- Video: graphics API, window or fullscreen, internal resolution, AMD FSR 1, anisotropic filtering, quality presets.
+- Audio, Dolphin-style controls (stick gates, dead zone, stick test) and interface options.
+- Mods: one switch per folder.
+- Tools: opens the roster editor and Texture Studio.
+- Original art from the MoonInning UI pack (not game content).
 
-**Herramientas incluidas**
-- **Editor de rosters** (PowerUp+ adaptado a 2008): importa y exporta rosters de 2008. Ver [docs/roster-2008.md](docs/roster-2008.md).
-- **Power Pros Wii 2008 Texture Studio**: hace mods de texturas, también en HD, y las captura desde el juego en marcha. Ver [docs/texture-studio.md](docs/texture-studio.md).
-- **Complemento de Blender** (4.2 LTS o posterior): importa y exporta estadios, con su colisión, y crea estadios nuevos. Ver [docs/stadiums.md](docs/stadiums.md).
+**Included tools**
+- **Roster editor** (PowerUp+ adapted to 2008): imports and exports 2008 rosters. See [docs/en/roster-2008.md](docs/en/roster-2008.md).
+- **Power Pros Wii 2008 Texture Studio**: makes texture mods, HD too, and captures textures from the running game. See [docs/en/texture-studio.md](docs/en/texture-studio.md).
+- **Blender add-on** (4.2 LTS or later): imports and exports stadiums, with their collision, and creates new stadiums. See [docs/en/stadiums.md](docs/en/stadiums.md).
 
-**Mods**: texturas, archivos de `project.bin`, rosters y estadios en `mods/<carpeta>`; las partidas con roster modificado van aparte. Ver [docs/mods.md](docs/mods.md).
+**Mods**: textures, `project.bin` files, rosters and stadiums in `mods/<folder>`; saves made with a modded roster are kept apart. See [docs/en/mods.md](docs/en/mods.md).
 
-## Configuración
+## Configuration
 
-Los ajustes están en `UserData/Config.toml`, junto al juego. El launcher cambia casi todos; lo que no tiene opción:
+Settings live in `UserData/Config.toml`, next to the game. The launcher changes almost all of them; the ones without an option:
 
 ```toml
 [discord]
 enabled = true
-client_id = "" # ID propio de la aplicación de Discord. Sin él, Rich Presence queda inactivo.
+client_id = "" # Your own Discord application ID. Without it, Rich Presence stays inactive.
 
 [ui]
-language = "auto" # "auto" (idioma de Windows), "es" o "en"
+language = "auto" # "auto" (Windows' language), "es" or "en"
 ```
 
-No se incluye un ID de Discord, y se ignora el heredado de Wiicompiled para no anunciar otra aplicación.
+No Discord ID is included, and the one inherited from Wiicompiled is ignored so that the game does not announce another application.
 
-## Compilar desde el código (Windows)
+## Building from source (Windows)
 
-Para quien desarrolla. Requisitos: PowerShell 5.1, Git, .NET 8 SDK y Python 3.12. El resto (llvm-mingw, CMake, Ninja, dependencias de aurora) lo descargan y verifican los scripts dentro de `local/`.
+For developers. Requirements: PowerShell 5.1, Git, the .NET 8 SDK and Python 3.12. The rest (llvm-mingw, CMake, Ninja, aurora's dependencies) is downloaded and verified by the scripts inside `local/`.
 
 ```powershell
-.\tools\bootstrap.ps1                                   # dtk y NKit, verificados por SHA-256
-.\tools\phase0.ps1 -Image '<tu copia>.iso' -DolphinTool '<Dolphin>\DolphinTool.exe'   # extrae a local/disc
-.\tools\wiicompiled-translate.ps1 -Build                # clona Wiicompiled en el commit fijado, aplica los parches y traduce
-.\tools\wiicompiled-build.ps1 -RunSeconds 30            # compila y prueba
-.\tools\wiicompiled-bench.ps1 -Api vulkan               # tiempo de fotograma en la demo del título
+.\tools\bootstrap.ps1                                   # dtk and NKit, verified by SHA-256
+.\tools\phase0.ps1 -Image '<your copy>.iso' -DolphinTool '<Dolphin>\DolphinTool.exe'   # extracts to local/disc
+.\tools\wiicompiled-translate.ps1 -Build                # clones Wiicompiled at the pinned commit, applies the patches, translates
+.\tools\wiicompiled-build.ps1 -RunSeconds 30            # builds and tests
+.\tools\wiicompiled-bench.ps1 -Api vulkan               # frame time in the title demo
 ```
 
-- **Release:** `tools/setup/Make-Release.ps1 -Zip` arma el paquete del Setup desde un clon limpio, solo con lo que está en git (unos 20 minutos). `tools/setup/LocalBuild.ps1` es lo que ejecuta el Setup en la PC del jugador.
-- **Guardia de contenido:** `python tools/check_no_game_data.py --install-hook` instala el hook de pre-commit que rechaza archivos del juego, contenido binario, archivos grandes y volcados de datos.
+- **Release:** `tools/setup/Make-Release.ps1 -Zip` builds the Setup package from a clean clone, using only what is in git (about 20 minutes). `tools/setup/LocalBuild.ps1` is what the Setup runs on the player's PC.
+- **Content guard:** `python tools/check_no_game_data.py --install-hook` installs the pre-commit hook that rejects game files, binary content, large files and data dumps.
 
-## Documentación
+## Documentation
 
-| Documento | Contenido |
+| Document | Contents |
 |---|---|
-| [docs/wiicompiled-feasibility.md](docs/wiicompiled-feasibility.md) | De la primera traducción al juego jugable: cada parche, cada fallo y cada medición |
-| [docs/ingenieria-inversa.md](docs/ingenieria-inversa.md) | Referencia del juego por sistema: memoria, hilos, `project.bin`, roster, texturas, estadios (PDF con `tools/build_re_pdf.py`) |
-| [docs/launcher-controles.md](docs/launcher-controles.md) | Launcher, controles e idioma |
-| [docs/mods.md](docs/mods.md) | Tipos de mods y cómo instalarlos |
-| [docs/roster-2008.md](docs/roster-2008.md) | Rosters de 2008 y el editor PowerUp+ |
-| [docs/texture-studio.md](docs/texture-studio.md) | Texture Studio |
-| [docs/stadiums.md](docs/stadiums.md) | Estadios con Blender y cómo hacer uno desde cero |
-| [docs/reverse-engineering-tools.md](docs/reverse-engineering-tools.md) | Ghidra y dtk |
+| [docs/en/wiicompiled-feasibility.md](docs/en/wiicompiled-feasibility.md) | From the first translation to a playable game: every patch, every failure and every measurement |
+| [docs/en/reverse-engineering.md](docs/en/reverse-engineering.md) | Reference of the game by system: memory, threads, `project.bin`, roster, textures, stadiums (PDF with `tools/build_re_pdf.py`) |
+| [docs/en/launcher-controls.md](docs/en/launcher-controls.md) | Launcher, controls and language |
+| [docs/en/mods.md](docs/en/mods.md) | Kinds of mods and how to install them |
+| [docs/en/roster-2008.md](docs/en/roster-2008.md) | 2008 rosters and the PowerUp+ editor |
+| [docs/en/texture-studio.md](docs/en/texture-studio.md) | Texture Studio |
+| [docs/en/stadiums.md](docs/en/stadiums.md) | Stadiums with Blender and how to make one from scratch |
+| [docs/en/reverse-engineering-tools.md](docs/en/reverse-engineering-tools.md) | Ghidra and dtk |
 
-Todos tienen versión en inglés en [docs/en/](docs/en/).
+The Spanish originals are in [docs/](docs/).
 
-## Estructura del repositorio
+## Repository layout
 
-| Carpeta | Contenido |
+| Folder | Contents |
 |---|---|
-| `tools/` | traducción, compilación, Setup, launcher, mods y análisis |
-| `tools/patches/` | parches reproducibles sobre Wiicompiled y PowerUp+ |
-| `tools/setup/` | el Setup (`setup.cpp`), lo que corre en la PC del jugador (`LocalBuild.ps1`) y el empaquetado |
-| `tools/texture-studio/`, `tools/blender/`, `tools/roster/` | Texture Studio, complemento de Blender y conversión de rosters |
-| `config/` | identidad del juego, mapa de funciones y versiones fijadas |
-| `assets/launcher/` | arte propio del launcher (no es contenido del juego) |
-| `docs/` | notas técnicas y resultados comprobables; `docs/en/` en inglés |
-| `local/` | disco, herramientas descargadas, código generado, builds y partidas; excluido de git |
+| `tools/` | translation, building, Setup, launcher, mods and analysis |
+| `tools/patches/` | reproducible patches on Wiicompiled and PowerUp+ |
+| `tools/setup/` | the Setup (`setup.cpp`), what runs on the player's PC (`LocalBuild.ps1`) and packaging |
+| `tools/texture-studio/`, `tools/blender/`, `tools/roster/` | Texture Studio, the Blender add-on and roster conversion |
+| `config/` | game identity, function map and pinned versions |
+| `assets/launcher/` | the launcher's own art (not game content) |
+| `docs/` | technical notes and verifiable results; `docs/en/` in English |
+| `local/` | disc, downloaded tools, generated code, builds and saves; excluded from git |
 
-El runtime anterior (DolRecomp y ModernGekko, sus parches e informes) está en el tag de git `moderngekko-era`.
+The previous runtime (DolRecomp and ModernGekko, their patches and reports) is at git tag `moderngekko-era`.
 
-## Créditos
+## Credits
 
-- **[Wiicompiled](https://github.com/patchzyy/Wiicompiled)** (patchzyy): el traductor PowerPC → C++, el runtime y sus scripts de empaquetado, sobre los que se construye todo este proyecto.
-- **[aurora](https://github.com/encounter/aurora)** (encounter), incluido en Wiicompiled: GX sobre WebGPU. Usa [Dawn](https://dawn.googlesource.com/dawn), [SDL3](https://libsdl.org) y [Dear ImGui](https://github.com/ocornut/imgui).
-- **[nod](https://github.com/encounter/nod)** y **[decomp-toolkit](https://github.com/encounter/decomp-toolkit)** (encounter): lectura del disco y análisis del DOL y el REL.
-- **[PowerUp](https://github.com/CSho27/PowerUp)** (CSho27) y **[PowerUp+](https://github.com/ogura-connection/PowerUpPlus)** (ogura-connection): el formato del roster de 2007 y el editor que aquí se adapta a 2008.
-- **[Dolphin](https://github.com/dolphin-emu/dolphin)**: comparación de comportamiento y su base de firmas del SDK, usada para nombrar funciones. **[DolRecomp](https://github.com/AH64-dll/DolRecomp)** y **[ModernGekko](https://github.com/ExpansionPak/ModernGekko)**: la primera etapa del proyecto.
-- **[llvm-mingw](https://github.com/mstorsjo/llvm-mingw)**, **[CMake](https://cmake.org)** y **[Ninja](https://ninja-build.org)**: compilan el juego en la PC del jugador.
-- **[AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR)** (MIT): la opción de escalado.
-- **MoonInning UI pack**: el arte del launcher y del Setup, aportado por el autor del proyecto.
-- **[Blender](https://www.blender.org)** y **[OpenSKP](https://github.com/iamahsanmehmood/openskp)**: edición e importación de estadios.
+- **[Wiicompiled](https://github.com/patchzyy/Wiicompiled)** (patchzyy): the PowerPC → C++ translator, the runtime and its packaging scripts, on which this whole project is built.
+- **[aurora](https://github.com/encounter/aurora)** (encounter), included in Wiicompiled: GX on WebGPU. It uses [Dawn](https://dawn.googlesource.com/dawn), [SDL3](https://libsdl.org) and [Dear ImGui](https://github.com/ocornut/imgui).
+- **[nod](https://github.com/encounter/nod)** and **[decomp-toolkit](https://github.com/encounter/decomp-toolkit)** (encounter): reading the disc and analysing the DOL and REL.
+- **[PowerUp](https://github.com/CSho27/PowerUp)** (CSho27) and **[PowerUp+](https://github.com/ogura-connection/PowerUpPlus)** (ogura-connection): the 2007 roster format and the editor adapted here to 2008.
+- **[Dolphin](https://github.com/dolphin-emu/dolphin)**: behaviour comparison and its SDK signature database, used to name functions. **[DolRecomp](https://github.com/AH64-dll/DolRecomp)** and **[ModernGekko](https://github.com/ExpansionPak/ModernGekko)**: the project's first stage.
+- **[llvm-mingw](https://github.com/mstorsjo/llvm-mingw)**, **[CMake](https://cmake.org)** and **[Ninja](https://ninja-build.org)**: compile the game on the player's PC.
+- **[AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR)** (MIT): the upscaling option.
+- **MoonInning UI pack**: the art of the launcher and the Setup, contributed by the project's author.
+- **[Blender](https://www.blender.org)** and **[OpenSKP](https://github.com/iamahsanmehmood/openskp)**: editing and importing stadiums.
 
-Versiones, licencias y qué se redistribuye: [THIRD_PARTY.md](THIRD_PARTY.md).
+Versions, licenses and what is redistributed: [THIRD_PARTY.en.md](THIRD_PARTY.en.md).
 
-## Cómo se hizo
+## How this was made
 
-Este proyecto se hizo con IA. Casi todo el código lo escribieron agentes de Claude (Anthropic) mediante Claude Code: la persona decide qué intentar, juega, prueba y revisa; la IA implementa, mide y documenta.
+This project was made with AI. Nearly all of the code was written by Claude (Anthropic) agents through Claude Code: the person decides what to try, plays, tests and reviews; the AI implements, measures and documents.
 
-Dos reglas lo mantienen honesto:
-- toda afirmación sale de una prueba o una medición, y este README dice qué se midió y qué no;
-- nada derivado del juego entra en el repositorio, y un hook de pre-commit lo vigila.
+Two rules keep it honest:
+- every claim comes from a test or a measurement, and this README says what was measured and what was not;
+- nothing derived from the game goes into the repository, and a pre-commit hook watches for it.
 
-Es un proyecto de estudio: espera asperezas, y errores que un especialista no habría cometido.
+It is a study project: expect rough edges, and mistakes a specialist would not have made.
 
-## Aviso legal
+## Legal
 
-Proyecto de fans, sin relación con Konami, 2K, Major League Baseball, la MLBPA ni Nintendo, ni respaldado o patrocinado por ellos. *MLB Power Pros*, *Wii* y los nombres de equipos y jugadores son marcas de sus dueños y se nombran solo para decir con qué funciona este software. El repositorio y sus releases no contienen datos del juego con derechos de autor, ni claves, ni firmware, y no ayudan a conseguirlos: necesitas tu propia copia del juego.
+A fan project, not affiliated with, endorsed or sponsored by Konami, 2K, Major League Baseball, the MLBPA or Nintendo. *MLB Power Pros*, *Wii* and the team and player names are trademarks of their owners and are named only to say what this software works with. The repository and its releases contain no copyrighted game data, keys or firmware, and do not help anyone obtain them: you need your own copy of the game.
 
-## Licencia
+## License
 
-GNU General Public License v3 (ver [LICENSE](LICENSE)). Los componentes de terceros conservan sus licencias ([THIRD_PARTY.md](THIRD_PARTY.md)). La licencia cubre el código de este proyecto; no concede nada sobre el juego.
+GNU General Public License v3 (see [LICENSE](LICENSE)). Third-party components keep their own licenses ([THIRD_PARTY.en.md](THIRD_PARTY.en.md)). The license covers this project's code; it grants nothing for the game.
