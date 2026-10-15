@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "categories.h"
 
+#include "lang.h"
+
 #include <cctype>
 #include <cstdlib>
 #include <map>
@@ -81,6 +83,33 @@ Category Categorize(std::string_view packName) {
         return {"Menús", rest};
     }
     return {"Otros", stem};
+}
+
+const char* GroupLabelEn(std::string_view group) {
+    static const std::map<std::string_view, const char*> labels{
+        {"Todo", "All"}, {"Menús", "Menus"}, {"Estadios", "Stadiums"}, {"Uniformes", "Uniforms"},
+        {"Cartas de jugador", "Player cards"}, {"Logos", "Logos"}, {"Nombres de equipo", "Team names"}, {"Caras", "Faces"},
+        {"MLB Life", "MLB Life"}, {"Temporada", "Season"}, {"Success", "Success"}, {"Modelos", "Models"}, {"Otros", "Other"},
+        {"Solo vistas en juego", "Seen in game only"}};
+    const auto it = labels.find(group);
+    return it == labels.end() ? nullptr : it->second;
+}
+
+std::string GroupLabel(const std::string& group) {
+    const char* en = GroupLabelEn(group);
+    return en ? Tr(group.c_str(), en) : group;
+}
+
+std::string SubgroupLabel(const std::string& subgroup) {
+    if (power_pros_ui::g_lang != power_pros_ui::Lang::En) return subgroup;
+    // The Spanish subgroups Categorize and Catalog::AddCapture make; everything else is a name already.
+    static const std::map<std::string_view, const char*> labels{
+        {"Cielos", "Skies"}, {"Común", "Common"}, {"Temporada", "Season"}, {"Fuegos artificiales", "Fireworks"},
+        {"Depuración", "Debug"}, {"Datos", "Data"}, {"Menú principal", "Main menu"}, {"Título", "Title"},
+        {"Créditos", "Credits"}, {"Enfrentamiento", "Matchup"}, {"Selección de estadio", "Stadium select"}};
+    if (const auto it = labels.find(subgroup); it != labels.end()) return it->second;
+    if (Starts(subgroup, "Sesión ")) return "Session " + subgroup.substr(std::string_view("Sesión ").size());
+    return subgroup;
 }
 
 } // namespace tstudio

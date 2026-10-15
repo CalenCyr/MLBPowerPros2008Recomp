@@ -7,6 +7,7 @@
 #include "core.h"
 #include "gx.h"
 #include "images.h"
+#include "lang.h"
 #include "modfolder.h"
 #include "names.h"
 #include "pack.h"
@@ -501,12 +502,54 @@ enabled = ["A \"B\"", 'C']
     for (const auto& r : report) named |= r.message.find("Repetido") != std::string::npos && r.message.find(".dds") != std::string::npos;
     CHECK(named);
 }
+// Spanish / English: Tr, the shown names of the (Spanish) category keys, and the [ui] language setting.
+void TestLanguage(const std::filesystem::path& temp) {
+    using power_pros_ui::Lang;
+    power_pros_ui::g_lang = Lang::En;
+    CHECK(std::strcmp(Tr("Hola", "Hello"), "Hello") == 0);
+    for (const auto& group : GroupOrder()) CHECK(GroupLabelEn(group) != nullptr);
+    CHECK(GroupLabel("Todo") == "All" && GroupLabel("Estadios") == "Stadiums" && GroupLabel("Solo vistas en juego") == "Seen in game only");
+    CHECK(GroupLabel("teamlogo_aaa01") == "teamlogo_aaa01");                    // not a key: shown as it is
+    // Every Spanish subgroup Categorize makes has an English name; team and pack names stay.
+    for (const char* pack : {"stadium_sky_rainy.pack", "stadium_common.pack", "stadium_season.pack", "stadium_hanabi.pack",
+                             "stadium_debug.pack", "env_playercard_x.pack", "env_mainmenu.pack", "env_title_logo.pack",
+                             "env_common.pack", "env_credit.pack", "env_vs.pack", "env_stadium_menu.pack"}) {
+        const Category c = Categorize(pack);
+        CHECK(SubgroupLabel(c.subgroup) != c.subgroup);
+    }
+    CHECK(SubgroupLabel("Menú principal") == "Main menu" && SubgroupLabel("Sesión 12") == "Session 12");
+    CHECK(SubgroupLabel("Diamondbacks (ARI) AAA") == "Diamondbacks (ARI) AAA" && SubgroupLabel("shop") == "shop");
+    CHECK(Categorize("env_mainmenu.pack").group == "Menús");                    // keys never change with the language
+    std::string error;
+    CHECK(!ValidModName("", &error) && error == "Type a name for the mod.");
+    CHECK(std::strcmp(SizeCheckMessage(SizeCheck::Ok), "Correct size.") == 0);
+
+    CHECK(power_pros_ui::LangFromSetting("en") == Lang::En && power_pros_ui::LangFromSetting("es") == Lang::Es);
+    CHECK(power_pros_ui::LangFromSetting("auto") == power_pros_ui::SystemLang());
+    // Saving the language: line by line, every other line kept, [ui] added once at the end.
+    const auto config = temp / "Lang.toml";
+    std::ofstream(config, std::ios::binary) << "# top\r\n[paths]\r\ndvd_root = 'D:\\x' # keep\r\n";
+    CHECK(WriteSetting(config, "ui", "language", "\"en\""));
+    CHECK(ReadSetting(config, "ui", "language") == std::optional<std::string>("en"));
+    CHECK(WriteSetting(config, "ui", "language", "\"es\""));
+    CHECK(ReadSetting(config, "ui", "language") == std::optional<std::string>("es"));
+    std::ifstream in(config, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), {});
+    CHECK(text == "# top\r\n[paths]\r\ndvd_root = 'D:\\x' # keep\r\n\r\n[ui]\r\nlanguage = \"es\"\r\n");
+
+    power_pros_ui::g_lang = Lang::Es;
+    CHECK(std::strcmp(Tr("Hola", "Hello"), "Hola") == 0);
+    CHECK(GroupLabel("Estadios") == "Estadios" && SubgroupLabel("Sesión 12") == "Sesión 12");
+    CHECK(!ValidModName("", &error) && error == "Escribe un nombre para el mod.");
+}
 } // namespace
 
 int RunSelftest() {
     const auto temp = std::filesystem::temp_directory_path() / PathFromUtf8("texture-studio-selftest-ñ");
     std::filesystem::remove_all(temp);
     std::filesystem::create_directories(temp);
+    const power_pros_ui::Lang lang = power_pros_ui::g_lang;
+    power_pros_ui::g_lang = power_pros_ui::Lang::Es;  // the checks below look for words of the Spanish messages
     TestGx();
     TestPack();
     TestProjectAndNames(temp);
@@ -518,6 +561,8 @@ int RunSelftest() {
     TestCapture(temp);
     TestReviewFixes(temp);
     TestPolish(temp);
+    TestLanguage(temp);
+    power_pros_ui::g_lang = lang;
     std::printf("selftest %s (%d checks)\n", g_failures ? "FAILED" : "ok", g_checks);
     return g_failures ? 1 : 0;
 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "images.h"
 
+#include "lang.h"
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -22,7 +24,8 @@ std::optional<Image> LoadDds(const std::filesystem::path& file, std::string* err
     const bool rgba8 = d.size() >= 128 && std::memcmp(d.data(), "DDS ", 4) == 0 && Le32(d, 84) == 0 && Le32(d, 88) == 32 &&
                        Le32(d, 92) == 0xFF && Le32(d, 104) == 0xFF000000u;
     if (!rgba8 || w == 0 || h == 0 || w > 16384 || h > 16384 || d.size() < 128 + 4ull * w * h) {
-        if (error) *error = "Solo se admiten DDS RGBA8 sin comprimir (los que vuelca el juego).";
+        if (error) *error = Tr("Solo se admiten DDS RGBA8 sin comprimir (los que vuelca el juego).",
+                         "Only uncompressed RGBA8 DDS files are supported (the ones the game dumps).");
         return std::nullopt;
     }
     return Image{w, h, std::vector<uint8_t>(d.begin() + 128, d.begin() + 128 + 4ull * w * h)};
@@ -35,13 +38,13 @@ std::optional<Image> LoadImage(const std::filesystem::path& file, std::string* e
     if (ext == ".dds") return LoadDds(file, error);
     SDL_Surface* loaded = SDL_LoadPNG(Utf8(file).c_str());
     if (!loaded) {
-        if (error) *error = std::string("No se puede leer el PNG: ") + SDL_GetError();
+        if (error) *error = std::string(Tr("No se puede leer el PNG: ", "Can't read the PNG: ")) + SDL_GetError();
         return std::nullopt;
     }
     SDL_Surface* rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(loaded);
     if (!rgba) {
-        if (error) *error = std::string("No se puede convertir el PNG: ") + SDL_GetError();
+        if (error) *error = std::string(Tr("No se puede convertir el PNG: ", "Can't convert the PNG: ")) + SDL_GetError();
         return std::nullopt;
     }
     Image img{static_cast<uint32_t>(rgba->w), static_cast<uint32_t>(rgba->h), {}};
@@ -59,7 +62,7 @@ bool SavePng(const std::filesystem::path& file, const Image& image, std::string*
     SDL_Surface* s = SDL_CreateSurfaceFrom(static_cast<int>(image.width), static_cast<int>(image.height), SDL_PIXELFORMAT_RGBA32,
                                            const_cast<uint8_t*>(image.rgba.data()), static_cast<int>(image.width * 4));
     const bool ok = s && SDL_SavePNG(s, Utf8(file).c_str());
-    if (!ok && error) *error = std::string("No se puede guardar el PNG: ") + SDL_GetError();
+    if (!ok && error) *error = std::string(Tr("No se puede guardar el PNG: ", "Can't save the PNG: ")) + SDL_GetError();
     if (s) SDL_DestroySurface(s);
     return ok;
 }
@@ -92,10 +95,12 @@ SizeCheck CheckReplacementSize(uint32_t ow, uint32_t oh, uint32_t w, uint32_t h)
 
 const char* SizeCheckMessage(SizeCheck check) {
     switch (check) {
-    case SizeCheck::Ok: return "Tamaño correcto.";
-    case SizeCheck::NotMultiple: return "Aviso: no es un múltiplo exacto (×2, ×4, ×8); el juego lo escalará.";
-    case SizeCheck::WrongAspect: return "La imagen no tiene la misma proporción que la textura original.";
-    case SizeCheck::TooLarge: return "La imagen supera 4096 píxeles de lado.";
+    case SizeCheck::Ok: return Tr("Tamaño correcto.", "Correct size.");
+    case SizeCheck::NotMultiple: return Tr("Aviso: no es un múltiplo exacto (×2, ×4, ×8); el juego lo escalará.",
+                                           "Warning: not an exact multiple (×2, ×4, ×8); the game will scale it.");
+    case SizeCheck::WrongAspect: return Tr("La imagen no tiene la misma proporción que la textura original.",
+                                           "The image doesn't have the same proportions as the original texture.");
+    case SizeCheck::TooLarge: return Tr("La imagen supera 4096 píxeles de lado.", "The image is over 4096 pixels on a side.");
     }
     return "";
 }

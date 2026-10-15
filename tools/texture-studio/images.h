@@ -12,5 +12,5 @@ bool SavePng(const std::filesystem::path& file, const Image& image, std::string*
 Image Downscale(const Image& image, uint32_t maxSide);
 enum class SizeCheck { Ok, NotMultiple, WrongAspect, TooLarge };
 SizeCheck CheckReplacementSize(uint32_t originalW, uint32_t originalH, uint32_t w, uint32_t h);
-const char* SizeCheckMessage(SizeCheck check);  // Spanish
+const char* SizeCheckMessage(SizeCheck check);  // in the current language
 } // namespace tstudio

@@ -4,6 +4,7 @@
 #include "capture.h"
 
 #include "core.h"
+#include "lang.h"
 
 #include <windows.h>
 
@@ -38,7 +39,7 @@ bool Capture::Start(const std::filesystem::path& gameExe, const std::filesystem:
     SetEnvironmentVariableW(L"WIICOMPILED_TEXTURE_DUMPS", nullptr);
     SetEnvironmentVariableW(L"WIICOMPILED_SKIP_LAUNCHER", nullptr);
     if (!ok) {
-        if (error) *error = "No se pudo abrir el juego para capturar (" + std::to_string(GetLastError()) + ").";
+        if (error) *error = Tr("No se pudo abrir el juego para capturar (", "Could not start the game to capture (") + std::to_string(GetLastError()) + ").";
         return false;
     }
     CloseHandle(pi.hThread);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "projectbin.h"
 
+#include "lang.h"
+
 #include <fstream>
 
 namespace tstudio {
@@ -11,26 +13,26 @@ std::optional<std::vector<ProjectEntry>> ReadProjectIndex(const std::filesystem:
         return std::nullopt;
     };
     std::ifstream f(file, std::ios::binary);
-    if (!f) return fail("No se puede abrir project.bin.");
+    if (!f) return fail(Tr("No se puede abrir project.bin.", "Can't open project.bin."));
     std::vector<uint8_t> head(0x40);
-    if (!f.read(reinterpret_cast<char*>(head.data()), head.size())) return fail("project.bin está incompleto.");
+    if (!f.read(reinterpret_cast<char*>(head.data()), head.size())) return fail(Tr("project.bin está incompleto.", "project.bin is incomplete."));
     const uint32_t records = Be32(head, 0x14), order = Be32(head, 0x28), names = Be32(head, 0x2C), data = Be32(head, 0x34);
     if (!(0x40 <= records && records < order && order < names && names < data && data <= 0x1000000))
-        return fail("project.bin no tiene el formato esperado.");
+        return fail(Tr("project.bin no tiene el formato esperado.", "project.bin doesn't have the expected format."));
     std::vector<uint8_t> h(data);
     f.seekg(0);
-    if (!f.read(reinterpret_cast<char*>(h.data()), h.size())) return fail("project.bin está incompleto.");
+    if (!f.read(reinterpret_cast<char*>(h.data()), h.size())) return fail(Tr("project.bin está incompleto.", "project.bin is incomplete."));
     const uint32_t count = (order - records) / 0x1C;
     std::vector<ProjectEntry> out;
     for (uint32_t i = 1; order + 8ull * (i + 1) <= names; ++i) {
         const uint32_t index = Be32(h, order + 8 * i), sector = Be32(h, order + 8 * i + 4);
         if (index == 0 && sector == 0) break;
-        if (index >= count) return fail("project.bin no tiene el formato esperado.");
+        if (index >= count) return fail(Tr("project.bin no tiene el formato esperado.", "project.bin doesn't have the expected format."));
         const size_t rec = records + static_cast<size_t>(index) * 0x1C;
         const size_t nameStart = static_cast<size_t>(names) + Be32(h, rec + 4);
         size_t nameEnd = nameStart;
         while (nameEnd < h.size() && h[nameEnd] != 0) ++nameEnd;
-        if (nameEnd >= h.size()) return fail("project.bin no tiene el formato esperado.");
+        if (nameEnd >= h.size()) return fail(Tr("project.bin no tiene el formato esperado.", "project.bin doesn't have the expected format."));
         std::string name(h.begin() + nameStart, h.begin() + nameEnd);
         if (!name.empty() && name.front() == '/') name.erase(0, 1);
         out.push_back({std::move(name), data + static_cast<uint64_t>(sector) * 0x800, Be32(h, rec + 24)});

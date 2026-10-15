@@ -112,16 +112,21 @@ bool SetModEnabled(const std::filesystem::path& config, const std::string& id, b
         value += '"';
     }
     value += "]";
+    return WriteSetting(config, "mods", "enabled", value);
+}
+
+bool WriteSetting(const std::filesystem::path& config, std::string_view section, std::string_view key, const std::string& value) {
     auto lines = Lines(config);
-    auto range = Section(lines, "mods");
+    auto range = Section(lines, section);
     if (range.first == lines.size()) {
         if (!lines.empty() && !lines.back().empty()) lines.emplace_back();
-        lines.emplace_back("[mods]");
+        lines.emplace_back("[" + std::string(section) + "]");
         range = {lines.size(), lines.size()};
     }
-    const size_t i = KeyLine(lines, range, "enabled");
-    if (i == lines.size()) lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(range.second), "enabled = " + value);
-    else lines[i] = "enabled = " + value;
+    const std::string line = std::string(key) + " = " + value;
+    const size_t i = KeyLine(lines, range, key);
+    if (i == lines.size()) lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(range.second), line);
+    else lines[i] = line;
     // Written to a temporary file and renamed, so a failure never leaves the game's config half-written.
     auto temp = config;
     temp += ".tmp";

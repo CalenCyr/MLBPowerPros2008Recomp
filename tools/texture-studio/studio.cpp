@@ -7,6 +7,7 @@
 #include "config.h"
 #include "gx.h"
 #include "images.h"
+#include "lang.h"
 #include "modfolder.h"
 #include "names.h"
 #include "pack.h"
@@ -205,7 +206,8 @@ struct Thumbs {
 
 struct App {
     Paths paths;
-    std::string fatal;  // game not found: only this message is shown
+    bool gameMissing = false;  // game not found: only its message is shown
+    std::string fatal;         // project.bin unreadable: only this message is shown
     Catalog catalog;
     std::thread builder;
     std::atomic<float> progress{0};
@@ -307,7 +309,7 @@ void Refilter(App& a) {
         if (a.onlyReplaced && !Replaced(a, t)) continue;
         if (a.onlySeen && t.seenIn.empty()) continue;
         if (!needle.empty()) {
-            std::string hay = t.name + " " + t.group + " " + t.subgroup;
+            std::string hay = t.name + " " + t.group + " " + t.subgroup + " " + GroupLabel(t.group) + " " + SubgroupLabel(t.subgroup);
             for (const auto& l : t.locations) hay += " " + a.catalog.Entries()[l.entry].name;
             for (char& ch : hay) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             if (hay.find(needle) == std::string::npos) continue;
@@ -328,7 +330,7 @@ std::vector<std::string> WideArgs() {
     return out;
 }
 
-Paths ResolvePaths(const std::vector<std::string>& args, std::string* fatal) {
+Paths ResolvePaths(const std::vector<std::string>& args, bool* gameMissing) {
     const fs::path base = PathFromUtf8(SDL_GetBasePath());
     Paths p{base / "UserData" / "Config.toml", base / "UserData", base / "mods", base / "MLBPowerPros2008.exe", {}};
     for (size_t i = 0; i + 1 < args.size(); ++i) {
@@ -343,10 +345,29 @@ Paths ResolvePaths(const std::vector<std::string>& args, std::string* fatal) {
         if (root.is_relative()) root = p.game.parent_path() / root;
         p.projectBin = root / "files" / "project.bin";
     }
-    if (!dvd || !fs::exists(p.projectBin))
-        *fatal = "No se encontró el juego.\n\nInstálalo con el Setup de MLB Power Pros 2008 y abre el Studio desde el "
-                 "launcher (HERRAMIENTAS > EDITOR DE TEXTURAS) o desde su acceso directo.";
+    *gameMissing = !dvd || !fs::exists(p.projectBin);
     return p;
+}
+
+const char* GameMissingText() {
+    return Tr("No se encontró el juego.\n\nInstálalo con el Setup de MLB Power Pros 2008 y abre el Studio desde el "
+              "launcher (HERRAMIENTAS > EDITOR DE TEXTURAS) o desde su acceso directo.",
+              "The game was not found.\n\nInstall it with the MLB Power Pros 2008 Setup and open the Studio from the "
+              "launcher (TOOLS > TEXTURE EDITOR) or from its shortcut.");
+}
+
+// Config.toml [ui] language: "es", "en", or "auto" / missing for the system's language.
+void LoadLanguage(const fs::path& config) {
+    const auto value = fs::exists(config) ? ReadSetting(config, "ui", "language") : std::nullopt;
+    power_pros_ui::g_lang = power_pros_ui::LangFromSetting(value.value_or("auto"));
+}
+
+// Applies at once; kept in Config.toml when the game's config exists (otherwise for this session only).
+void SetLanguage(App& a, power_pros_ui::Lang lang) {
+    power_pros_ui::g_lang = lang;
+    if (fs::exists(a.paths.config) &&
+        !WriteSetting(a.paths.config, "ui", "language", lang == power_pros_ui::Lang::En ? "\"en\"" : "\"es\""))
+        Toast(a, Tr("No se pudo guardar el idioma en Config.toml.", "Could not save the language in Config.toml."), true);
 }
 
 void OpenInExplorer(const fs::path& target) {
@@ -364,12 +385,19 @@ void DrawBand(App& a, float w) {
     dl->AddLine(ImVec2(0, h), ImVec2(w, h), Rgba(255, 255, 255, 140), 3);
     ShadowedText(dl, g_title, 30, ImVec2(18, 6), IM_COL32_WHITE, "POWER PROS WII 2008");
     Text(dl, g_bold, 15, ImVec2(20, 41), ui::kYellow, "T E X T U R E   S T U D I O");
+    // Language switch at the far right; hidden while the catalog is still being read on its thread.
+    if (a.ready || a.gameMissing) {
+        ImGui::SetCursorScreenPos(ImVec2(w - 100, 14));
+        Lang lang = g_lang;
+        if (ui::LangSwitch(&lang)) SetLanguage(a, lang);
+    }
     if (!a.ready) return;
 
     // Right side: active mod, its state in the game, new mod.
-    ImGui::SetCursorScreenPos(ImVec2(w - 640, 14));
+    const float titleEnd = 18 + TextSize(g_title, 30, "POWER PROS WII 2008").x;
+    ImGui::SetCursorScreenPos(ImVec2(std::max(w - 740, titleEnd + 24), 14));
     ImGui::SetNextItemWidth(250);
-    const std::string current = a.activeMod >= 0 ? a.mods[a.activeMod].id : std::string("(ningún mod)");
+    const std::string current = a.activeMod >= 0 ? a.mods[a.activeMod].id : std::string(Tr("(ningún mod)", "(no mod)"));
     if (ImGui::BeginCombo("##mod", ("Mod: " + current).c_str())) {
         for (int i = 0; i < static_cast<int>(a.mods.size()); ++i) {
             if (ImGui::Selectable(a.mods[i].id.c_str(), i == a.activeMod)) {
@@ -387,20 +415,21 @@ void DrawBand(App& a, float w) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         dl->AddCircleFilled(ImVec2(p.x + 8, p.y + 13), 6, on ? ui::kGreenTop : ui::kGreyTop);
         ImGui::SetCursorScreenPos(ImVec2(p.x + 20, p.y + 2));
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(on ? ui::kGreenTop : ui::kMuted), on ? "Activado en el juego" : "No activado");
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(on ? ui::kGreenTop : ui::kMuted), "%s",
+                           on ? Tr("Activado en el juego", "Enabled in the game") : Tr("No activado", "Not enabled"));
         if (!on) {
             ImGui::SameLine();
             ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, 8));
-            if (ui::Pill("Activar", ui::kBlueTop, ui::kBlueBottom, true)) {
+            if (ui::Pill(Tr("Activar", "Enable"), ui::kBlueTop, ui::kBlueBottom, true)) {
                 SetModEnabled(a.paths.config, a.mods[a.activeMod].id, true);
                 RefreshMods(a);
-                Toast(a, "Mod activado: se aplica la próxima vez que abras el juego.");
+                Toast(a, Tr("Mod activado: se aplica la próxima vez que abras el juego.", "Mod enabled: it applies the next time you open the game."));
             }
         }
         ImGui::SameLine();
     }
-    ImGui::SetCursorScreenPos(ImVec2(w - 150, 8));
-    if (ui::Pill("+ Nuevo mod", ui::kGreenTop, ui::kGreenBottom, true)) {
+    ImGui::SetCursorScreenPos(ImVec2(w - 250, 8));
+    if (ui::Pill(Tr("+ Nuevo mod", "+ New mod"), ui::kGreenTop, ui::kGreenBottom, true)) {
         a.newModName[0] = 0;
         a.newModError.clear();
         a.openNewMod = true;
@@ -408,7 +437,7 @@ void DrawBand(App& a, float w) {
 }
 
 void DrawCategories(App& a, float height) {
-    ui::BeginPanel("##cats", "CATEGORÍAS", ImVec2(250, height));
+    ui::BeginPanel("##cats", Tr("CATEGORÍAS", "CATEGORIES"), ImVec2(250, height));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     auto row = [&](const std::string& label, int count, bool selected, bool sub) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -440,23 +469,27 @@ void DrawCategories(App& a, float height) {
     };
     int total = 0;
     for (const auto& [_, subs] : a.counts) for (const auto& [__, n] : subs) total += n;
-    if (row("Todo", total, a.session == 0 && a.group == "Todo", false)) { a.group = "Todo"; a.subgroup.clear(); a.session = 0; Refilter(a); }
+    if (row(GroupLabel("Todo"), total, a.session == 0 && a.group == "Todo", false)) { a.group = "Todo"; a.subgroup.clear(); a.session = 0; Refilter(a); }
     for (const auto& group : GroupOrder()) {
         const auto it = a.counts.find(group);
         if (it == a.counts.end()) continue;
         int n = 0;
         for (const auto& [_, c] : it->second) n += c;
         const bool open = a.session == 0 && a.group == group;
-        if (row(group, n, open && a.subgroup.empty(), false)) { a.group = group; a.subgroup.clear(); a.session = 0; Refilter(a); }
+        if (row(GroupLabel(group), n, open && a.subgroup.empty(), false)) { a.group = group; a.subgroup.clear(); a.session = 0; Refilter(a); }
         if (!open) continue;
-        for (const auto& [sub, c] : it->second)
-            if (row(sub, c, a.subgroup == sub, true)) { a.subgroup = sub; Refilter(a); }
+        // Sorted by the shown name (in Spanish that is the key's own order).
+        std::vector<std::pair<std::string, std::string>> subs;  // shown name, key
+        for (const auto& [sub, _] : it->second) subs.emplace_back(SubgroupLabel(sub), sub);
+        std::sort(subs.begin(), subs.end());
+        for (const auto& [label, sub] : subs)
+            if (row(label, it->second.at(sub), a.subgroup == sub, true)) { a.subgroup = sub; Refilter(a); }
     }
     if (!a.sessions.empty()) {
         ImGui::Spacing();
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kYellow), "CAPTURAS");
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kYellow), "%s", Tr("CAPTURAS", "CAPTURES"));
         for (const auto& [n, files] : a.sessions)
-            if (row("Sesión " + std::to_string(n), static_cast<int>(files.size()), a.session == n, true)) { a.session = n; Refilter(a); }
+            if (row(Tr("Sesión ", "Session ") + std::to_string(n), static_cast<int>(files.size()), a.session == n, true)) { a.session = n; Refilter(a); }
     }
     ui::EndPanel();
 }
@@ -465,11 +498,11 @@ void DrawToolbar(App& a, float width) {
     ui::BeginPanel("##tools", nullptr, ImVec2(width, 52));
     ImGui::SetCursorPos(ImVec2(12, 12));
     ImGui::SetNextItemWidth(width - 420);
-    if (ImGui::InputTextWithHint("##buscar", "Buscar por nombre, pack o hash", a.search, sizeof a.search)) Refilter(a);
+    if (ImGui::InputTextWithHint("##buscar", Tr("Buscar por nombre, pack o hash", "Search by name, pack or hash"), a.search, sizeof a.search)) Refilter(a);
     ImGui::SameLine(0, 18);
-    if (ImGui::Checkbox("Solo reemplazadas", &a.onlyReplaced)) Refilter(a);
+    if (ImGui::Checkbox(Tr("Solo reemplazadas###replaced", "Replaced only###replaced"), &a.onlyReplaced)) Refilter(a);
     ImGui::SameLine(0, 14);
-    if (ImGui::Checkbox("Vistas en captura", &a.onlySeen)) Refilter(a);
+    if (ImGui::Checkbox(Tr("Vistas en captura###seen", "Seen in a capture###seen"), &a.onlySeen)) Refilter(a);
     ui::EndPanel();
 }
 
@@ -495,9 +528,10 @@ void DrawThumb(App& a, SDL_Renderer* r, ImDrawList* dl, int index, ImVec2 p, flo
 void DrawGrid(App& a, SDL_Renderer* r, ImVec2 size) {
     int replaced = 0;
     for (int i : a.visible) replaced += Replaced(a, a.catalog.Textures()[i]) ? 1 : 0;
-    std::string title = a.session > 0 ? "Capturas > Sesión " + std::to_string(a.session)
-                                      : a.group + (a.subgroup.empty() ? "" : " > " + a.subgroup);
-    title += " · " + std::to_string(a.visible.size()) + " texturas · " + std::to_string(replaced) + " reemplazadas";
+    std::string title = a.session > 0 ? Tr("Capturas > Sesión ", "Captures > Session ") + std::to_string(a.session)
+                                      : GroupLabel(a.group) + (a.subgroup.empty() ? "" : " > " + SubgroupLabel(a.subgroup));
+    title += " · " + std::to_string(a.visible.size()) + Tr(" texturas · ", " textures · ") + std::to_string(replaced) +
+             Tr(" reemplazadas", " replaced");
     ui::BeginPanel("##grid", title.c_str(), size);
     ImGui::BeginChild("##cells", ImVec2(0, 0));
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -521,7 +555,7 @@ void DrawGrid(App& a, SDL_Renderer* r, ImVec2 size) {
                     a.selected = index;
                     a.pending = Pending::ExportOne;
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", t.subgroup.c_str(), t.name.c_str());
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", SubgroupLabel(t.subgroup).c_str(), t.name.c_str());
                 ImGui::PopID();
                 const bool hasReplacement = Replaced(a, t);
                 DrawThumb(a, r, dl, index, p, thumb, hasReplacement);
@@ -543,7 +577,7 @@ void DrawDetail(App& a, SDL_Renderer* r, ImVec2 size) {
     ui::BeginPanel("##detail", nullptr, size);
     if (a.selected < 0) {
         ImGui::SetCursorPos(ImVec2(16, 16));
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kMuted), "No hay texturas en esta vista.");
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kMuted), "%s", Tr("No hay texturas en esta vista.", "No textures in this view."));
         ui::EndPanel();
         return;
     }
@@ -562,16 +596,19 @@ void DrawDetail(App& a, SDL_Renderer* r, ImVec2 size) {
     ImGui::SetCursorScreenPos(right);
     if (ImGui::InvisibleButton("##repl", ImVec2(box, box)) && replaced) { a.zoomReplacement = true; a.openZoom = true; a.thumbs.Forget("zoom"); }
     DrawThumb(a, r, dl, a.selected, right, box, true);
-    if (!replaced) dl->AddText(ImVec2(right.x + 30, right.y + box / 2 - 10), ui::kMuted, "Sin reemplazo");
+    if (!replaced) {
+        const char* none = Tr("Sin reemplazo", "No replacement");
+        dl->AddText(ImVec2(right.x + (box - ImGui::CalcTextSize(none).x) / 2, right.y + box / 2 - 10), ui::kMuted, none);
+    }
     dl->AddRect(right, ImVec2(right.x + box, right.y + box), IM_COL32_WHITE, 8, 0, 2);
     char caption[64];
     std::snprintf(caption, sizeof caption, "Original · %ux%u", t.key.width, t.key.height);
     dl->AddText(ImVec2(left.x, left.y + box + 6), ui::kMuted, caption);
-    std::string replacedCaption = "Reemplazo";
+    std::string replacedCaption = Tr("Reemplazo", "Replacement");
     if (replaced) {
         int w = 0, h = 0;
         if (a.thumbs.Get(r, "r:" + t.name, [] { return Image{}; }, &w, &h) && w > 0) {
-            std::snprintf(caption, sizeof caption, "Reemplazo · %dx%d (×%g)", w, h, static_cast<double>(w) / t.key.width);
+            std::snprintf(caption, sizeof caption, Tr("Reemplazo · %dx%d (×%g)", "Replacement · %dx%d (×%g)"), w, h, static_cast<double>(w) / t.key.width);
             replacedCaption = caption;
         }
     }
@@ -590,40 +627,45 @@ void DrawDetail(App& a, SDL_Renderer* r, ImVec2 size) {
     std::set<std::string> seenPacks;
     for (const auto& l : t.locations)
         if (seenPacks.insert(a.catalog.Entries()[l.entry].name).second)
-            packs += (packs.empty() ? "" : seenPacks.size() == 2 ? " · también en " : ", ") + a.catalog.Entries()[l.entry].name;
-    if (!t.captureFile.empty()) packs = "No está en ningún pack (visto en el juego)";
+            packs += (packs.empty() ? "" : seenPacks.size() == 2 ? Tr(" · también en ", " · also in ") : ", ") + a.catalog.Entries()[l.entry].name;
+    if (!t.captureFile.empty()) packs = Tr("No está en ningún pack (visto en el juego)", "Not in any pack (seen in the game)");
     fact("Pack", packs);
     std::string format = FormatName(t.key.format);
     if (t.key.hasPalette)
-        format += t.key.paletteWildcard ? " · paleta en otro pack (se ve en gris)"
-                                        : " · paleta de " + std::to_string(t.key.format == 8 ? 16 : 256) + " colores";
-    if (!t.paletteVariants.empty()) format += " · " + std::to_string(t.paletteVariants.size() + 1) + " paletas vistas en el juego";
-    fact("Formato", format);
-    fact("Archivo", t.name + ".png");
-    fact("Estado", replaced ? "Reemplazada en «" + a.mods[a.activeMod].id + "»" : std::string("Original"));
+        format += t.key.paletteWildcard ? Tr(" · paleta en otro pack (se ve en gris)", " · palette in another pack (shown in grey)")
+                                        : Tr(" · paleta de ", " · ") + std::to_string(t.key.format == 8 ? 16 : 256) +
+                                              Tr(" colores", "-color palette");
+    if (!t.paletteVariants.empty())
+        format += " · " + std::to_string(t.paletteVariants.size() + 1) + Tr(" paletas vistas en el juego", " palettes seen in the game");
+    fact(Tr("Formato", "Format"), format);
+    fact(Tr("Archivo", "File"), t.name + ".png");
+    fact(Tr("Estado", "Status"), replaced ? Tr("Reemplazada en «", "Replaced in «") + a.mods[a.activeMod].id + "»" : std::string("Original"));
     ImGui::Spacing();
     const bool hasMod = a.activeMod >= 0;
-    if (ui::Pill("Exportar PNG", ui::kBlueTop, ui::kBlueBottom, true, IsDecodable(t.key.format) || !t.captureFile.empty()))
+    if (ui::Pill(Tr("Exportar PNG", "Export PNG"), ui::kBlueTop, ui::kBlueBottom, true, IsDecodable(t.key.format) || !t.captureFile.empty()))
         a.pending = Pending::ExportOne;
     ImGui::SameLine();
-    if (ui::Pill("Importar PNG...", ui::kGreenTop, ui::kGreenBottom, true)) {
+    if (ui::Pill(Tr("Importar PNG...", "Import PNG..."), ui::kGreenTop, ui::kGreenBottom, true)) {
         if (hasMod) a.pending = Pending::ImportOne;
-        else Toast(a, "Crea o elige un mod arriba antes de importar.", true);
+        else Toast(a, Tr("Crea o elige un mod arriba antes de importar.", "Create or choose a mod above before importing."), true);
     }
     ImGui::SameLine();
-    if (ui::Pill("Quitar reemplazo", ui::kRedTop, ui::kRedBottom, true, replaced)) {
+    if (ui::Pill(Tr("Quitar reemplazo", "Remove replacement"), ui::kRedTop, ui::kRedBottom, true, replaced)) {
         const size_t removed = RemoveReplacements(t, a.replacements);
         a.thumbs.Forget("r:" + t.name);
         a.replacements = FindReplacements(ModRoot(a));
-        Toast(a, removed > 1 ? "Reemplazo quitado (" + std::to_string(removed) + " archivos)." : std::string("Reemplazo quitado."));
+        Toast(a, removed > 1 ? Tr("Reemplazo quitado (", "Replacement removed (") + std::to_string(removed) + Tr(" archivos).", " files).")
+                             : std::string(Tr("Reemplazo quitado.", "Replacement removed.")));
     }
     ImGui::SameLine();
-    if (ui::Pill("Abrir carpeta", ui::kGreyTop, ui::kGreyBottom, true, hasMod))
+    if (ui::Pill(Tr("Abrir carpeta", "Open folder"), ui::kGreyTop, ui::kGreyBottom, true, hasMod))
         OpenInExplorer(replaced ? Replacements(a, t).front().parent_path() : ModRoot(a));
     if (t.key.hasPalette) {
-        ImGui::Checkbox("Aplicar a todas las paletas (el reemplazo se usa con cualquier color de paleta)", &a.allPalettes);
+        ImGui::Checkbox(Tr("Aplicar a todas las paletas (el reemplazo se usa con cualquier color de paleta)###allpalettes",
+                           "Apply to all palettes (the replacement is used with any palette colors)###allpalettes"),
+                        &a.allPalettes);
     }
-    if (ImGui::SmallButton("Copiar nombre")) ImGui::SetClipboardText((t.name + ".png").c_str());
+    if (ImGui::SmallButton(Tr("Copiar nombre###copyname", "Copy name###copyname"))) ImGui::SetClipboardText((t.name + ".png").c_str());
     ImGui::EndGroup();
     ui::EndPanel();
 }
@@ -634,17 +676,17 @@ void DrawFooter(App& a, float w, float y) {
     dl->AddLine(ImVec2(0, y), ImVec2(w, y), ui::kBlueBottom, 3);
     ImGui::SetCursorScreenPos(ImVec2(10, y + 8));
     const bool hasMod = a.activeMod >= 0;
-    if (ui::Pill("Exportar esta vista", ui::kOrangeTop, ui::kOrangeBottom)) a.pending = Pending::ExportCategory;
+    if (ui::Pill(Tr("Exportar esta vista", "Export this view"), ui::kOrangeTop, ui::kOrangeBottom)) a.pending = Pending::ExportCategory;
     ImGui::SameLine();
-    if (ui::Pill("Importar carpeta...", ui::kGreenTop, ui::kGreenBottom)) {
+    if (ui::Pill(Tr("Importar carpeta...", "Import folder..."), ui::kGreenTop, ui::kGreenBottom)) {
         if (hasMod) a.pending = Pending::ImportFolder;
-        else Toast(a, "Crea o elige un mod arriba antes de importar.", true);
+        else Toast(a, Tr("Crea o elige un mod arriba antes de importar.", "Create or choose a mod above before importing."), true);
     }
     ImGui::SameLine();
-    if (ui::Pill("Capturar en juego", ui::kBlueTop, ui::kBlueBottom)) {
+    if (ui::Pill(Tr("Capturar en juego", "Capture in game"), ui::kBlueTop, ui::kBlueBottom)) {
         std::string error;
         if (!fs::exists(a.paths.game)) {
-            Toast(a, "No se encuentra el ejecutable del juego.", true);
+            Toast(a, Tr("No se encuentra el ejecutable del juego.", "The game's executable was not found."), true);
         } else if (a.capture.Start(a.paths.game, a.paths.userData / "Cache" / "texture_dumps", &error)) {
             a.capturing = true;
         } else {
@@ -652,10 +694,11 @@ void DrawFooter(App& a, float w, float y) {
         }
     }
     ImGui::SameLine();
-    if (ui::Pill("Empaquetar .zip", ui::kGreyTop, ui::kGreyBottom, false, hasMod)) a.pending = Pending::Zip;
+    if (ui::Pill(Tr("Empaquetar .zip", "Pack as .zip"), ui::kGreyTop, ui::kGreyBottom, false, hasMod)) a.pending = Pending::Zip;
     const std::string status = !a.toast.empty() ? a.toast
-                                                : "Índice: " + std::to_string(a.catalog.Textures().size()) +
-                                                      " texturas · project.bin de tu juego · listo";
+                                                : Tr("Índice: ", "Index: ") + std::to_string(a.catalog.Textures().size()) +
+                                                      Tr(" texturas · project.bin de tu juego · listo",
+                                                         " textures · your game's project.bin · ready");
     const ImVec2 ts = ImGui::CalcTextSize(status.c_str());
     dl->AddText(ImVec2(std::max(w - ts.x - 16, ImGui::GetCursorScreenPos().x + 20), y + 22),
                 a.toastError ? ui::kRedTop : ui::kMuted, status.c_str());
@@ -667,8 +710,11 @@ void StartDialog(App& a, SDL_Window* window) {
         return;
     }
     a.dialogOpen = true;
-    static const SDL_DialogFileFilter png[] = {{"Imágenes PNG o DDS", "png;dds"}};
-    static const SDL_DialogFileFilter zip[] = {{"Archivo .zip", "zip"}};
+    // The filter lists must stay valid until the dialog answers: one static list per language.
+    static const SDL_DialogFileFilter pngs[2][1] = {{{"Imágenes PNG o DDS", "png;dds"}}, {{"PNG or DDS images", "png;dds"}}};
+    static const SDL_DialogFileFilter zips[2][1] = {{{"Archivo .zip", "zip"}}, {{".zip file", "zip"}}};
+    const SDL_DialogFileFilter* png = pngs[power_pros_ui::g_lang == power_pros_ui::Lang::En];
+    const SDL_DialogFileFilter* zip = zips[power_pros_ui::g_lang == power_pros_ui::Lang::En];
     switch (a.pending) {
     case Pending::ExportOne: {
         const std::string name = a.catalog.Textures()[a.selected].name + ".png";
@@ -694,9 +740,9 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
     switch (what) {
     case Pending::ExportOne: {
         const Image img = a.catalog.Original(a.catalog.Textures()[a.selected]);
-        if (img.Empty()) Toast(a, "Este formato no se puede exportar.", true);
+        if (img.Empty()) Toast(a, Tr("Este formato no se puede exportar.", "This format can't be exported."), true);
         else if (SavePng(path.extension().empty() ? fs::path(path).replace_extension(".png") : path, img, &error))
-            Toast(a, "Exportada: " + Utf8(path.filename()));
+            Toast(a, Tr("Exportada: ", "Exported: ") + Utf8(path.filename()));
         else Toast(a, error, true);
         break;
     }
@@ -712,14 +758,17 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
         struct Result { size_t n = 0, grey = 0; std::vector<std::string> problems; };
         auto result = std::make_shared<Result>();
         StartJob(
-            a, "Exportando texturas...",
+            a, Tr("Exportando texturas...", "Exporting textures..."),
             [&a, path, result, textures = a.visible](Progress& p) {
                 result->n = Export(a.catalog, textures, path, &result->problems, &p, &result->grey);
             },
             [&a, path, result] {
-                std::string text = std::to_string(result->n) + " texturas exportadas en " + Utf8(path);
-                if (result->grey) text += " · " + std::to_string(result->grey) + " en gris (su paleta está en otro pack)";
-                if (!result->problems.empty()) text += " · " + std::to_string(result->problems.size()) + " no se pudieron exportar";
+                std::string text = std::to_string(result->n) + Tr(" texturas exportadas en ", " textures exported to ") + Utf8(path);
+                if (result->grey)
+                    text += " · " + std::to_string(result->grey) +
+                            Tr(" en gris (su paleta está en otro pack)", " in grey (their palette is in another pack)");
+                if (!result->problems.empty())
+                    text += " · " + std::to_string(result->problems.size()) + Tr(" no se pudieron exportar", " could not be exported");
                 Toast(a, text, !result->problems.empty() && result->n == 0);
             });
         break;
@@ -727,7 +776,7 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
     case Pending::ImportFolder: {
         auto result = std::make_shared<std::vector<ImportResult>>();
         StartJob(
-            a, "Importando texturas...",
+            a, Tr("Importando texturas...", "Importing textures..."),
             [&a, path, result, mod = ModRoot(a)](Progress& p) { *result = ImportFolder(a.catalog, path, mod, &p); },
             [&a, result] {
                 a.report = std::move(*result);
@@ -741,10 +790,10 @@ void FinishDialog(App& a, Pending what, const std::string& chosen) {
     case Pending::Zip: {
         auto result = std::make_shared<std::pair<bool, std::string>>();
         StartJob(
-            a, "Empaquetando el mod...",
+            a, Tr("Empaquetando el mod...", "Packing the mod..."),
             [path, result, mod = ModRoot(a)](Progress&) { result->first = WriteZip(mod, path, &result->second); },
             [&a, path, result] {
-                if (result->first) Toast(a, "Mod empaquetado: " + Utf8(path));
+                if (result->first) Toast(a, Tr("Mod empaquetado: ", "Mod packed: ") + Utf8(path));
                 else Toast(a, result->second, true);
             });
         break;
@@ -761,10 +810,10 @@ void DrawPopups(App& a, SDL_Renderer* r) {
         a.job.running = false;
         if (a.job.finish) a.job.finish();
     }
-    if (a.job.running) ImGui::OpenPopup("Trabajando");
+    if (a.job.running) ImGui::OpenPopup("###working");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(520, 0));
-    if (ImGui::BeginPopupModal("Trabajando", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
+    if (ImGui::BeginPopupModal("###working", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
         const size_t done = a.job.progress.done, total = a.job.progress.total;
         ImGui::TextUnformatted(a.job.label.c_str());
         const std::string count = total ? std::to_string(done) + " / " + std::to_string(total) : std::string();
@@ -773,43 +822,43 @@ void DrawPopups(App& a, SDL_Renderer* r) {
         if (!a.job.running) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-    if (a.openNewMod) { ImGui::OpenPopup("Nuevo mod"); a.openNewMod = false; }
+    if (a.openNewMod) { ImGui::OpenPopup("###newmod"); a.openNewMod = false; }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Nuevo mod", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Nombre del mod (será la carpeta en mods\\):");
+    if (ImGui::BeginPopupModal(Tr("Nuevo mod###newmod", "New mod###newmod"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(Tr("Nombre del mod (será la carpeta en mods\\):", "Mod name (it becomes its folder in mods\\):"));
         ImGui::SetNextItemWidth(380);
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         const bool enter = ImGui::InputText("##name", a.newModName, sizeof a.newModName, ImGuiInputTextFlags_EnterReturnsTrue);
         if (!a.newModError.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::kRedTop), "%s", a.newModError.c_str());
-        if (ui::Pill("Crear", ui::kGreenTop, ui::kGreenBottom, true) || enter) {
+        if (ui::Pill(Tr("Crear", "Create"), ui::kGreenTop, ui::kGreenBottom, true) || enter) {
             std::string error;
             if (CreateMod(a.paths.mods, a.newModName, &error)) {
                 RefreshMods(a, *ValidModName(a.newModName, nullptr));
                 a.thumbs.Clear();
                 Refilter(a);
-                Toast(a, "Mod creado. Actívalo para verlo en el juego.");
+                Toast(a, Tr("Mod creado. Actívalo para verlo en el juego.", "Mod created. Enable it to see it in the game."));
                 ImGui::CloseCurrentPopup();
             } else {
                 a.newModError = error;
             }
         }
         ImGui::SameLine();
-        if (ui::Pill("Cancelar", ui::kGreyTop, ui::kGreyBottom, true)) ImGui::CloseCurrentPopup();
+        if (ui::Pill(Tr("Cancelar", "Cancel"), ui::kGreyTop, ui::kGreyBottom, true)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
-    if (a.openReport) { ImGui::OpenPopup("Informe de importación"); a.openReport = false; }
+    if (a.openReport) { ImGui::OpenPopup("###report"); a.openReport = false; }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(900, 520), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Informe de importación")) {
+    if (ImGui::BeginPopupModal(Tr("Informe de importación###report", "Import report###report"))) {
         int ok = 0;
         for (const auto& x : a.report) ok += x.ok;
-        ImGui::Text("%d importadas, %d con problemas", ok, static_cast<int>(a.report.size()) - ok);
+        ImGui::Text(Tr("%d importadas, %d con problemas", "%d imported, %d with problems"), ok, static_cast<int>(a.report.size()) - ok);
         if (ImGui::BeginTable("##report", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders,
                               ImVec2(0, 400))) {
-            ImGui::TableSetupColumn("Archivo", ImGuiTableColumnFlags_WidthStretch, 2);
+            ImGui::TableSetupColumn(Tr("Archivo", "File"), ImGuiTableColumnFlags_WidthStretch, 2);
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 40);
-            ImGui::TableSetupColumn("Resultado", ImGuiTableColumnFlags_WidthStretch, 3);
+            ImGui::TableSetupColumn(Tr("Resultado", "Result"), ImGuiTableColumnFlags_WidthStretch, 3);
             ImGui::TableHeadersRow();
             for (const auto& x : a.report) {
                 ImGui::TableNextRow();
@@ -822,7 +871,7 @@ void DrawPopups(App& a, SDL_Renderer* r) {
             }
             ImGui::EndTable();
         }
-        if (ui::Pill("Cerrar", ui::kBlueTop, ui::kBlueBottom, true)) ImGui::CloseCurrentPopup();
+        if (ui::Pill(Tr("Cerrar", "Close"), ui::kBlueTop, ui::kBlueBottom, true)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -857,23 +906,24 @@ void DrawPopups(App& a, SDL_Renderer* r) {
         ImGui::EndPopup();
     }
 
-    if (a.capturing) ImGui::OpenPopup("Capturando");
+    if (a.capturing) ImGui::OpenPopup("###capturing");
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Capturando", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Juega hasta la pantalla que quieras y cierra el juego.");
-        ImGui::TextUnformatted("Las texturas que aparezcan quedarán marcadas en una sesión nueva.");
+    if (ImGui::BeginPopupModal(Tr("Capturando###capturing", "Capturing###capturing"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(Tr("Juega hasta la pantalla que quieras y cierra el juego.", "Play up to the screen you want, then close the game."));
+        ImGui::TextUnformatted(Tr("Las texturas que aparezcan quedarán marcadas en una sesión nueva.",
+                                   "The textures that appear will be marked in a new session."));
         if (!a.capture.Running()) {
             a.capturing = false;
             auto [n, files] = a.capture.Collect(a.paths.userData / "Cache" / "texture_studio" / "captures");
             if (n == 0) {
-                Toast(a, "El juego no mostró texturas nuevas en esta captura.");
+                Toast(a, Tr("El juego no mostró texturas nuevas en esta captura.", "The game showed no new textures in this capture."));
             } else {
                 a.catalog.AddCapture(n, files);
                 a.sessions.emplace_back(n, files);
                 RebuildCounts(a);
                 a.session = n;
                 Refilter(a);
-                Toast(a, "Sesión " + std::to_string(n) + ": " + std::to_string(files.size()) + " texturas vistas.");
+                Toast(a, Tr("Sesión ", "Session ") + std::to_string(n) + ": " + std::to_string(files.size()) + Tr(" texturas vistas.", " textures seen."));
             }
             ImGui::CloseCurrentPopup();
         }
@@ -934,13 +984,16 @@ int main(int, char**) {
 
     auto app = std::make_unique<App>();
     App& a = *app;
-    a.paths = ResolvePaths(args, &a.fatal);
-    if (a.fatal.empty())
+    a.paths = ResolvePaths(args, &a.gameMissing);
+    LoadLanguage(a.paths.config);
+    for (size_t i = 0; i + 1 < args.size(); ++i)  // --lang es|en: this session only (screenshot tests)
+        if (args[i] == "--lang") power_pros_ui::g_lang = power_pros_ui::LangFromSetting(args[i + 1]);
+    if (!a.gameMissing)
         a.builder = std::thread([&a] {
             try {
                 a.catalog.Build(a.paths.projectBin, &a.progress, &a.buildError);
             } catch (const std::exception& e) {
-                a.buildError = std::string("No se pudo leer project.bin: ") + e.what();
+                a.buildError = std::string(Tr("No se pudo leer project.bin: ", "Could not read project.bin: ")) + e.what();
             }
             a.built = true;
         });
@@ -1003,17 +1056,17 @@ int main(int, char**) {
         ImGui::PopStyleVar();
         DrawBand(a, vs.x);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        if (!a.fatal.empty()) {
+        if (a.gameMissing || !a.fatal.empty()) {
             ImGui::SetCursorPos(ImVec2(vs.x * 0.2f, vs.y * 0.35f));
             ImGui::PushTextWrapPos(vs.x * 0.8f);
-            ImGui::TextUnformatted(a.fatal.c_str());
+            ImGui::TextUnformatted(a.gameMissing ? GameMissingText() : a.fatal.c_str());
             ImGui::PopTextWrapPos();
             ImGui::SetCursorPos(ImVec2(vs.x * 0.2f, vs.y * 0.35f + 120));
-            if (ui::Pill("Salir", ui::kGreyTop, ui::kGreyBottom)) quit = true;
+            if (ui::Pill(Tr("Salir", "Quit"), ui::kGreyTop, ui::kGreyBottom)) quit = true;
         } else if (!a.ready) {
             const float w = vs.x * 0.5f, x = (vs.x - w) / 2, y = vs.y * 0.48f;
             char label[96];
-            std::snprintf(label, sizeof label, "Leyendo las texturas del juego... %d %%", static_cast<int>(a.progress * 100));
+            std::snprintf(label, sizeof label, Tr("Leyendo las texturas del juego... %d %%", "Reading the game's textures... %d %%"), static_cast<int>(a.progress * 100));
             dl->AddText(ImVec2(x, y - 34), IM_COL32_WHITE, label);
             dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + 18), ui::kPanel, 9);
             dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w * a.progress, y + 18), ui::kBlueTop, 9);

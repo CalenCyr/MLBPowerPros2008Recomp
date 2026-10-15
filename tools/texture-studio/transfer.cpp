@@ -2,6 +2,7 @@
 #include "transfer.h"
 
 #include "images.h"
+#include "lang.h"
 #include "modfolder.h"
 
 #include <cctype>
@@ -52,7 +53,7 @@ bool WriteNames(const Image& img, const std::filesystem::path& modRoot, const Ca
         }
         if (ec) {
             std::filesystem::remove(temp, ec);
-            if (error) *error = "No se puede escribir " + Utf8(target.filename()) + ".";
+            if (error) *error = Tr("No se puede escribir ", "Can't write ") + Utf8(target.filename()) + ".";
             return false;
         }
         written.insert(target);
@@ -89,7 +90,7 @@ ImportResult ImportNames(Catalog& c, int index, const std::filesystem::path& fil
         return r;
     }
     r.ok = true;
-    r.message = size == SizeCheck::Ok ? "Importada." : SizeCheckMessage(size);
+    r.message = size == SizeCheck::Ok ? Tr("Importada.", "Imported.") : SizeCheckMessage(size);
     return r;
 }
 
@@ -140,7 +141,8 @@ std::vector<ImportResult> ImportFolder(Catalog& c, const std::filesystem::path& 
         if (ext != ".png" && ext != ".dds") continue;
         const std::string stem = Utf8(it->path().stem());
         if (!ParseName(stem)) {
-            out.push_back({Utf8(it->path().filename()), "", false, "Nombre no reconocido (debe empezar por tex1_)."});
+            out.push_back({Utf8(it->path().filename()), "", false,
+                           Tr("Nombre no reconocido (debe empezar por tex1_).", "Name not recognized (it must start with tex1_).")});
             continue;
         }
         auto [pos, inserted] = byName.emplace(stem, it->path());
@@ -150,7 +152,7 @@ std::vector<ImportResult> ImportFolder(Catalog& c, const std::filesystem::path& 
         const auto loser = replace ? pos->second : it->path();
         if (replace) pos->second = it->path();
         out.push_back({Utf8(loser.lexically_relative(folder)), stem, false,
-                       "Repetido: se usó " + Utf8(pos->second.lexically_relative(folder)) + "."});
+                       Tr("Repetido: se usó ", "Duplicate: used ") + Utf8(pos->second.lexically_relative(folder)) + "."});
     }
     if (progress) progress->total = byName.size();
     Found found = FindReplacements(modRoot);  // scanned once for the whole folder
@@ -164,7 +166,8 @@ std::vector<ImportResult> ImportFolder(Catalog& c, const std::filesystem::path& 
             const auto replaces = name.paletteWildcard ? ReplacementNames(c.Textures()[j]) : std::vector<std::string>{stem};
             out.push_back(ImportNames(c, j, file, modRoot, {stem}, replaces, found));
         } else {
-            out.push_back({Utf8(file.filename()), stem, false, "No corresponde a ninguna textura del juego."});
+            out.push_back({Utf8(file.filename()), stem, false,
+                           Tr("No corresponde a ninguna textura del juego.", "Doesn't match any texture in the game.")});
         }
         if (progress) ++progress->done;
     }
@@ -180,7 +183,7 @@ size_t Export(Catalog& c, const std::vector<int>& textures, const std::filesyste
         const Image img = c.Original(t);
         std::string error;
         if (img.Empty()) {
-            if (problems) problems->push_back(t.name + ": formato no soportado para exportar");
+            if (problems) problems->push_back(t.name + Tr(": formato no soportado para exportar", ": format not supported for export"));
         } else {
             const auto file = out / CategoryPath(t) / PathFromUtf8(t.name + ".png");
             if (SavePng(file, img, &error)) {

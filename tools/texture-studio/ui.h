@@ -37,6 +37,47 @@ inline bool Pill(const char* label, ImU32 top, ImU32 bottom, bool small = false,
     return clicked;
 }
 
+// Small two-way "ES | EN" pill: the active language lit like a blue pill, the other one dark.
+// Returns true (and sets *lang) when the other language is clicked.
+inline bool LangSwitch(power_pros_ui::Lang* lang) {
+    using namespace power_pros_ui;
+    const float fs = 15.0f, seg = 38.0f, h = fs + 12, r = h * 0.5f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 a(p.x + 4, p.y + 4), b(a.x + 2 * seg, a.y + h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(a.x - 3, a.y - 3 + 4), ImVec2(b.x + 3, b.y + 3 + 4), Rgba(0, 20, 70, 110), r + 3);
+    dl->AddRectFilled(ImVec2(a.x - 3, a.y - 3), ImVec2(b.x + 3, b.y + 3), IM_COL32_WHITE, r + 3);
+    dl->AddRectFilled(a, b, kFooter, r);
+    bool changed = false;
+    for (int i = 0; i < 2; ++i) {
+        const Lang l = i == 0 ? Lang::Es : Lang::En;
+        const ImVec2 sa(a.x + i * seg, a.y), sb(sa.x + seg, b.y);
+        ImGui::SetCursorScreenPos(sa);
+        ImGui::PushID(i);
+        const bool clicked = ImGui::InvisibleButton("##lang", ImVec2(seg, h));
+        ImGui::PopID();
+        const bool on = *lang == l, hot = !on && ImGui::IsItemHovered();
+        const ImDrawFlags corners = i == 0 ? ImDrawFlags_RoundCornersLeft : ImDrawFlags_RoundCornersRight;
+        if (on) {
+            const int start = dl->VtxBuffer.Size;
+            dl->AddRectFilled(sa, sb, IM_COL32_WHITE, r, corners);
+            Shade(dl, start, sa.y, sb.y, kBlueTop, kBlueBottom);
+        } else if (hot) {
+            dl->AddRectFilled(sa, sb, kPanelHeader, r, corners);
+        }
+        const char* text = i == 0 ? "ES" : "EN";
+        const ImVec2 ts = TextSize(g_bold, fs, text);
+        ShadowedText(dl, g_bold, fs, ImVec2(sa.x + (seg - ts.x) * 0.5f, sa.y + (h - fs) * 0.5f - 1), on ? IM_COL32_WHITE : kMuted, text);
+        if (clicked && !on) {
+            *lang = l;
+            changed = true;
+        }
+    }
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(a, b))
+        ImGui::SetTooltip("Idioma / Language");  // both: readable whichever is active
+    return changed;
+}
+
 // Panel = child window with the calm colours and a header strip. With a header, the content scrolls in
 // its own region below it, so rows never slide under the header.
 inline std::vector<bool>& PanelStack() {

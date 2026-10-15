@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "modfolder.h"
 
+#include "lang.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -51,17 +53,17 @@ std::optional<std::string> ValidModName(std::string_view raw, std::string* error
         if (error) *error = why;
         return std::nullopt;
     };
-    if (name.empty()) return fail("Escribe un nombre para el mod.");
-    if (name.size() > 60) return fail("El nombre es demasiado largo (máximo 60 caracteres).");
+    if (name.empty()) return fail(Tr("Escribe un nombre para el mod.", "Type a name for the mod."));
+    if (name.size() > 60) return fail(Tr("El nombre es demasiado largo (máximo 60 caracteres).", "The name is too long (60 characters at most)."));
     for (char c : name)
         if (static_cast<unsigned char>(c) < 32 || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos)
-            return fail("El nombre no puede llevar < > : \" / \\ | ? *");
-    if (name.back() == '.') return fail("El nombre no puede terminar en punto.");
+            return fail(Tr("El nombre no puede llevar < > : \" / \\ | ? *", "The name can't contain < > : \" / \\ | ? *"));
+    if (name.back() == '.') return fail(Tr("El nombre no puede terminar en punto.", "The name can't end with a period."));
     std::string upper = Trim(name.substr(0, name.find('.')));
     for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     const bool numbered = upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '1' && upper[3] <= '9';
     if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" || numbered)
-        return fail("Windows no permite ese nombre de carpeta.");
+        return fail(Tr("Windows no permite ese nombre de carpeta.", "Windows doesn't allow that folder name."));
     return name;
 }
 
@@ -83,7 +85,7 @@ bool CreateMod(const std::filesystem::path& modsDir, const std::string& rawName,
     const auto root = modsDir / PathFromUtf8(*name);
     std::error_code ec;
     if (std::filesystem::exists(root, ec)) {
-        if (error) *error = "Ya existe un mod con ese nombre.";
+        if (error) *error = Tr("Ya existe un mod con ese nombre.", "A mod with that name already exists.");
         return false;
     }
     std::filesystem::create_directories(root / "textures", ec);
@@ -96,7 +98,7 @@ bool CreateMod(const std::filesystem::path& modsDir, const std::string& rawName,
     toml << "name = \"" << escaped << "\"\r\nversion = \"1\"\r\n"
          << "description = \"Texturas creadas con Power Pros Wii 2008 Texture Studio.\"\r\n";
     if (ec || !toml) {
-        if (error) *error = "No se puede crear la carpeta del mod (¿permisos?).";
+        if (error) *error = Tr("No se puede crear la carpeta del mod (¿permisos?).", "Can't create the mod folder (permissions?).");
         return false;
     }
     return true;
@@ -133,7 +135,7 @@ bool WriteZip(const std::filesystem::path& modRoot, const std::filesystem::path&
         std::ifstream in(path, std::ios::binary);
         const std::string data((std::istreambuf_iterator<char>(in)), {});
         if (offset + data.size() > 0xFFFFFFF0ull) {
-            if (error) *error = "El mod pasa de 4 GB: no cabe en un .zip simple.";
+            if (error) *error = Tr("El mod pasa de 4 GB: no cabe en un .zip simple.", "The mod is over 4 GB: it doesn't fit in a simple .zip.");
             return false;
         }
         const uint32_t crc = Crc32(data);
@@ -157,7 +159,7 @@ bool WriteZip(const std::filesystem::path& modRoot, const std::filesystem::path&
     u32(end, static_cast<uint32_t>(central.size())); u32(end, static_cast<uint32_t>(offset)); u16(end, 0);
     out << central << end;
     if (!out) {
-        if (error) *error = "No se puede escribir el .zip.";
+        if (error) *error = Tr("No se puede escribir el .zip.", "Can't write the .zip.");
         return false;
     }
     return true;
