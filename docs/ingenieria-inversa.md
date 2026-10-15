@@ -752,6 +752,13 @@ Fuentes: `config/wiicompiled/rl8e54-data.csv`, `docs/wiicompiled-feasibility.md`
 - **Mando de GameCube:**
   - `PADRead` `0x800B76BC`; las llamadas del juego a `PADInit`/`PADRead` están en `0x80040B14` / `0x80040BC8`.
   - El juego divide el stick principal entre **88** y el C-stick entre **64**. Las guías reales llegan a ~87 y ~74, así que un ±127 completo se satura al ~69 % del recorrido.
+- **Movimiento del fildeador (comprobado en el juego, 15 de octubre):**
+  - El paquete de entrada de cada puerto está en `common+992+puerto·368` (`common = *(0x8103D118)`); `+12`/`+14` son los ejes del stick en s16.
+  - El decodificador de fildeo `0x8088540C` (llamado desde `0x80884FE4`) solo acepta la entrada mientras un humano mueve a un fildeador. Copia esos ejes a `field+656`/`+658` (`field = *(0x8103E708)`) y devuelve `field`; las salidas tempranas devuelven el paquete.
+  - `0x8096A690` lee ese vector: guarda el ángulo en `field+676` y pone `field+672 = 1` si algún eje pasa de 8 (stick inclinado).
+  - Una diagonal a fondo de un stick redondo, `(60, 61)` tras la puerta de GameCube, hace caminar; el teclado, `(87, 87)`, hace correr. Ampliar solo `+12`/`+14` durante el decodificador, y restaurarlos después, no bastó: el fildeador siguió caminando.
+  - **Solución:** el runtime marca el puerto cuando el decodificador acepta la entrada, y en la siguiente lectura de `PADRead` convierte el stick principal de ese puerto en cuadrado: misma dirección y el radio en cada eje. Así `(90, 90)` sin escalar pasa a `(127, 127)`, como el teclado. Con capturas cada 1,5 s en un partido de prueba con fildeo manual, la marca solo se enciende en la vista de fildeo; al pitchear y al batear queda apagada.
+
 - **Objetos de entrada:** son clases C++ con vtable. Con `base` = búfer de `PADRead` − 1648: mando GC en `base+1104`, KPAD en `base+560`, entrada combinada en `base+16`. Cada uno guarda un anillo de muestras.
 - **Entero a coma flotante:** `0x80040268` convierte con el truco de CodeWarrior. Usa la constante `0x4330000080000000` de `r2-31664` (`0x8031BD90`); si esa constante se corrompe, todas las conversiones con signo fallan.
 - **KPAD/WPAD:** enlazados igual que en Mario Kart Wii.

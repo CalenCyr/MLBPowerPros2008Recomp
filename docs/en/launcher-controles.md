@@ -28,6 +28,12 @@ The settings panel uses the frame drawn on the background only when the window h
 - **Sticks:** each group shows an octagonal gate with the dead zone and the signal MLB receives, using `PADRead` and the port's same conversion to GameCube ranges (87/74, normalized by MLB between 88/64). Below, dead zone and sensitivity. A sensitivity below 1 softens the response near the center; one above 1 speeds it up. Both keep the full range of travel.
 - **Test sticks** (**Probar sticks**) (in Options) stops the sticks from moving the menu while you test them; Esc or OPTIONS ends it.
 
+### Diagonals while fielding
+
+A modern stick is round: pushed fully on a diagonal it gives about `(60, 61)` on the GameCube scale, and with that the fielder walks. The keyboard (W + D, for example) gives `(87, 87)` and runs. While you control a fielder, the runtime reads that controller's main stick as a square: same direction, and the stick's full travel on each axis. A full diagonal then arrives just like the keyboard's, and the fielder runs. Straight directions and partial tilts do not change, so you can still walk.
+
+It only applies while the game uses that controller's fielding control. When batting, pitching and in menus the stick stays the same, and **Test sticks** shows the usual signal. Patch `tools/patches/wiicompiled-mlb-fielding-diagonals.patch`; test `mlb_fielding_stick_tests`. Details in `docs/en/ingenieria-inversa.md` (section 9, "Controllers").
+
 ## Back and closing
 
 Back (Esc, Backspace, K or Circle/B) only counts on the frame it is pressed and never repeats. That way, the press that closes a drop-down or cancels a capture doesn't also close the settings page. Before, holding it for a moment caused those chained closes.

@@ -751,6 +751,13 @@ Sources: `config/wiicompiled/rl8e54-data.csv`, `docs/en/wiicompiled-feasibility.
 - **GameCube controller:**
   - `PADRead` `0x800B76BC`; the game's calls to `PADInit`/`PADRead` are at `0x80040B14` / `0x80040BC8`.
   - The game divides the main stick by **88** and the C-stick by **64**. The real stick gates reach ~87 and ~74, so a full ±127 saturates at ~69% of the travel.
+- **Fielder movement (checked in the game, October 15):**
+  - Each port's input packet is at `common+992+port·368` (`common = *(0x8103D118)`); `+12`/`+14` are the stick axes as s16.
+  - The fielding decoder `0x8088540C` (called from `0x80884FE4`) only accepts input while a human moves a fielder. It copies those axes to `field+656`/`+658` (`field = *(0x8103E708)`) and returns `field`; early exits return the packet.
+  - `0x8096A690` reads that vector: it stores the angle in `field+676` and sets `field+672 = 1` when either axis is above 8 (stick tilted).
+  - A full diagonal of a round stick, `(60, 61)` after the GameCube gate, makes the fielder walk; the keyboard, `(87, 87)`, makes him run. Widening only `+12`/`+14` during the decoder, and restoring them afterwards, was not enough: the fielder kept walking.
+  - **Fix:** the runtime marks the port when the decoder accepts the input, and on the next `PADRead` it turns that port's main stick into a square: same direction and the radius on each axis. So an unscaled `(90, 90)` becomes `(127, 127)`, like the keyboard. With captures every 1.5 s in a test match with manual fielding, the mark only turns on in the fielding view; it stays off while pitching and batting.
+
 - **Input objects:** they are C++ classes with a vtable. With `base` = `PADRead` buffer − 1648: GC controller at `base+1104`, KPAD at `base+560`, combined input at `base+16`. Each keeps a ring of samples.
 - **Integer to floating point:** `0x80040268` converts with the CodeWarrior trick. It uses the constant `0x4330000080000000` from `r2-31664` (`0x8031BD90`); if that constant gets corrupted, all signed conversions fail.
 - **KPAD/WPAD:** linked the same as in Mario Kart Wii.

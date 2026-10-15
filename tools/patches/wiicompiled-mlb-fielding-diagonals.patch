@@ -1,0 +1,181 @@
+diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
+index 06c2430..eecda28 100644
+--- a/runtime/CMakeLists.txt
++++ b/runtime/CMakeLists.txt
+@@ -354,6 +354,10 @@ set_target_properties(mkw_platform PROPERTIES UNITY_BUILD OFF)
+ # Keep these independent from Aurora's BUILD_TESTING option: they validate the
+ # project's host-platform contracts, not Aurora's third-party test suite.
+ enable_testing()
++add_executable(mlb_fielding_stick_tests "${CMAKE_CURRENT_LIST_DIR}/tests/mlb_fielding_stick_tests.cpp")
++target_include_directories(mlb_fielding_stick_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
++target_compile_features(mlb_fielding_stick_tests PRIVATE cxx_std_20)
++add_test(NAME mlb_fielding_stick_tests COMMAND mlb_fielding_stick_tests)
+ if(MKW_BUILD_PSQ_TESTS)
+     add_executable(mkw_psq_helpers_tests
+         "${CMAKE_CURRENT_LIST_DIR}/tests/psq_helpers_tests.cpp"
+diff --git a/runtime/include/mlb_fielding_stick.h b/runtime/include/mlb_fielding_stick.h
+new file mode 100644
+index 0000000..551aae4
+--- /dev/null
++++ b/runtime/include/mlb_fielding_stick.h
+@@ -0,0 +1,31 @@
++#pragma once
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdint>
++
++// RL8E54 fielding: a fielder runs on a diagonal only when the stick reads like the keyboard's W+D,
++// (127,127) before the GameCube gate scaling. A modern stick is a circle and gives about (90,90)
++// there, so the fielder walks. While the fielding decoder (0x8088540C) is active for a port, that
++// port's main stick is read as a square instead: same direction, the radius on each axis.
++// Batting and pitching never go through the decoder and keep the circle.
++namespace mlb_fielding {
++struct Stick { int x, y; };
++
++inline Stick SquareStick(int x, int y) {
++    if (x == 0 || y == 0) return {x, y};
++    const double radius = std::min(std::hypot(double(x), double(y)), 127.0);
++    const double scale = radius / std::max(std::abs(x), std::abs(y));
++    const auto axis = [&](int v) { return std::clamp(int(std::lround(v * scale)), -127, 127); };
++    return {axis(x), axis(y)};
++}
++
++// PAD reads (one per frame) on which the decoder last ran for each port.
++struct Window {
++    std::array<uint64_t, 4> marked{};
++    void Mark(unsigned port, uint64_t read) { if (port < marked.size()) marked[port] = read + 1; }
++    bool Active(unsigned port, uint64_t read) const {
++        return port < marked.size() && marked[port] != 0 && read <= marked[port];
++    }
++};
++}
+diff --git a/runtime/src/hle/input/pad.cpp b/runtime/src/hle/input/pad.cpp
+index e6b2bc0..52ef26d 100644
+--- a/runtime/src/hle/input/pad.cpp
++++ b/runtime/src/hle/input/pad.cpp
+@@ -137,6 +137,11 @@ void ScaleSticksToGameCubeRange(PADStatus* statuses) {
+ 
+ } // namespace
+ 
++#if defined(WIICOMPILED_GAME_RL8E54)
++// mlb_fielding_stick.cpp: squares the main stick of a port that is moving a fielder.
++extern "C" void MLB_FieldingSquareSticks(PADStatus* statuses, uint32_t count);
++#endif
++
+ extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled)
+ {
+     g_rumbleEnabled.store(enabled, std::memory_order_relaxed);
+@@ -167,6 +172,9 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
+     FillTriggersHeldByButtons(statuses);
+     InputBindings::Apply(statuses);
+     ApplyPadScript(statuses);
++#if defined(WIICOMPILED_GAME_RL8E54)
++    MLB_FieldingSquareSticks(statuses, PAD_CHANMAX);
++#endif
+     ScaleSticksToGameCubeRange(statuses);
+ 
+     try {
+diff --git a/runtime/src/mlb_fielding_stick.cpp b/runtime/src/mlb_fielding_stick.cpp
+new file mode 100644
+index 0000000..42d44af
+--- /dev/null
++++ b/runtime/src/mlb_fielding_stick.cpp
+@@ -0,0 +1,54 @@
++#include "abi_bridge.h"
++#include "memory.h"
++#include "mlb_fielding_stick.h"
++#include <dolphin/pad.h>
++#include <SDL3/SDL_timer.h>
++#include <cstdio>
++#include <cstdlib>
++
++#if defined(WIICOMPILED_GAME_RL8E54)
++// Retain the translated decoder: it owns button flags, options and guest ABI.
++#include "generated/functions/func_8088540C.cpp"
++
++namespace {
++mlb_fielding::Window g_window;
++uint64_t g_padReads = 0;
++bool g_traceActive[2] = {};
++const bool g_trace = std::getenv("WIICOMPILED_FIELDING_TRACE") != nullptr;
++
++// The fielding decoder: runs only while a human moves a fielder. It returns the field pointer when
++// it accepted the input (early exits keep the input packet pointer). The packet is
++// common+992+port*368, one per PAD port.
++void MLB_FieldingDecoder(CpuContext* ctx) {
++    const uint32_t packet = ctx->gpr[3];
++    func_8088540C(ctx);
++    const uint32_t common = Memory::Read32(0x8103D118);
++    const uint32_t field = Memory::Read32(0x8103E708);
++    if (common == 0 || field == 0 || ctx->gpr[3] != field || packet < common + 992) return;
++    const uint32_t offset = packet - common - 992;
++    if (offset % 368 != 0 || offset / 368 >= 2) return;
++    g_window.Mark(offset / 368, g_padReads);
++}
++
++REGISTER_NATIVE_FUNCTION(0x8088540C, MLB_FieldingDecoder);
++}
++
++// Called by PADRead before the GameCube gate scaling: square the main stick of the ports that are
++// fielding (the decoder ran on the previous read).
++extern "C" void MLB_FieldingSquareSticks(PADStatus* statuses, uint32_t count) {
++    ++g_padReads;
++    for (uint32_t port = 0; port < count && port < 2; ++port) {
++        const bool active = g_window.Active(port, g_padReads);
++        if (g_trace && active != g_traceActive[port]) {
++            std::fprintf(stderr, "[fielding-stick] port %u %s at PAD read %llu, %llu ms\n", port,
++                         active ? "fielding" : "off", static_cast<unsigned long long>(g_padReads),
++                         static_cast<unsigned long long>(SDL_GetTicks()));
++            g_traceActive[port] = active;
++        }
++        if (!active) continue;
++        const auto s = mlb_fielding::SquareStick(statuses[port].stickX, statuses[port].stickY);
++        statuses[port].stickX = static_cast<s8>(s.x);
++        statuses[port].stickY = static_cast<s8>(s.y);
++    }
++}
++#endif
+diff --git a/runtime/tests/mlb_fielding_stick_tests.cpp b/runtime/tests/mlb_fielding_stick_tests.cpp
+new file mode 100644
+index 0000000..14b8d9a
+--- /dev/null
++++ b/runtime/tests/mlb_fielding_stick_tests.cpp
+@@ -0,0 +1,37 @@
++#include "mlb_fielding_stick.h"
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++void Check(bool ok, const char* message) { if (!ok) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); } }
++int main() {
++    using mlb_fielding::SquareStick;
++    // The user's DualSense at a full diagonal reads about (90,90) before the GameCube gate scaling
++    // (60,61 after it); the keyboard's W+D is (127,127), and that one runs.
++    const auto diagonal = SquareStick(90, 90);
++    Check(diagonal.x == 127 && diagonal.y == 127, "full controller diagonal must equal the keyboard's (127,127)");
++    const auto lopsided = SquareStick(85, 95);
++    Check(std::max(std::abs(lopsided.x), std::abs(lopsided.y)) == 127, "a full diagonal reaches the edge on one axis");
++    Check(std::abs(std::atan2(lopsided.y, lopsided.x) - std::atan2(95.0, 85.0)) < 0.02, "direction kept");
++    for (int v = -127; v <= 127; ++v) {
++        const auto s = SquareStick(v, 0), t = SquareStick(0, v);
++        Check(s.x == v && s.y == 0 && t.x == 0 && t.y == v, "straight directions unchanged");
++    }
++    const auto keyboard = SquareStick(127, 127);
++    Check(keyboard.x == 127 && keyboard.y == 127, "keyboard unchanged");
++    const auto walk = SquareStick(30, 30);
++    Check(walk.x == 42 && walk.y == 42, "a partial tilt stays partial (its radius 42 on each axis)");
++    for (int x = -127; x <= 127; ++x) for (int y = -127; y <= 127; ++y) {
++        const auto s = SquareStick(x, y), o = SquareStick(-x, -y);
++        Check(std::abs(s.x) <= 127 && std::abs(s.y) <= 127, "bounded");
++        Check(s.x == -o.x && s.y == -o.y, "symmetric");
++        Check(std::abs(s.x) >= std::abs(x) && std::abs(s.y) >= std::abs(y), "never shrinks the input");
++    }
++
++    // Active only while the fielding decoder ran on the previous or current PAD read.
++    mlb_fielding::Window w;
++    Check(!w.Active(0, 10), "inactive before any fielding");
++    w.Mark(0, 10);
++    Check(w.Active(0, 10) && w.Active(0, 11) && !w.Active(1, 11), "active right after fielding, on that port only");
++    Check(!w.Active(0, 13), "off two reads after fielding stops (back to pitching or batting)");
++    std::puts("Fielding stick: full diagonals equal the keyboard, straight and partial travel kept, only while fielding.");
++}

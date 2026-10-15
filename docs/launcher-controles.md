@@ -28,6 +28,12 @@ El panel de ajustes usa el marco dibujado del fondo solo cuando la ventana tiene
 - **Sticks:** cada grupo muestra una puerta octogonal con la zona muerta y la señal que recibe MLB, usando `PADRead` y la misma conversión a los rangos de GameCube del port (87/74, normalizados por MLB entre 88/64). Debajo, zona muerta y sensibilidad. Una sensibilidad menor de 1 suaviza la respuesta cerca del centro; una mayor de 1 la acelera. Ambas conservan el recorrido completo.
 - **Probar sticks** (en Opciones) evita que los sticks muevan el menú mientras se prueban; Esc u OPTIONS termina.
 
+### Diagonales al fildear
+
+Un stick moderno es redondo: a fondo en diagonal da unos `(60, 61)` en la escala de GameCube, y con eso el fildeador camina. El teclado (por ejemplo W + D) da `(87, 87)` y corre. Mientras controlas a un fildeador, el runtime lee el stick principal de ese mando como un cuadrado: misma dirección, y en cada eje el recorrido total del stick. Una diagonal a fondo llega así igual que con el teclado, y el fildeador corre. Las direcciones rectas y la inclinación parcial no cambian, así que se puede seguir caminando.
+
+Solo se aplica mientras el juego usa el control de fildeo de ese mando. Al batear, al pitchear y en los menús el stick sigue igual, y **Probar sticks** muestra la señal normal. Parche `tools/patches/wiicompiled-mlb-fielding-diagonals.patch`; prueba `mlb_fielding_stick_tests`. Detalles en `docs/ingenieria-inversa.md` (sección 9, «Mandos»).
+
 ## Volver y cierres
 
 Volver (Esc, Retroceso, K o Círculo/B) solo cuenta en el fotograma en que se pulsa y nunca se repite. Así, la pulsación que cierra un desplegable o cancela una captura no cierra también la página de ajustes. Antes, mantenerla un instante provocaba esos cierres en cadena.
