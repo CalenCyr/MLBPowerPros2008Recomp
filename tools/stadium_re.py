@@ -67,7 +67,34 @@ def load(code, gfx, tbl, problems):
             if max(a, b, c) >= len(table.vertices):
                 problems.append(f"{code}: collision index out of range")
                 break
+        check_trees(code, tbl, table, problems)
     return models, table
+
+
+def check_trees(code, d, table, problems):
+    """Trees A and B: every placement / triangle reachable, each on the side of the planes it is listed
+    under (H: n.p + d < 0, L: > 0; crossing items on both)."""
+    tri_boxes = []
+    for i, (a, b, c, _) in enumerate(table.triangles):
+        pts = [table.vertices[k] for k in (a, b, c)]
+        tri_boxes.append(([min(p[k] for p in pts) for k in range(3)], [max(p[k] for p in pts) for k in range(3)]))
+    for tree, lists, boxes in (("planes_a", "lists_a", [(p.bbox[:3], p.bbox[3:]) for p in table.placements]),
+                               ("planes_b", "lists_b", tri_boxes)):
+        lo = table.pointers[lists]
+        nodes = stadium_tbl.parse_tree(d, table.pointers[tree], lo)
+        reached = set(stadium_tbl.tree_members(d, nodes, lo, 0, 0) + stadium_tbl.tree_members(d, nodes, lo, 0, 1))
+        if reached != set(range(len(boxes))):
+            problems.append(f"{code}: {tree} reaches {len(reached)} of {len(boxes)}")
+        wrong = 0
+        for i, (plane, _, _) in enumerate(nodes):
+            for side in (0, 1):
+                for k in stadium_tbl.tree_members(d, nodes, lo, i, side):
+                    bmin, bmax = boxes[k]
+                    values = [plane[0] * x + plane[1] * y + plane[2] * z + plane[3]
+                              for x in (bmin[0], bmax[0]) for y in (bmin[1], bmax[1]) for z in (bmin[2], bmax[2])]
+                    wrong += (min(values) > 0.05) if side == 0 else (max(values) < -0.05)
+        if wrong:
+            problems.append(f"{code}: {tree} lists {wrong} items on the wrong side of their plane")
 
 
 def cmd_info(archive, flt=""):

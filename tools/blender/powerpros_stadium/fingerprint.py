@@ -34,6 +34,15 @@ def mesh_signature(obj):
     return h.hexdigest()
 
 
+def collision_signature(obj):
+    """Mesh, transform and surface ids of the collision object."""
+    h = hashlib.sha1((mesh_signature(obj) + matrix_signature(obj)).encode())
+    attr = obj.data.attributes.get("surface_id")
+    if attr is not None and attr.domain == "FACE":
+        _feed(h, attr.data, "value", 1, np.int32)
+    return h.hexdigest()
+
+
 def matrix_signature(obj):
     return hashlib.sha1(np.asarray(obj.matrix_world, np.float32).round(5).tobytes()).hexdigest()
 

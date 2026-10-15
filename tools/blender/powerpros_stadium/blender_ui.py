@@ -6,7 +6,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import exporter, importer, names
+from . import collision_gen, convert, exporter, importer, names
 
 
 class PP_OT_import_stadium(bpy.types.Operator, ImportHelper):
@@ -101,15 +101,81 @@ class PP_OT_export_stadium(bpy.types.Operator):
         try:
             st = exporter.export_stadium(coll, bpy.path.abspath(self.mods_folder), self.mod_name.strip() or "Mi estadio",
                                          target, new_name)
-        except (exporter.ExportFailure, ValueError) as e:
+        except (exporter.ExportFailure, ValueError) as e:            # tbl_write.TreeError is a ValueError
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
         msg = (f"Mod en {st['folder']}: {st['pieces']} piezas reescritas, {st['moved']} movidas, "
                f"{st['emptied']} quitadas, {st['textures']} texturas nuevas, {st['size'] / 1048576:.1f} MB")
+        if st["collision"]:
+            msg += f", colisión nueva de {st['collision']} triángulos"
         if st["over_budget"]:
             self.report({"WARNING"}, msg + ". Pasa de 20 MB: puede que el partido no cargue.")
         else:
             self.report({"INFO"}, msg + ". Actívalo en MODS del launcher.")
+        return {"FINISHED"}
+
+
+class PP_OT_convert_objects(bpy.types.Operator):
+    """Reparte las caras de los objetos seleccionados (un modelo propio) entre las piezas del estadio"""
+    bl_idname = "object.powerpros_convert"
+    bl_label = "Convertir objetos en piezas"
+    bl_options = {"REGISTER", "UNDO"}
+
+    replace: BoolProperty(name="Quitar el estadio original", default=True,
+                          description="Las piezas pierden su geometría y las que no reciban nada se borran")
+    bake_light: BoolProperty(name="Sombreado simple", default=True,
+                             description="El juego dibuja los estadios sin luz: guarda un sol suave en los colores")
+
+    @classmethod
+    def poll(cls, context):
+        return stadium_collection(context) is not None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="El modelo debe estar en metros, con el plato en el origen")
+        layout.label(text="y la segunda base hacia +Y (como el estadio importado).")
+        layout.prop(self, "replace")
+        layout.prop(self, "bake_light")
+
+    def execute(self, context):
+        coll = stadium_collection(context)
+        sources = [o for o in context.selected_objects if o.type == "MESH" and "pp_kind" not in o]
+        if not sources:
+            self.report({"ERROR"}, "Selecciona los objetos de tu modelo (no las piezas del estadio)")
+            return {"CANCELLED"}
+        warning = convert.check_frame(sources)
+        if warning:
+            self.report({"ERROR"}, warning)
+            return {"CANCELLED"}
+        try:
+            result = convert.convert(coll, sources, self.replace, self.bake_light)
+        except convert.ConvertFailure as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Modelo repartido en {len(result)} piezas ({sum(result.values())} caras). "
+                              "Genera la colisión si cambiaste el campo o las vallas.")
+        return {"FINISHED"}
+
+
+class PP_OT_generate_collision(bpy.types.Operator):
+    """Crea la colisión del estadio a partir de sus piezas: suelo, vallas, postes de foul y gradas"""
+    bl_idname = "object.powerpros_generate_collision"
+    bl_label = "Generar colisión"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return stadium_collection(context) is not None
+
+    def execute(self, context):
+        obj = collision_gen.generate(stadium_collection(context))
+        if obj is None:
+            self.report({"ERROR"}, "No encuentro el campo: hace falta suelo a la altura 0 y paredes alrededor del plato")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Colisión nueva: {len(obj.data.polygons)} triángulos")
         return {"FINISHED"}
 
 
@@ -123,6 +189,8 @@ class PP_PT_info(bpy.types.Panel):
         layout = self.layout
         layout.operator(PP_OT_import_stadium.bl_idname, icon="IMPORT")
         layout.operator(PP_OT_export_stadium.bl_idname, icon="EXPORT")
+        layout.operator(PP_OT_convert_objects.bl_idname, icon="MESH_DATA")
+        layout.operator(PP_OT_generate_collision.bl_idname, icon="MOD_PHYSICS")
         obj = context.active_object
         if obj is None or "pp_kind" not in obj:
             layout.label(text="Selecciona una pieza de un estadio importado")
@@ -153,7 +221,7 @@ def menu_export(self, context):
     self.layout.operator(PP_OT_export_stadium.bl_idname, text="Mod de estadio de Power Pros 2008")
 
 
-CLASSES = (PP_OT_import_stadium, PP_OT_export_stadium, PP_PT_info)
+CLASSES = (PP_OT_import_stadium, PP_OT_export_stadium, PP_OT_convert_objects, PP_OT_generate_collision, PP_PT_info)
 
 
 def register():

@@ -184,7 +184,7 @@ def build_mesh(gfx, model, images, materials):
 def build_collision(table, parent):
     me = bpy.data.meshes.new("Colisión")
     me.from_pydata([to_blender(v) for v in table.vertices], [],
-                   [(a, c, b) for a, b, c, _ in table.triangles])
+                   [(a, b, c) for a, b, c, _ in table.triangles])    # normal: the side the ball hits
     ids = sorted({t[3] for t in table.triangles})
     for i in ids:
         mat = bpy.data.materials.new(f"Superficie {i}")
@@ -200,6 +200,7 @@ def build_collision(table, parent):
     obj = bpy.data.objects.new("Colisión", me)
     obj["pp_kind"] = "collision"
     parent.objects.link(obj)
+    obj["pp_signature"] = fingerprint.collision_signature(obj)
     return obj
 
 

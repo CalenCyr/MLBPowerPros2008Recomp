@@ -411,13 +411,13 @@ Verificado (14 de octubre de 2026):
 - **Raíz:** es el último objeto del archivo: u32 número de modelos y 11 punteros. Se encuentra buscando desde el final el número seguido del puntero a `0x20`.
 - **Punteros de la raíz, por orden:**
   1. colocaciones;
-  2. registros de planos A (`0x18` bytes: nx, ny, nz, d y u16);
-  3. listas u16 de A (índices de modelo: ¿visibilidad?);
-  4. registros de planos B;
-  5. listas u16 de B (índices de triángulo de colisión: ¿árbol de colisión?);
+  2. árbol A: nodos de plano que reparten las colocaciones (ver «Árboles A y B»);
+  3. listas u16 del árbol A (índices de colocación);
+  4. árbol B: nodos de plano que reparten los triángulos de colisión;
+  5. listas u16 del árbol B (índices de triángulo);
   6. vértices de colisión;
   7. cabecera de colisión;
-  8. registros de posición más dirección (`0x18` bytes, sin identificar);
+  8. registros de posición más dirección (`0x18` bytes, sin identificar; van justo detrás de los vértices de colisión);
   9. dos pares {→, 7} sin identificar;
   10. lista de texturas del pack de gráficos;
   11. sin identificar.
@@ -425,6 +425,33 @@ Verificado (14 de octubre de 2026):
   - Solo 12 de las 2.925 colocaciones de todos los estadios giran en X o Z. El orden de los ejes no está comprobado; el importador usa XYZ.
 - **Colisión:** u16 número de triángulos, u16 número de vértices, u32 0; luego triángulos de cuatro u16 (a, b, c, superficie) y vértices f32 xyz.
   - Coors Field tiene 2.922 triángulos y 2.133 vértices.
+  - **Sentido:** la normal (b − a) × (c − a) apunta al lado que golpea la pelota. Todos los suelos (5, 6, 8) miran hacia arriba y casi todas las paredes (0, 1, 2, 9, 15) hacia el plato. En las gradas (11) hay de los dos sentidos.
+
+**Árboles A y B** (14 de octubre de 2026; `tools/stadium_re.py check` los comprueba en los 47 packs):
+- **Nodo de `0x1C` bytes**, en preorden y con el nodo 0 como raíz:
+
+| Offset | Contenido |
+|---|---|
+| `+0x00` | plano: nx, ny, nz, d (f32) |
+| `+0x10` / `+0x12` | u16 hijo del lado H / del lado L (0 = el lado es una hoja) |
+| `+0x14` / `+0x16` | u16 inicio de la lista del lado H / L |
+| `+0x18` / `+0x19` | u8 número de entradas de la lista del lado H / L |
+| `+0x1A` | u16 0 |
+
+- **Lado H:** lo que llega a n·p + d < 0. **Lado L:** lo que llega a n·p + d > 0. Lo que cruza el plano está en los dos.
+  - En los 47 packs, cada triángulo (por sus vértices) y cada colocación (por su caja y su esfera) está en el lado correcto de todos los planos por encima.
+  - Desde la raíz se llega a todos los triángulos y a todas las colocaciones.
+- **Árbol A:** reparte las colocaciones por su caja. En AT&T Park, Coors Field y Yankee Stadium usa planos diagonales; en todos los packs tiene como mucho 32 por hoja.
+- **Árbol B:** reparte los triángulos de colisión. Usa planos alineados con los ejes, profundidad ≤ 13, hojas de 11 a 15 triángulos de media y como mucho 111.
+- **Recorrido:** `0x80C860E4` y `0x80C862EC` son recursivas (índice × 28). Llaman a `0x80CCB438` con el plano para decidir qué lados visitan. En cada hoja ponen a 1 `banderas[índice]` en un array de un byte por elemento: no hay un búfer de tamaño fijo.
+  - **Leen el número de la hoja con signo** (`lbz` + `extsb`): una hoja con más de 127 entradas no se recorre.
+
+**Escribir la colisión** (14 de octubre de 2026, `tools/blender/powerpros_stadium/tbl_write.py`):
+- **Sitio de los datos:** la colisión, los vértices y los dos árboles nuevos van detrás de la raíz, y se repuntan sus campos. La raíz no se mueve: la tabla de estadios del juego apunta a ella, y el runtime la sigue encontrando al buscar desde el final.
+- **Construcción de los árboles:** planos alineados con los ejes y, en cada nodo, el corte que mejor reparte sin duplicar mucho; hojas de como mucho 127.
+  - Con los triángulos de Coors Field sale un árbol de 240 nodos y 6.450 entradas; el del juego tiene 1.086 nodos y 13.047 entradas.
+- El exportador de Blender rehace el árbol A cuando una pieza cambia de caja, y escribe la colisión cuando se edita su malla.
+- **Comprobado fuera del juego:** ida y vuelta en Blender (`tools/blender/test_export.py`) y las mismas comprobaciones que los packs del juego. **Falta comprobarlo en un partido.**
   - Hay 3 triángulos degenerados o repetidos.
 - **IDs de superficie** (por geometría en Coors Field y Yankee Stadium; su efecto en el juego está sin comprobar):
 
@@ -487,8 +514,20 @@ Verificado (14 de octubre de 2026):
     - en el carrusel de Exhibición, izquierda desde Fenway muestra la entrada nueva con su imagen;
     - al confirmarla, el partido carga «Coors Field 2» desde sus archivos 4389/4390;
     - con dos mods de estadio a la vez, el benchmark carga cualquiera de los dos (`WIICOMPILED_MATCH_BENCH_STADIUM=<código>`).
+  - **Rótulo con el nombre** (hecho el 14 de octubre de 2026, `runtime/src/stadium_banner.cpp`):
+    - el rótulo no sale del pack de menú del estadio, sino del pack común `env_stadium_menu.pack` (archivo `0x8E2`), a través de las tablas `0x80EA2490` (textura) y `0x80EA2528` (paleta);
+    - la pantalla lo guarda en `+0x2A24` (textura) y `+0x2A28` (paleta) en el fotograma del movimiento, y el sprite lee esas casillas;
+    - la tabla de dibujo `0x80D99E38` tiene, por estadio: el pack de menú, el rótulo (común `+4`, 512 × 64) con su paleta (común `+8`), la foto (512 × 256) con su paleta y «Home of…» (512 × 64) con su paleta. Estos dos últimos están en el pack del estadio;
+    - resolutores: `0x8000C330(id, puntero)` da la textura y `0x8000C3E0` la paleta;
+    - formato del rótulo del juego:
+      - cabecera {u16 alto 64, u16 ancho 512, u32 formato 9 (C8), → píxeles, 0, 0, 1, 1}, con los píxeles en `+0x40` y los colores de la paleta detrás;
+      - cabecera de la paleta: {256, 0, `0x81`, 0, `0x6000`, →};
+      - el texto ocupa las filas 4 a 37;
+    - un estadio nuevo usa `project/env_stadium_name_<código>.pack` si el mod lo trae. Si no, el runtime dibuja uno con una fuente del sistema (nunca con datos del juego) y lo guarda en la caché, `mods/banners/`;
+    - en cada fotograma, la pantalla escribe ese rótulo en `+0x2A24`/`+0x2A28` mientras el estadio nuevo está a la vista;
+    - **comprobado:** «Coors Field 2» y «Coors Field 3» salen con su rótulo propio (primera versión del dibujo). La versión actual, más parecida al estilo del juego, solo está vista decodificada.
   - **Pendiente:**
-    - el rótulo con el nombre y la línea «Home of the…» siguen siendo los del estadio base, porque salen del pack común `0x8E2`;
+    - la línea «Home of the…» sigue siendo la del estadio base;
     - la otra pantalla de elección de estadio;
     - Temporada, Liga y MLB Life eligen estadio por equipo.
 - **Lo que hacía falta (cumplido arriba salvo lo pendiente):**
@@ -501,8 +540,8 @@ Verificado (14 de octubre de 2026):
 - los flags de la colocación (`0x500`, `0x1700`, `0x40000000`…);
 - qué elige la mezcla aditiva de las piezas `*_ADD_*`;
 - los bytes del texmap y del material que no varían;
-- los árboles de planos A y B;
-- el efecto en el juego de cada ID de superficie.
+- para qué usa el juego el árbol A (¿qué piezas se dibujan?) y qué decide `0x80CCB438`;
+- el efecto en el juego de cada ID de superficie. Hipótesis: la 1 marca el home run, la 0 el foul a las gradas y la 2 el límite exterior. Se comprobará con el Polo Grounds.
 
 **Herramientas:**
 - `tools/stadium_re.py` (`info`, `check`, `stats`);

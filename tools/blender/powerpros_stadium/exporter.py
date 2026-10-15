@@ -3,16 +3,18 @@
 
 Only pieces whose mesh, materials or transform changed since the import are rewritten; the rest of
 the original packs is kept byte-for-byte. Deleted pieces are emptied (no meshes). Edited or new
-images become RGB5A3 textures. New pieces and collision edits come in later phases.
+images become RGB5A3 textures. An edited collision mesh is written with its surfaces, and the
+plane trees of the tbl are rebuilt for what changed. New pieces come in a later phase.
 """
 import math
+import re
 from pathlib import Path
 
 import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from . import fingerprint, importer, names, packwii, pj7m, pj7m_write, stadium_tbl
+from . import fingerprint, importer, names, packwii, pj7m, pj7m_write, stadium_tbl, tbl_write
 
 try:
     from . import projectbin
@@ -61,7 +63,7 @@ class Exporter:
                 self.textures.setdefault(t.offset, t)
         self.new_textures = {}      # image name -> texture offset
         self._image_checks = {}     # image name -> pixels differ from the import
-        self.stats = {"pieces": 0, "emptied": 0, "moved": 0, "textures": 0}
+        self.stats = {"pieces": 0, "emptied": 0, "moved": 0, "textures": 0, "collision": 0}
 
     # ---- textures ------------------------------------------------------------------------------
 
@@ -179,7 +181,7 @@ class Exporter:
                 v0, v1, v2 = lt.vertices
                 l0, l1, l2 = lt.loops
                 for v, l in ((v0, l0), (v2, l2), (v1, l1)):             # back to GX clockwise order
-                    p = g["pos"].setdefault(v, len(g["pos"]))
+                    p = g["pos"].setdefault(tuple(co[v]), len(g["pos"]))     # same place, one position
                     n = g["nrm"].setdefault(tuple(np.round(normals[l], 4)), len(g["nrm"]))
                     c = g["clr"].setdefault(tuple(int(x * 255 + 0.5) for x in colors[l]), len(g["clr"]))
                     t = g["uv"].setdefault((round(float(uvs[l][0]), 5), round(1.0 - float(uvs[l][1]), 5)), len(g["uv"]))
@@ -187,7 +189,7 @@ class Exporter:
             out = []
             for mi, g in groups.items():
                 out.append(pj7m_write.MeshData(
-                    mi, [to_game(co[v]) for v in g["pos"]], [to_game_dir(n) for n in g["nrm"]],
+                    mi, [to_game(v) for v in g["pos"]], [to_game_dir(n) for n in g["nrm"]],
                     list(g["clr"]), list(g["uv"]), g["corners"]))
             return out
         finally:
@@ -233,7 +235,45 @@ class Exporter:
             if off in records and self.tbl is not None:
                 self.placement(obj, records[off], points)
         self.w.d.extend(b"\0" * (-len(self.w.d) % 32))          # original packs end 32-byte aligned
-        return bytes(self.w.d), bytes(self.tbl) if self.tbl is not None else None
+        if self.tbl is None:
+            return bytes(self.w.d), None
+        collision = next((o for o in coll.all_objects if o.get("pp_kind") == "collision"), None)
+        changed = collision is not None and collision.get("pp_signature") != fingerprint.collision_signature(collision)
+        if not (self.stats["moved"] or changed):
+            return bytes(self.w.d), bytes(self.tbl)
+        tw = tbl_write.TblWriter(self.tbl)
+        tw.set_model_tree()                       # the boxes of the pieces changed: tree A again
+        if changed:
+            vertices, triangles = collision_data(collision)
+            tw.set_collision(vertices, triangles)
+            self.stats["collision"] = len(triangles)
+        return bytes(self.w.d), tw.finish()
+
+
+def surface_of(mat, fallback):
+    """Surface id of a collision face: the number its material name ends with («Superficie 9»)."""
+    m = re.search(r"(\d+)\s*$", mat.name) if mat is not None else None
+    return int(m.group(1)) if m else fallback
+
+
+def collision_data(obj):
+    """(game-space vertices, triangles (a, b, c, surface)) from the collision object."""
+    me = obj.data
+    me.calc_loop_triangles()
+    attr = me.attributes.get("surface_id")
+    ids = None
+    if attr is not None and attr.domain == "FACE" and attr.data_type == "INT":
+        ids = np.empty(len(me.polygons), np.int32)
+        attr.data.foreach_get("value", ids)
+    mw = obj.matrix_world
+    vertices = [to_game(mw @ v.co) for v in me.vertices]
+    triangles = []
+    for lt in me.loop_triangles:
+        mat = me.materials[lt.material_index] if lt.material_index < len(me.materials) else None
+        sid = surface_of(mat, int(ids[lt.polygon_index]) if ids is not None else 11)
+        a, b, c = lt.vertices
+        triangles.append((a, b, c, sid))       # normal (b-a)x(c-a): the side the ball hits
+    return vertices, triangles
 
 
 def valid_code(code):

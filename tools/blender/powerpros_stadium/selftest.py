@@ -9,9 +9,9 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from powerpros_stadium import pj7m, pj7m_write, stadium_tbl
+    from powerpros_stadium import pj7m, pj7m_write, stadium_tbl, tbl_write
 else:
-    from . import pj7m, pj7m_write, stadium_tbl
+    from . import pj7m, pj7m_write, stadium_tbl, tbl_write
 
 P = 0x40000000
 
@@ -121,7 +121,38 @@ def main():
     pj7m_write.set_placement(t, 0x20, (4, 5, 6), (0, 1, 0), (2, 2, 2), (0, 0, 0, 1, 1, 1), (0.5, 0.5, 0.5, 1))
     pl = stadium_tbl.parse_table(t).placements[0]
     assert (pl.translation, pl.scale, pl.sphere, pl.flags, pl.model) == ((4, 5, 6), (2, 2, 2), (0.5, 0.5, 0.5, 1), 0x500, 0x30)
+    check_trees(t)
     print("selftest OK")
+
+
+def check_trees(t):
+    """New collision (a 6 x 6 grid of triangle pairs) and both plane trees, read back."""
+    verts = [(x * 10.0, 0.0, z * 10.0) for z in range(7) for x in range(7)]
+    tris = []
+    for z in range(6):
+        for x in range(6):
+            a = z * 7 + x
+            tris += [(a, a + 1, a + 7, 5), (a + 1, a + 8, a + 7, 6)]
+    tw = tbl_write.TblWriter(t)
+    tw.set_collision(verts, tris, leaf=4)
+    tw.set_model_tree()
+    t2 = tw.finish()
+    table = stadium_tbl.parse_table(t2)
+    assert table.root == stadium_tbl.find_root(t) and table.triangles == tris and table.vertices == verts
+    for tree, lists, boxes in (("planes_b", "lists_b", tbl_write.triangle_boxes(verts, tris)),
+                               ("planes_a", "lists_a", tbl_write.placement_boxes(table))):
+        lo = table.pointers[lists]
+        nodes = stadium_tbl.parse_tree(t2, table.pointers[tree], lo)
+        assert len(nodes) > (1 if tree == "planes_b" else 0)
+        reached = stadium_tbl.tree_members(t2, nodes, lo, 0, 0) + stadium_tbl.tree_members(t2, nodes, lo, 0, 1)
+        assert sorted(set(reached)) == list(range(len(boxes)))
+        for i, (plane, _, _) in enumerate(nodes):
+            for side in (0, 1):
+                for k in stadium_tbl.tree_members(t2, nodes, lo, i, side):
+                    _, bmin, bmax = boxes[k]
+                    values = [plane[0] * x + plane[1] * y + plane[2] * z + plane[3]
+                              for x in (bmin[0], bmax[0]) for y in (bmin[1], bmax[1]) for z in (bmin[2], bmax[2])]
+                    assert (min(values) <= 0) if side == 0 else (max(values) >= 0), (tree, i, side, k)
 
 
 if __name__ == "__main__":

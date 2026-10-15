@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Headless check of «Convertir objetos en piezas» and «Generar colisión» on a made-up stadium.
+
+blender --background --factory-startup --python tools/blender/test_convert.py -- <addon.zip> <project.bin> <mods dir>
+Builds a small stadium out of primitives (green field, dirt infield, a round wall 75 m from the
+middle of the field, sloped stands), spreads it over Coors Field's pieces, generates its collision,
+exports it as the new stadium «sintetico» and reads the packs back. Exits 1 on failure.
+"""
+import collections
+import importlib
+import math
+import sys
+from pathlib import Path
+
+import bmesh
+import bpy
+from mathutils import Vector
+
+zip_path, project_bin, mods_dir = sys.argv[sys.argv.index("--") + 1:][:3]
+failures = []
+
+
+def check(ok, label):
+    print(("PASS: " if ok else "FAIL: ") + label)
+    if not ok:
+        failures.append(label)
+
+
+bpy.ops.extensions.package_install_files(filepath=zip_path, repo="user_default", enable_on_install=True)
+pkg = "bl_ext.user_default.powerpros_stadium"
+pj7m = importlib.import_module(pkg + ".pj7m")
+tbl_mod = importlib.import_module(pkg + ".stadium_tbl")
+for obj in list(bpy.data.objects):
+    bpy.data.objects.remove(obj)
+bpy.ops.import_scene.powerpros_stadium(filepath=project_bin, stadium="col", collision=False)
+stadium = next(c for c in bpy.data.collections if c.get("pp_stadium"))
+
+
+def material(name, rgb, two_sided=False):
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    m.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (*rgb, 1.0)
+    m.use_backface_culling = not two_sided
+    return m
+
+
+def mesh_object(name, verts, faces, mat):
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(verts, [], faces)
+    me.materials.append(mat)
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+centre, radius, n = Vector((0.0, 45.0)), 75.0, 64
+ring = [centre + Vector((radius * math.sin(2 * math.pi * k / n), radius * math.cos(2 * math.pi * k / n))) for k in range(n)]
+field = mesh_object("campo", [(p.x, p.y, 0.0) for p in ring] + [(centre.x, centre.y, 0.0)],
+                    [(n, k, (k + 1) % n) for k in range(n)][::1], material("cesped", (0.05, 0.35, 0.05)))
+field.data.flip_normals()                           # the fan above was wound clockwise
+infield = mesh_object("tierra", [(0, 0, 0.02), (19.4, 19.4, 0.02), (0, 38.8, 0.02), (-19.4, 19.4, 0.02)],
+                      [(0, 1, 2, 3)], material("tierra", (0.45, 0.25, 0.1)))   # counter-clockwise: faces up
+wall = mesh_object("valla", [(p.x, p.y, z) for p in ring for z in (0.0, 3.0)],
+                   [(2 * k, 2 * ((k + 1) % n), 2 * ((k + 1) % n) + 1, 2 * k + 1) for k in range(n)],
+                   material("valla", (0.1, 0.3, 0.6), two_sided=True))
+outer = [centre + (p - centre) * (100.0 / radius) for p in ring]
+stands = mesh_object("gradas", [(p.x, p.y, 3.0) for p in ring] + [(p.x, p.y, 25.0) for p in outer],
+                     [(k, (k + 1) % n, n + (k + 1) % n, n + k) for k in range(n)],
+                     material("gradas", (0.5, 0.5, 0.5), two_sided=True))
+for o in bpy.context.selected_objects:
+    o.select_set(False)
+for o in (field, infield, wall, stands):
+    o.select_set(True)
+bpy.context.view_layer.objects.active = field
+pieces_before = sum(1 for o in stadium.all_objects if o.get("pp_kind") == "model")
+check(bpy.ops.object.powerpros_convert(replace=True, bake_light=True) == {"FINISHED"}, "convert finishes")
+pieces = [o for o in stadium.all_objects if o.get("pp_kind") == "model"]
+check(0 < len(pieces) < pieces_before, f"model spread over {len(pieces)} of {pieces_before} pieces, the rest removed")
+check(not any(n in bpy.data.objects for n in ("campo", "tierra", "valla", "gradas")), "source objects removed")
+ground = next(o for o in pieces if len(o.data.polygons) and all(abs(v.co.z) < 0.1 for v in o.data.vertices))
+check(ground is not None, f"the field went to a ground piece ({ground.name})")
+greens = [c.color for c in ground.data.color_attributes["Color"].data]
+check(any(c[1] > c[0] * 1.5 for c in greens), "material colour baked into the vertex colours")
+
+bpy.context.view_layer.objects.active = pieces[0]
+check(bpy.ops.object.powerpros_generate_collision() == {"FINISHED"}, "collision generated")
+coll_obj = next(o for o in stadium.all_objects if o.get("pp_kind") == "collision")
+result = bpy.ops.export_scene.powerpros_stadium(mod_name="Sintetico", mods_folder=mods_dir, mode="new",
+                                                new_code="sintetico", new_name="Estadio sintético")
+check(result == {"FINISHED"}, "export finishes")
+out = Path(mods_dir) / "Sintetico" / "project"
+gfx = (out / "stadium_sintetico.pack").read_bytes()
+tbl = (out / "stadium_sinteticotbl.pack").read_bytes()
+table = tbl_mod.parse_table(tbl)
+surfaces = collections.Counter(t[3] for t in table.triangles)
+print("surfaces", sorted(surfaces.items()))
+check(len(table.triangles) == len(coll_obj.data.polygons), f"tbl has the {len(table.triangles)} collision triangles")
+for sid, what in ((5, "grass"), (6, "dirt"), (8, "mound"), (9, "field wall"), (0, "foul invisible wall"),
+                  (1, "outfield invisible wall"), (14, "foul poles"), (11, "stands")):
+    check(surfaces[sid] > 0, f"surface {sid} ({what}) present")
+
+
+def tri_normal(t):
+    a, b, c = (table.vertices[k] for k in t[:3])
+    u, v = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
+    return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+
+
+check(all(tri_normal(t)[1] > 0 for t in table.triangles if t[3] in (5, 6, 8)), "floor triangles face up")
+walls = [t for t in table.triangles if t[3] == 9]
+facing = sum(1 for t in walls
+             if -sum(tri_normal(t)[i] * sum(table.vertices[k][i] for k in t[:3]) for i in (0, 2)) > 0)
+check(facing > 0.9 * len(walls), f"field walls face home ({facing}/{len(walls)})")
+wall_dist = [math.hypot(table.vertices[k][0] / 10, -table.vertices[k][2] / 10 - 45) for t in walls for k in t[:3]]
+check(all(abs(d - 75) < 1.5 for d in wall_dist), f"walls on the 75 m circle ({min(wall_dist):.1f}..{max(wall_dist):.1f} m)")
+for tree, lists, count in (("planes_a", "lists_a", len(table.placements)), ("planes_b", "lists_b", len(table.triangles))):
+    nodes = tbl_mod.parse_tree(tbl, table.pointers[tree], table.pointers[lists])
+    lo = table.pointers[lists]
+    reached = set(tbl_mod.tree_members(tbl, nodes, lo, 0, 0) + tbl_mod.tree_members(tbl, nodes, lo, 0, 1))
+    leaves = [s[2] for _, h, l in nodes for s in (h, l) if s[0] == 0]
+    check(reached == set(range(count)) and max(leaves) <= 127, f"{tree}: reaches all {count}, leaves <= 127 ({max(leaves)})")
+models = [pj7m.parse_model(gfx, off) for off in pj7m.find_models(gfx)]
+check(sum(1 for m in models if m.meshes) == len(pieces), f"{len(pieces)} pieces with geometry in the pack")
+print("RESULT:", "FAIL" if failures else "PASS")
+sys.exit(1 if failures else 0)

@@ -6,10 +6,10 @@ u32 n (n < 0x1000) followed by the pointer to 0x20, where the placement records 
 
   root +0x00  u32 model count
        +0x04  -> placements (n records of 0x54 bytes)
-       +0x08  -> plane records A (0x18 bytes: nx, ny, nz, d, u16 ...)      [purpose unknown]
-       +0x0C  -> u16 lists for A (indices < model count)                  [visibility?]
-       +0x10  -> plane records B                                          [collision tree?]
-       +0x14  -> u16 lists for B (triangle indices)
+       +0x08  -> tree A: plane nodes partitioning the placements (by their box)
+       +0x0C  -> u16 lists of tree A (placement indices)
+       +0x10  -> tree B: plane nodes partitioning the collision triangles
+       +0x14  -> u16 lists of tree B (triangle indices); node layout in tbl_write.py
        +0x18  -> collision vertices (f32 xyz)
        +0x1C  -> collision header: u16 triangle count, u16 vertex count, u32 0, then triangles
                  of four u16: a, b, c, surface id
@@ -21,6 +21,7 @@ import struct
 from dataclasses import dataclass
 
 PLACEMENT_SIZE = 0x54
+NODE_SIZE = 0x1C
 ROOT_FIELDS = ("placements", "planes_a", "lists_a", "planes_b", "lists_b", "coll_vertices",
                "collision", "unk_20", "unk_24", "textures", "unk_2c")
 
@@ -64,6 +65,29 @@ def find_root(d):
         if u32(d, o + 4) == 0x40000020 and 0 < u32(d, o) < 0x1000:
             return o
     raise FormatError("no table root (count + pointer to 0x20)")
+
+
+def parse_tree(d, nodes_off, lists_off):
+    """Plane tree A or B (layout in tbl_write.py): [(plane, (child, start, count) H, same for L)]."""
+    out = []
+    for o in range(nodes_off, lists_off - NODE_SIZE + 1, NODE_SIZE):
+        plane = struct.unpack_from(">4f", d, o)
+        hc, lc, hs, ls = struct.unpack_from(">4H", d, o + 0x10)
+        hk, lk = struct.unpack_from(">BB", d, o + 0x18)
+        out.append((plane, (hc, hs, hk), (lc, ls, lk)))
+    return out
+
+
+def tree_members(d, nodes, lists_off, index, side):
+    """Indices reachable from one side (0 = H, 1 = L) of a node."""
+    found, stack = [], [nodes[index][1 + side]]
+    while stack:
+        child, start, count = stack.pop()
+        if child:
+            stack += [nodes[child][1], nodes[child][2]]
+        else:
+            found += struct.unpack_from(f">{count}H", d, lists_off + 2 * start)
+    return found
 
 
 def parse_table(d):

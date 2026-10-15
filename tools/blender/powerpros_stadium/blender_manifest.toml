@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "powerpros_stadium"
-version = "0.2.0"
+version = "0.3.0"
 name = "Estadios de MLB Power Pros 2008"
 tagline = "Importa y exporta los estadios de MLB Power Pros 2008"
 maintainer = "MLBPowerPros2008Recomp"

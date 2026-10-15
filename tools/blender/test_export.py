@@ -96,5 +96,50 @@ try:  # in background mode an operator's ERROR report raises
 except RuntimeError as error:
     refused = "ya es un estadio del juego" in str(error)
 check(refused, "a code the game already has is refused")
+
+# Collision: import with it, raise the field walls (surface 9) 3 m, make one of their faces a foul
+# pole (material «Superficie 14»), export, read the tbl back.
+for obj in list(bpy.data.objects):
+    bpy.data.objects.remove(obj)
+bpy.ops.import_scene.powerpros_stadium(filepath=project_bin, stadium="col", collision=True)
+coll_obj = next(o for o in bpy.data.objects if o.get("pp_kind") == "collision")
+me = coll_obj.data
+ids = np.empty(len(me.polygons), np.int32)
+me.attributes["surface_id"].data.foreach_get("value", ids)
+walls = [p for p in me.polygons if ids[p.index] == 9]
+for v in {v for p in walls for v in p.vertices}:
+    me.vertices[v].co.z += 3.0
+pole = next(m for m in me.materials if m.name.startswith("Superficie 14"))
+walls[0].material_index = list(me.materials).index(pole)
+me.update()
+bpy.context.view_layer.objects.active = coll_obj
+result = bpy.ops.export_scene.powerpros_stadium(mod_name="BlenderColision", mods_folder=mods_dir, mode="replace",
+                                                target="same")
+check(result == {"FINISHED"}, "collision export finishes")
+ctbl = (Path(mods_dir) / "BlenderColision" / "project" / "stadium_coltbl.pack").read_bytes()
+orig_bytes = archive.read("stadium_coltbl.pack")
+ctable = tbl_mod.parse_table(ctbl)
+check(ctable.root == orig_tbl.root and ctbl[:ctable.root] == orig_bytes[:ctable.root],
+      "tbl root and everything before it unchanged (the game's stadium table points at the root)")
+check(len(ctable.triangles) == len(me.polygons), f"collision has {len(ctable.triangles)} triangles")
+wall_y = [ctable.vertices[k][1] for t in ctable.triangles if t[3] == 9 for k in t[:3]]
+old_wall_y = [orig_tbl.vertices[k][1] for t in orig_tbl.triangles if t[3] == 9 for k in t[:3]]
+check(abs(max(wall_y) - max(old_wall_y) - 30.0) < 0.5, f"walls raised 30 dm (max y {max(old_wall_y):.0f} -> {max(wall_y):.0f})")
+check(sum(t[3] == 14 for t in ctable.triangles) == sum(t[3] == 14 for t in orig_tbl.triangles) + 1,
+      "the face given «Superficie 14» became a foul pole")
+
+
+def normal_y(t, table):
+    a, b, c = (table.vertices[k] for k in t[:3])
+    u, v = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
+    return u[2] * v[0] - u[0] * v[2]
+
+
+check(all(normal_y(t, ctable) > 0 for t in ctable.triangles if t[3] == 5), "grass triangles still face up (winding kept)")
+for tree, lists, n in (("planes_a", "lists_a", len(ctable.placements)), ("planes_b", "lists_b", len(ctable.triangles))):
+    nodes = tbl_mod.parse_tree(ctbl, ctable.pointers[tree], ctable.pointers[lists])
+    lo = ctable.pointers[lists]
+    reached = set(tbl_mod.tree_members(ctbl, nodes, lo, 0, 0) + tbl_mod.tree_members(ctbl, nodes, lo, 0, 1))
+    check(lo > orig_tbl.root and reached == set(range(n)), f"new {tree} reaches all {n}")
 print("RESULT:", "FAIL" if failures else "PASS")
 sys.exit(1 if failures else 0)
