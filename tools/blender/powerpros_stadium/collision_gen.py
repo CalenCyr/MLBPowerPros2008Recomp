@@ -15,7 +15,8 @@ import numpy as np
 from mathutils import Vector
 
 TOP = 102.8                         # the game's invisible walls reach 102.8 m
-MOUND = Vector((0.0, 18.44, 0.0))   # 60 ft 6 in
+MOUND = Vector((0.0, 18.51, 0.0))   # centre of the mound (surface 8) in every game stadium but Toronto
+MOUND_RADIUS = 2.82
 FIELD_POINT = Vector((0.0, 45.0))   # a point of every field: the outline is searched from here
 
 
@@ -184,7 +185,7 @@ def build(objects, stand_target=5000):
     for vs, green in floor:                        # the floor, with the game's mound in place of the model's
         if not all((v.xy - MOUND.xy).length < 3.0 for v in vs):
             tris.append((tuple(vs), 5 if green else 6))
-    ring = [MOUND + Vector((2.74 * math.sin(a), 2.74 * math.cos(a), 0.01)) for a in
+    ring = [MOUND + Vector((MOUND_RADIUS * math.sin(a), MOUND_RADIUS * math.cos(a), 0.01)) for a in
             (2 * math.pi * k / 16 for k in range(16))]
     for a, b in zip(ring, ring[1:] + ring[:1]):
         tris.append(((MOUND + Vector((0, 0, 0.01)), b, a), 8))

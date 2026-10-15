@@ -83,6 +83,7 @@ Puedes llevar al juego un estadio que no existe en él.
    - en metros;
    - con el plato en el origen, el suelo a la altura 0 y la segunda base hacia +Y.
    - Compruébalo con las bases de tu modelo: del plato a primera y a tercera hay 27,43 m (90 pies), y a la goma 18,44 m. Muchos modelos no están a escala: si tus bases están más lejos, escala todo el modelo hasta que cuadren.
+   - Es importante porque el juego no lee del estadio dónde están las bases ni la caja de bateo: pone a los jugadores siempre en el mismo sitio, y tu modelo tiene que coincidir con él.
 4. Selecciona los objetos de tu modelo y pulsa **Convertir objetos en piezas** (panel Power Pros, tecla N):
    - Cada cara va a la pieza del estadio más cercana (gradas, vallas o suelo), porque el juego solo dibuja las piezas que ya tiene el estadio.
    - El color de cada material y un sol suave se guardan en el color de los vértices, porque el juego dibuja los estadios sin luz.

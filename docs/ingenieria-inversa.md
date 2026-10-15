@@ -400,6 +400,11 @@ Verificado (14 de octubre de 2026):
 - **Sentido de los triángulos:** horario visto de frente (como GX). La normal geométrica es opuesta a la guardada en 11.093 de los 11.109 triángulos de Coors Field.
 - **Unidades:** decímetros. Y hacia arriba, el plato en el origen, −Z hacia el center field y +X hacia el right field.
   - La goma del lanzador mide 6 (61 cm) y está a z ≈ −190.
+- **El campo es fijo; el estadio se adapta a él** (14 de octubre de 2026):
+  - en la colisión de todos los estadios salvo Toronto, el montículo (superficie 8) tiene el centro a 18,51 m del plato y 5,64 m de diámetro;
+  - el estadio no tiene ningún dato con la posición de las bases, la caja de bateo o la defensa: sus gráficos solo las dibujan;
+  - por eso un modelo propio tiene que ponerse en ese marco (plato en el origen, bases a 90 pies), para que lo dibujado coincida con donde el juego pone a los jugadores;
+  - sin comprobar: de dónde saca la defensa la distancia a las vallas, si de la colisión o de datos del estadio base.
   - La valla del left field está a unos 1.085 (108 m).
 - **Texturas:** C4, C8, RGB5A3 y RGBA8.
   - Se comparten entre modelos del mismo pack; Coors Field tiene 115.
