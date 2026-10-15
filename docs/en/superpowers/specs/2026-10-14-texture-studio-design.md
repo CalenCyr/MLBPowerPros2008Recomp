@@ -25,7 +25,7 @@ Players without technical knowledge, with the game installed by the Setup. They 
 
 - The runtime already loads Dolphin-style replacements: files `tex1_<width>x<height>_<hash>[_<palette hash>]_<format>.png|.dds` inside `mods/<mod>/textures/` (and `UserData/texture_replacements/`), at any resolution. An enabled mod with `textures/` turns on replacements with no further settings (`mods.cpp`).
 - `<hash>` is XXH64 (seed 0) of the bytes of the texture's base level; `<palette hash>` is XXH64 of the palette range between the minimum and maximum index the texture uses (`texture_replacement.cpp`). `$` is a wildcard for either of them.
-- Verified on October 14, 2026 with the runtime dump up to the main menu (`docs/ingenieria-inversa.md`, section 5): the hash computed from the `.pack` matches the game's for the 39 pack textures seen, and the palette for 36 of 38. The game uses the pack bytes as they are.
+- Verified on October 14, 2026 with the runtime dump up to the main menu (`docs/en/reverse-engineering.md`, section 5): the hash computed from the `.pack` matches the game's for the 39 pack textures seen, and the palette for 36 of 38. The game uses the pack bytes as they are.
 - What does not come from packs: THP videos (I8 at 512×448 and 256×224, ignored) and a few non-power-of-two textures generated at run time (covered by the capture).
 
 Consequence: the Studio never rewrites `.pack` or `project.bin`. It only writes PNGs with the right name into the mod folder.
@@ -56,7 +56,7 @@ Each unit has a single responsibility and is tested separately. `catalog`, `gx` 
 ### Input data
 
 - `UserData/Config.toml` next to the game executable: `[paths] dvd_root` → `<dvd_root>/files/project.bin`.
-- `project.bin`: documented format (`tools/projectbin.py`, `docs/ingenieria-inversa.md` section 5).
+- `project.bin`: documented format (`tools/projectbin.py`, `docs/en/reverse-engineering.md` section 5).
 - Inside each `PACKWII`: model and interface texture headers, palettes, texture sets; palette pairing by pointer or, failing that, by the colours that follow the pixels (like `packwii.py`).
 
 ### Index
@@ -145,5 +145,5 @@ Drawing or editing inside the app; integrated AI upscaling; THP videos; 3D model
 ## Project rules that apply
 
 - Nothing from the game in the repository, the package or the app: the app reads the player's `project.bin` at run time.
-- Every new reverse-engineering document goes to `docs/ingenieria-inversa.md` (and the PDF).
+- Every new reverse-engineering document goes to `docs/en/reverse-engineering.md` (and the PDF).
 - The runtime change is a reproducible patch in `tools/patches/`, registered in `tools/wiicompiled-translate.ps1`.

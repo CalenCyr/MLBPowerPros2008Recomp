@@ -4,7 +4,7 @@
 
 The **"MLB Power Pros 2008 Stadiums"** («Estadios de MLB Power Pros 2008») add-on opens any stadium from your game in Blender: every piece in its place and with its textures, plus the field's collision mesh.
 
-It also **exports**: whatever you change in the pieces and in the collision goes back to the game as a mod. And it can bring **a stadium of your own** made in SketchUp, Blender or another program into the game (see "Your own model"). The format is described in `docs/en/ingenieria-inversa.md`, section 5, "Stadiums".
+It also **exports**: whatever you change in the pieces and in the collision goes back to the game as a mod. And it can bring **a stadium of your own** made in SketchUp, Blender or another program into the game (see "Your own model"). The format is described in `docs/en/reverse-engineering.md`, section 5, "Stadiums".
 
 ## Install
 
@@ -38,7 +38,7 @@ It takes a few seconds. Nothing is extracted to disk: everything is read from yo
 - **Textures** packed inside the `.blend`.
 - **Collision**, in the "… · Collision" («… · Colisión») subcollection, hidden on import (turn it on with the eye):
   - it is the mesh the game uses to decide where the ball bounces;
-  - each face has a `surface_id` and a color by type (grass, dirt, mound, fences, stands, foul poles…; see the table in `docs/en/ingenieria-inversa.md`).
+  - each face has a `surface_id` and a color by type (grass, dirt, mound, fences, stands, foul poles…; see the table in `docs/en/reverse-engineering.md`).
 - **Power Pros panel (N):** the selected piece, its original model, the Maya node and the placement flags. In the collision, the surface of the active face.
 
 The `pp_*` custom properties on objects and materials store the original data the export will need. Don't delete them if you want to put the stadium back into the game.

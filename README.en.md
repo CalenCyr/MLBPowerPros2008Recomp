@@ -127,8 +127,8 @@ For developers. Requirements: PowerShell 5.1, Git, the .NET 8 SDK and Python 3.1
 | Document | Contents |
 |---|---|
 | [docs/en/wiicompiled-feasibility.md](docs/en/wiicompiled-feasibility.md) | From the first translation to a playable game: every patch, every failure and every measurement |
-| [docs/en/ingenieria-inversa.md](docs/en/ingenieria-inversa.md) | Reference of the game by system: memory, threads, `project.bin`, roster, textures, stadiums (PDF with `tools/build_re_pdf.py`) |
-| [docs/en/launcher-controles.md](docs/en/launcher-controles.md) | Launcher, controls and language |
+| [docs/en/reverse-engineering.md](docs/en/reverse-engineering.md) | Reference of the game by system: memory, threads, `project.bin`, roster, textures, stadiums (PDF with `tools/build_re_pdf.py`) |
+| [docs/en/launcher-controls.md](docs/en/launcher-controls.md) | Launcher, controls and language |
 | [docs/en/mods.md](docs/en/mods.md) | Kinds of mods and how to install them |
 | [docs/en/roster-2008.md](docs/en/roster-2008.md) | 2008 rosters and the PowerUp+ editor |
 | [docs/en/texture-studio.md](docs/en/texture-studio.md) | Texture Studio |

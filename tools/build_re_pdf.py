@@ -4,7 +4,7 @@
 The PDF is a binary, so it is written under local/docs/ (the pre-commit check keeps binaries
 out of git); share it from there. Needs the Python `markdown` package and Chrome or Edge.
 Usage: build_re_pdf.py [SOURCE_MD] [OUTPUT_PDF]
-English: build_re_pdf.py docs/en/ingenieria-inversa.md  (-> local/docs/MLB-PowerPros-2008-reverse-engineering.pdf)
+English: build_re_pdf.py docs/en/reverse-engineering.md  (-> local/docs/MLB-PowerPros-2008-reverse-engineering.pdf)
 """
 import pathlib
 import re
@@ -46,7 +46,7 @@ def browser() -> str:
 
 def main() -> None:
     source = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "ingenieria-inversa.md"
-    english = source.resolve().parent.name == "en"          # docs/en/ingenieria-inversa.md
+    english = source.resolve().parent.name == "en"          # docs/en/reverse-engineering.md
     name = "MLB-PowerPros-2008-reverse-engineering.pdf" if english else "MLB-PowerPros-2008-ingenieria-inversa.pdf"
     output = (pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "local" / "docs" / name).resolve()  # Chrome needs it absolute
     # GitHub nests lists at 2 spaces; Python-Markdown needs 4.

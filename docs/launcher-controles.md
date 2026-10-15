@@ -1,6 +1,6 @@
 # Launcher y controles
 
-*English version: [en/launcher-controles.md](en/launcher-controles.md)*
+*English version: [en/launcher-controls.md](en/launcher-controls.md)*
 
 La build local conserva el fondo, los colores y los botones brillantes del launcher original. Vídeo, Audio, Controles e Interfaz se abren mediante sus pestañas; Mods y Herramientas conservan su entrada desde el menú principal.
 

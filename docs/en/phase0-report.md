@@ -4,7 +4,7 @@
 
 Date: October 7, 2026. Project: `D:\MLBPowerPros2008Recomp`.
 
-> **Historical report**: it describes the starting point. Today the game is natively playable on top of Wiicompiled (`docs/en/wiicompiled-feasibility.md`), and `project.bin` and the roster are decoded (`docs/en/ingenieria-inversa.md`). The DolRecomp/ModernGekko reports and scripts it cites (`cpu-translation-report.md`, `runtime-integration-report.md`, `recompile.ps1`) are in the git tag `moderngekko-era`. What is listed here as pending (`project.bin` extractor, roster file, framerate) is already resolved in those documents.
+> **Historical report**: it describes the starting point. Today the game is natively playable on top of Wiicompiled (`docs/en/wiicompiled-feasibility.md`), and `project.bin` and the roster are decoded (`docs/en/reverse-engineering.md`). The DolRecomp/ModernGekko reports and scripts it cites (`cpu-translation-report.md`, `runtime-integration-report.md`, `recompile.ps1`) are in the git tag `moderngekko-era`. What is listed here as pending (`project.bin` extractor, roster file, framerate) is already resolved in those documents.
 
 **Status (at the time): reproducible analysis; phase 0 still open. There is no playable native port.** The project, the tools, the extraction, the disc inventory and the structural analysis of the DOL/REL were prepared. A later analysis estimated 48,175 functions and produced a first compiled translation; see `docs/cpu-translation-report.md`. Validation of function boundaries, framerate measurement and analysis of the game's own containers are still missing.
 

@@ -32,7 +32,7 @@ The settings panel uses the frame drawn on the background only when the window h
 
 A modern stick is round: pushed fully on a diagonal it gives about `(60, 61)` on the GameCube scale, and with that the fielder walks. The keyboard (W + D, for example) gives `(87, 87)` and runs. While you control a fielder, the runtime reads that controller's main stick as a square: same direction, and the stick's full travel on each axis. A full diagonal then arrives just like the keyboard's, and the fielder runs. Straight directions and partial tilts do not change, so you can still walk.
 
-It only applies while the game uses that controller's fielding control. When batting, pitching and in menus the stick stays the same, and **Test sticks** shows the usual signal. Patch `tools/patches/wiicompiled-mlb-fielding-diagonals.patch`; test `mlb_fielding_stick_tests`. Details in `docs/en/ingenieria-inversa.md` (section 9, "Controllers").
+It only applies while the game uses that controller's fielding control. When batting, pitching and in menus the stick stays the same, and **Test sticks** shows the usual signal. Patch `tools/patches/wiicompiled-mlb-fielding-diagonals.patch`; test `mlb_fielding_stick_tests`. Details in `docs/en/reverse-engineering.md` (section 9, "Controllers").
 
 ## Back and closing
 

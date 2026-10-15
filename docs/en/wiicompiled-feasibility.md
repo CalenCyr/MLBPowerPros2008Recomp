@@ -750,7 +750,7 @@ It is not validated pixel by pixel against Dolphin.
 - **Integration:** the launcher opens it from HERRAMIENTAS → EDITOR DE TEXTURAS (patch `wiicompiled-texture-studio`), the Setup installs it alongside the game and `wiicompiled-build.ps1` places it next to `WiiCompiled.exe`.
 - **In-game capture:** `WIICOMPILED_TEXTURE_DUMPS=1` enables texture dumping for that run only, without touching `Config.toml`.
 - **Verified in game:** the main menu label atlas and two Coors Field textures (fences and scoreboard) scaled ×4 with the Studio show up in the menu and during a match.
-- **Reverse engineering:** the texture headers in the `.pack` files store the height before the width (see `docs/en/ingenieria-inversa.md`, section 5).
+- **Reverse engineering:** the texture headers in the `.pack` files store the height before the width (see `docs/en/reverse-engineering.md`, section 5).
 
 ## Mario Kart Wii leftovers in the runtime (October 14, 2026)
 

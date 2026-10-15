@@ -46,7 +46,7 @@ Bits that PowerUp doesn't name travel with their area; the converter copies them
   - "push hitter" (0x71.0): Ichiro, Joe Mauer, Todd Helton, Michael Young, Mark Loretta;
   - "free swinger" (0x71.7): Alfonso Soriano, José Guillén, Iván Rodríguez, Torii Hunter, Garret Anderson;
   - "pull hitter" (0x77.7): Jason Giambi, Alex Rodríguez, Gary Sheffield, Andruw Jones, Carlos Peña.
-- no 2008 player has "table setter" (0x70.0), but the game still uses it: it has its read function, its write function in Edit mode and two gameplay functions that check it together with "rally hitter" (details in `docs/en/ingenieria-inversa.md`, section 6). The converter writes it in its place and it works if you give it to a player.
+- no 2008 player has "table setter" (0x70.0), but the game still uses it: it has its read function, its write function in Edit mode and two gameplay functions that check it together with "rally hitter" (details in `docs/en/reverse-engineering.md`, section 6). The converter writes it in its place and it works if you give it to a player.
 
 **Checked in the game code.** The game reads each record field with a small function, all of them consecutive and in record order. Their positions and widths match this table in every moved field. Some that PowerUp models as a single bit are 2 bits for the game. The other bit travels as an unnamed bit, so the full value is preserved:
 - 0x75.4 (2 signed bits, "cannon arm" for PowerUp): +1 in 96 players and −1 in 11. It is not the cannon arm; see the next table.

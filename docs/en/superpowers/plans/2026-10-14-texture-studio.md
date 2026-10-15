@@ -21,7 +21,7 @@
 - Maximum replacement size: 4096 px per side; same aspect ratio as the original.
 - Hash: XXH64, seed 0. Name: `tex1_<w>x<h>_<hash 16 hex>[_<palette hash 16 hex | $>]_<format>`.
 - The runtime change is a reproducible patch in `tools/patches/`, registered in `tools/wiicompiled-translate.ps1` after `'wiicompiled-match-benchmark-gameplay'`.
-- Every new reverse-engineering finding goes to `docs/ingenieria-inversa.md` and the PDF is regenerated (`python tools/build_re_pdf.py`).
+- Every new reverse-engineering finding goes to `docs/en/reverse-engineering.md` and the PDF is regenerated (`python tools/build_re_pdf.py`).
 - Commits end with `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`; the `tools/check_no_game_data.py` hook must pass.
 
 **Change from the spec (approved for simplicity):** the index is not saved to disk in the first version. It is built in a thread with a progress bar on opening; if it takes more than 5 s on the test PC, the cache is added as a separate task. The spec is updated in Task 12.
@@ -60,7 +60,7 @@ tools/setup/LocalBuild.ps1        lo instala junto al juego, acceso directo
 tools/patches/wiicompiled-texture-studio.patch   launcher (botón) + volcado por variable de entorno
 tools/wiicompiled-translate.ps1   registra el parche
 docs/texture-studio.md            manual para jugadores
-docs/mods.md, docs/ingenieria-inversa.md         referencias
+docs/mods.md, docs/en/reverse-engineering.md         referencias
 ```
 
 Build and selftest command used in every task (from the repo root, PowerShell):
@@ -471,7 +471,7 @@ struct PackTexture {
 std::vector<PackTexture> FindTextures(std::span<const uint8_t> pack);  // empty unless "PACKWII "
 ```
 
-Rules (those of `tools/packwii.py`, verified against the game): see the docstring of `packwii.py` and `docs/ingenieria-inversa.md` section 5.
+Rules (those of `tools/packwii.py`, verified against the game): see the docstring of `packwii.py` and `docs/en/reverse-engineering.md` section 5.
 
 - [ ] **Step 1: Tests (they fail)**
 
@@ -522,7 +522,7 @@ And in `RunSelftest()`: `TestPack();` after `TestGx();`. Add `#include <cstring>
 
 ```cpp
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Texture and palette headers inside a PACKWII file (docs/ingenieria-inversa.md, section 5).
+// Texture and palette headers inside a PACKWII file (docs/en/reverse-engineering.md, section 5).
 #pragma once
 #include "core.h"
 

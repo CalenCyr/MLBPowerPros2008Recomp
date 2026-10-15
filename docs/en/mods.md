@@ -62,7 +62,7 @@ python tools/projectbin.py build   <project.bin> <replacements> <output>
 
 To find out which entry each screen uses, run the game with `WIICOMPILED_DEBUG_DVD=1`: the log shows each `project.bin` read with its position, which `projectbin.py list` translates into a name.
 
-Format (verified on all 2,424 entries): header with version 2 and sector 0x800; 0x1C-byte records at 0x6000 (name, sectors, alignment, size); order table at 0x26000 (record, start sector); names at 0x2B000; data from 0x3D800. The internal format of the `.pack` files is in `docs/en/ingenieria-inversa.md`, section 5.
+Format (verified on all 2,424 entries): header with version 2 and sector 0x800; 0x1C-byte records at 0x6000 (name, sectors, alignment, size); order table at 0x26000 (record, start sector); names at 0x2B000; data from 0x3D800. The internal format of the `.pack` files is in `docs/en/reverse-engineering.md`, section 5.
 
 A mod must not distribute a full `project.bin` (it is game content): only its `.pack` files in `project/`.
 
@@ -104,7 +104,7 @@ base = "atl"             # stadium whose game data it uses (dimensions, menu, sa
 - `project/env_stadium_menu_<code>.pack` is optional: a copy of the base stadium's menu pack (`env_stadium_menuNN.pack`, NN = stadium number) with a different image. Without it, the base stadium's image is shown.
 - The game stores the base stadium's number in saves and settings, so disabling the mod never breaks anything: that game goes back to the base stadium.
 - For now only in Exhibition.
-- The name banner comes from `project/env_stadium_name_<code>.pack` if the mod brings it (format in `docs/en/ingenieria-inversa.md`). If not, the runtime draws it with the mod's `name` and a system font.
+- The name banner comes from `project/env_stadium_name_<code>.pack` if the mod brings it (format in `docs/en/reverse-engineering.md`). If not, the runtime draws it with the mod's `name` and a system font.
 - The new files get free `project.bin` numbers (from 4388), which the game doesn't use.
 
 ## Saves per roster
