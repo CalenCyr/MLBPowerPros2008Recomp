@@ -50,6 +50,9 @@ def problems(path: str, data: bytes) -> list[str]:
     # Original launcher art (not game content) is the only binary allowed in the repository.
     if path.startswith("assets/launcher/") and ext == "png":
         return [f"{len(data)} bytes (> 4 MiB)"] if len(data) > 4 * 1024 * 1024 else []
+    # README screenshots of the project's own windows (launcher, Setup), never of the game itself.
+    if path.startswith("docs/media/") and ext in ("png", "jpg"):
+        return [f"{len(data)} bytes (> 512 KiB)"] if len(data) > MAX_BYTES else []
     # Symbol maps (address + name per line, like a decomp's symbols.txt) may be larger.
     is_symbol_map = path.startswith("config/") and ext == "map"
     limit = 2 * 1024 * 1024 if is_symbol_map else MAX_BYTES
@@ -92,6 +95,9 @@ def demo() -> None:
     assert problems("config/a.map", b"80004000 __start\n8000403c main\n") == []
     assert problems("assets/launcher/main.png", b"\x89PNG\x00") == []
     assert problems("assets/other.png", b"\x89PNG\x00") == ["binary content"]
+    assert problems("docs/media/setup-en.jpg", b"\xff\xd8\x00") == []
+    assert problems("docs/media/big.jpg", b"\x00" * (MAX_BYTES + 1))[0].endswith("(> 512 KiB)")
+    assert problems("docs/media/x.wav", b"\x00")[0] == "game file type .wav"
     assert problems("config/a.map", b"80004000 __start\n80004010 0x80004010\n") == []
     assert problems("config/a.map", b"80004000 __start\x00")[0] == "binary content"
     assert problems("config/a.map", b"80004000 x\nnot a symbol\n")[0].startswith("symbol map line 2")
