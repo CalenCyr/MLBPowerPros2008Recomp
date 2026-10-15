@@ -17,8 +17,11 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -56,7 +59,7 @@ struct Build {
     void Start(const fs::path& script, const std::string& iso, const fs::path& install, bool shortcut) {
         Stop();
         percent = 0;
-        message = "Preparando...";
+        message = Tr("Preparando...", "Preparing...");
         error.clear();
         tail.clear();
         finished = false;
@@ -64,7 +67,9 @@ struct Build {
         fs::create_directories(install);
         std::wstring command = L"powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" +
                                script.wstring() + L"\" -Iso \"" + Wide(iso) + L"\" -Install \"" + install.wstring() +
-                               L"\"" + (shortcut ? L" -Shortcut" : L"");
+                               L"\"" + (shortcut ? L" -Shortcut" : L"") +
+                               // The script's progress messages come in the Setup's language.
+                               (g_lang == Lang::En ? L" -Lang en" : L" -Lang es");
         SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
         HANDLE readPipe = nullptr;
         HANDLE writePipe = nullptr;
@@ -87,7 +92,7 @@ struct Build {
         CloseHandle(writePipe);
         if (!started) {
             CloseHandle(readPipe);
-            error = "No se pudo iniciar PowerShell.";
+            error = Tr("No se pudo iniciar PowerShell.", "Could not start PowerShell.");
             finished = true;
             return;
         }
@@ -119,7 +124,7 @@ struct Build {
             CloseHandle(process);
             {
                 std::lock_guard lock(mutex);
-                if (code != 0 && error.empty()) error = "La instalación falló. Revisa setup.log.";
+                if (code != 0 && error.empty()) error = Tr("La instalación falló. Revisa setup.log.", "Installation failed. Check setup.log.");
             }
             succeeded = code == 0;
             running = false;
@@ -163,6 +168,102 @@ void SDLCALL OnDialog(void* userdata, const char* const* files, int) {
     std::lock_guard lock(result->mutex);
     result->path = files != nullptr && files[0] != nullptr ? files[0] : "";
     result->ready = true;
+}
+
+// Actions are identified by their Spanish label; this is the label shown in the current language.
+const char* Label(const char* label) {
+    const std::string_view id = label;
+    if (id == "JUGAR") return Tr("JUGAR", "PLAY");
+    if (id == "ELEGIR DISCO") return Tr("ELEGIR DISCO", "CHOOSE DISC");
+    if (id == "INSTALAR") return Tr("INSTALAR", "INSTALL");
+    if (id == "REINSTALAR") return Tr("REINSTALAR", "REINSTALL");
+    if (id == "CAMBIAR DISCO") return Tr("CAMBIAR DISCO", "CHANGE DISC");
+    if (id == "OTRO DISCO") return Tr("OTRO DISCO", "OTHER DISC");
+    if (id == "CARPETA") return Tr("CARPETA", "FOLDER");
+    if (id == "SALIR") return Tr("SALIR", "EXIT");
+    if (id == "CANCELAR") return Tr("CANCELAR", "CANCEL");
+    if (id == "REINTENTAR") return Tr("REINTENTAR", "RETRY");
+    if (id == "VER REGISTRO") return Tr("VER REGISTRO", "VIEW LOG");
+    return label;
+}
+
+// Writes the Setup's language to the installed game's Config.toml as [ui] language, so its
+// launcher starts in the same language. Line-based: every other line stays as it is; the key goes
+// into an existing [ui] section, or a new one at the end. No Config.toml, nothing to do.
+void SaveLanguage(const fs::path& config) {
+    std::ifstream in(config, std::ios::binary);
+    if (!in) return;
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    const char* eol = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos < text.size();) {
+        size_t nl = text.find('\n', pos);
+        if (nl == std::string::npos) nl = text.size();
+        std::string line = text.substr(pos, nl - pos);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(std::move(line));
+        pos = nl + 1;
+    }
+    auto trim = [](std::string_view v) {
+        while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
+        while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
+        return v;
+    };
+    const std::string entry = std::string("language = \"") + (g_lang == Lang::En ? "en" : "es") + "\"";
+    int header = -1;
+    bool inUi = false;
+    bool done = false;
+    for (size_t i = 0; i < lines.size() && !done; ++i) {
+        const std::string_view t = trim(lines[i]);
+        if (!t.empty() && t.front() == '[') {
+            inUi = t.substr(0, t.find(']') + 1) == "[ui]";
+            if (inUi) header = static_cast<int>(i);
+        } else if (inUi && t.rfind("language", 0) == 0 && trim(t.substr(8)).rfind('=', 0) == 0) {
+            lines[i] = entry;
+            done = true;
+        }
+    }
+    if (!done && header >= 0) {
+        lines.insert(lines.begin() + header + 1, entry);
+    } else if (!done) {
+        if (!lines.empty() && !trim(lines.back()).empty()) lines.emplace_back();
+        lines.emplace_back("[ui]");
+        lines.push_back(entry);
+    }
+    std::string out;
+    for (const std::string& line : lines) out += line + eol;
+    std::ofstream file(config, std::ios::binary | std::ios::trunc);
+    file.write(out.data(), static_cast<std::streamsize>(out.size()));
+}
+
+// "ES | EN" switch in the style of the menus: a small blue pill with the current language lit in
+// orange. Clicking a half picks that language. Returns the language to use from now on.
+Lang LanguagePill(ImDrawList* dl, ImVec2 a, float height, float u, bool click) {
+    const float ts = height * 0.56f;
+    const float half = std::max(TextSize(g_bold, ts, "ES").x, TextSize(g_bold, ts, "EN").x) + height * 0.8f;
+    const ImVec2 b(a.x + half * 2.0f, a.y + height);
+    Pill(dl, a, b, Rgba(90, 150, 240), Rgba(30, 80, 190), u * 0.5f);
+    Lang picked = g_lang;
+    const ImVec2 m = ImGui::GetIO().MousePos;
+    for (int i = 0; i < 2; ++i) {
+        const Lang lang = i == 0 ? Lang::Es : Lang::En;
+        const char* text = i == 0 ? "ES" : "EN";
+        const ImVec2 ha(a.x + half * static_cast<float>(i), a.y);
+        const ImVec2 hb(ha.x + half, b.y);
+        if (lang == g_lang) {
+            const float inset = 3 * u;
+            const int start = dl->VtxBuffer.Size;
+            dl->AddRectFilled(ImVec2(ha.x + inset, ha.y + inset), ImVec2(hb.x - inset, hb.y - inset), IM_COL32_WHITE,
+                              (height - 2 * inset) * 0.5f);
+            Shade(dl, start, ha.y, hb.y, Rgba(255, 206, 96), Rgba(240, 112, 18));
+        }
+        const ImVec2 tz = TextSize(g_bold, ts, text);
+        ShadowedText(dl, g_bold, ts, ImVec2((ha.x + hb.x - tz.x) * 0.5f, (ha.y + hb.y - tz.y) * 0.5f),
+                     lang == g_lang ? IM_COL32_WHITE : Rgba(190, 220, 255), text);
+        if (click && m.x >= ha.x && m.x < hb.x && m.y >= ha.y && m.y < hb.y) picked = lang;
+    }
+    return picked;
 }
 
 } // namespace
@@ -228,8 +329,13 @@ SDL_Surface* BlurredSurface(SDL_Surface* image) {
 
 int main(int, char**) {
     SetProcessDPIAware();
+    // The language starts as the system's (power_pros_ui::g_lang); MLBPP_SETUP_LANG=es|en (scripted
+    // tests) picks one. The ES | EN pill switches it at any time.
+    if (const char* lang = std::getenv("MLBPP_SETUP_LANG")) g_lang = LangFromSetting(lang);
+    const Lang initialLang = g_lang;
+    auto windowTitle = [] { return Tr("MLB Power Pros 2008 - Instalación", "MLB Power Pros 2008 - Setup"); };
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) return 1;
-    SDL_Window* window = SDL_CreateWindow("MLB Power Pros 2008 - Instalación", 1280, 720,
+    SDL_Window* window = SDL_CreateWindow(windowTitle(), 1280, 720,
                                           SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     SDL_SetRenderVSync(renderer, 1);
@@ -258,6 +364,13 @@ int main(int, char**) {
     const fs::path script = base / "workspace" / "LocalBuild.ps1";
     fs::path install = base / "MLB Power Pros 2008";
     auto gameExe = [&] { return install / "Game" / "MLBPowerPros2008.exe"; };
+    // A language picked in the Setup goes to the installed game's Config.toml once it is installed.
+    bool wroteLanguage = false;
+    auto saveLanguage = [&] {
+        if (g_lang == initialLang && !wroteLanguage) return;
+        SaveLanguage(install / "Game" / "UserData" / "Config.toml");
+        wroteLanguage = true;
+    };
     // A disc image dropped onto the exe (or passed as the first argument) is preselected.
     std::string iso;
     if (int count = 0; LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &count)) {
@@ -304,7 +417,10 @@ int main(int, char**) {
                 if (!folderDialog.path.empty()) install = fs::u8path(folderDialog.path) / "MLB Power Pros 2008";
             }
         }
-        if (screen == Screen::Building && build.finished) screen = build.succeeded ? Screen::Done : Screen::Failed;
+        if (screen == Screen::Building && build.finished) {
+            screen = build.succeeded ? Screen::Done : Screen::Failed;
+            if (screen == Screen::Done) saveLanguage();
+        }
 
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -330,6 +446,19 @@ int main(int, char**) {
 
         const bool installed = fs::exists(gameExe());
         const char* activated = nullptr;
+        // Language switch with its top-right corner at `corner`. A change made after installing also
+        // reaches the installed game's Config.toml.
+        auto languageSwitch = [&](ImVec2 corner, float lu) {
+            const float ph = 34 * lu;
+            const float ts = ph * 0.56f;
+            const float pw = (std::max(TextSize(g_bold, ts, "ES").x, TextSize(g_bold, ts, "EN").x) + ph * 0.8f) * 2.0f;
+            const Lang picked = LanguagePill(dl, ImVec2(corner.x - pw, corner.y), ph, lu, click);
+            if (picked != g_lang) {
+                g_lang = picked;
+                SDL_SetWindowTitle(window, windowTitle());
+                if (screen == Screen::Done) saveLanguage();
+            }
+        };
         if (art != nullptr) {
             // MoonInning art (workspace\launcher\setup.png: the launcher backdrop with blank buttons).
             // Actions sit on the four art buttons by colour: orange = main action, blue = secondary,
@@ -443,9 +572,10 @@ int main(int, char**) {
                 // Label in the art's lettering style: light fill, dark rim in the button's colour.
                 const float room = (x1 - x0) - 210.0f;
                 float fs = 44.0f * s;
-                while (TextSize(g_title, fs, action->label).x > room * s) fs *= 0.94f;
+                const char* label = Label(action->label);
+                while (TextSize(g_title, fs, label).x > room * s) fs *= 0.94f;
                 const float ty = at(0, (y0 + y1) * 0.5f).y - fs * 0.62f;
-                LogoText(dl, g_title, fs, ImVec2(at(x0 + 70, 0).x, ty), IM_COL32_WHITE, Rgba(255, 244, 214), action->label,
+                LogoText(dl, g_title, fs, ImVec2(at(x0 + 70, 0).x, ty), IM_COL32_WHITE, Rgba(255, 244, 214), label,
                          r.rim, Rgba(255, 255, 255, 0));
             }
             if (accept) activated = actions[static_cast<size_t>(menu)].label;
@@ -460,31 +590,35 @@ int main(int, char**) {
             const ImU32 dim = Rgba(200, 225, 255);
             switch (screen) {
             case Screen::Welcome: {
-                const std::string first = !iso.empty() ? "Disco: " + Utf8(fs::u8path(iso).filename())
-                                          : installed ? std::string("El juego ya está instalado. Pulsa JUGAR.")
-                                                      : std::string("Elige tu copia de MLB Power Pros 2008 para Wii (USA).");
+                const std::string first = !iso.empty() ? Tr("Disco: ", "Disc: ") + Utf8(fs::u8path(iso).filename())
+                                          : installed ? std::string(Tr("El juego ya está instalado. Pulsa JUGAR.",
+                                                                       "The game is already installed. Press PLAY."))
+                                                      : std::string(Tr("Elige tu copia de MLB Power Pros 2008 para Wii (USA).",
+                                                                       "Choose your copy of MLB Power Pros 2008 for Wii (USA)."));
                 ShadowedText(dl, g_text, 30 * s, at(100, 777), IM_COL32_WHITE, first.c_str());
                 // Desktop shortcut checkbox, right side of the info box.
-                const char* sc = "Acceso directo en el escritorio";
+                const char* sc = Tr("Acceso directo en el escritorio", "Desktop shortcut");
                 const float tw = TextSize(g_text, 22 * s, sc).x;
                 const ImVec2 ca(rightEdge - tw - 34 * s, at(0, 818).y);
                 // Long folder paths are shortened from the left so they never reach the checkbox.
                 std::string folder = Utf8(install);
-                const float room = ca.x - ix - 30 * s - TextSize(g_text, 21 * s, "Carpeta: …").x;
+                const std::string folderLabel = Tr("Carpeta: ", "Folder: ");
+                const float room = ca.x - ix - 30 * s - TextSize(g_text, 21 * s, (folderLabel + "…").c_str()).x;
                 bool cut = false;
                 while (!folder.empty() && TextSize(g_text, 21 * s, folder.c_str()).x > room) {
                     folder.erase(0, 1);
                     while (!folder.empty() && (static_cast<unsigned char>(folder[0]) & 0xC0) == 0x80) folder.erase(0, 1);
                     cut = true;
                 }
-                const std::string folderLine = std::string("Carpeta: ") + (cut ? "…" : "") + folder;
+                const std::string folderLine = folderLabel + (cut ? "…" : "") + folder;
                 ShadowedText(dl, g_text, 21 * s, at(100, 820), dim, folderLine.c_str());
                 const ImVec2 cb(ca.x + 24 * s, ca.y + 24 * s);
                 dl->AddRectFilled(ca, cb, IM_COL32_WHITE, 5 * s);
                 if (shortcut) DrawCheck(dl, ImVec2(ca.x + 4 * s, ca.y + 3 * s), 17 * s, Rgba(30, 140, 60));
                 ShadowedText(dl, g_text, 22 * s, ImVec2(cb.x + 10 * s, ca.y), IM_COL32_WHITE, sc);
                 if (click && m.x >= ca.x && m.x < rightEdge && m.y >= ca.y && m.y < cb.y) shortcut = !shortcut;
-                rightText("Se aceptan ISO, NKit, RVZ, WBFS, WIA, GCZ y CISO.", 21 * s, 782, dim);
+                rightText(Tr("Se aceptan ISO, NKit, RVZ, WBFS, WIA, GCZ y CISO.", "Supports ISO, NKit, RVZ, WBFS, WIA, GCZ and CISO."),
+                          21 * s, 782, dim);
                 break;
             }
             case Screen::Building: {
@@ -516,19 +650,35 @@ int main(int, char**) {
                 break;
             }
             case Screen::Done:
-                ShadowedText(dl, g_text, 30 * s, at(100, 777), IM_COL32_WHITE, "¡Listo! MLB Power Pros 2008 está instalado.");
+                ShadowedText(dl, g_text, 30 * s, at(100, 777), IM_COL32_WHITE,
+                             Tr("¡Listo! MLB Power Pros 2008 está instalado.", "Done! MLB Power Pros 2008 is installed."));
                 ShadowedText(dl, g_text, 21 * s, at(100, 820), dim, Utf8(gameExe()).c_str());
-                if (shortcut) rightText("También hay un acceso directo en el escritorio.", 21 * s, 782, dim);
+                if (shortcut) rightText(Tr("También hay un acceso directo en el escritorio.", "A desktop shortcut was created too."), 21 * s, 782, dim);
                 break;
             case Screen::Failed: {
                 std::lock_guard lock(build.mutex);
                 ShadowedText(dl, g_text, 28 * s, at(100, 777), Rgba(255, 200, 180), build.error.c_str());
-                const std::string logLine = "Registro: " + Utf8(install / "setup.log");
+                const std::string logLine = Tr("Registro: ", "Log: ") + Utf8(install / "setup.log");
                 ShadowedText(dl, g_text, 21 * s, at(100, 820), dim, logLine.c_str());
                 break;
             }
             }
-            rightText("No incluye nada del juego", 22 * s, 888, dim);
+            rightText(Tr("No incluye nada del juego", "No game files included"), 22 * s, 888, dim);
+            if (g_lang == Lang::En) {
+                // The art's button hints are lettered in Spanish: cover each word with the backdrop
+                // just above and below it (the art's own gradient) and letter it in English.
+                struct Word {
+                    float x0, x1;
+                    const char* text;
+                };
+                static constexpr Word kHintWords[3] = {{114, 206, "Accept"}, {283, 358, "Back"}, {435, 510, "Move"}};
+                for (const Word& word : kHintWords) {
+                    dl->AddImage(tex, at(word.x0, 884), at(word.x1, 900), ImVec2(word.x0 / kW, 868 / kH), ImVec2(word.x1 / kW, 884 / kH));
+                    dl->AddImage(tex, at(word.x0, 900), at(word.x1, 918), ImVec2(word.x0 / kW, 918 / kH), ImVec2(word.x1 / kW, 936 / kH));
+                    ShadowedText(dl, g_text, 30 * s, at(word.x0 + 6, 883), IM_COL32_WHITE, word.text);
+                }
+            }
+            languageSwitch(at(1630, 72), 1.3f * s);
         } else {
             DrawBackground(dl, w, h, u, t, g_title);
             // Title.
@@ -587,7 +737,7 @@ int main(int, char**) {
                 }
                 const Item& item = items[static_cast<size_t>(i)].second;
                 Pill(dl, a, b, item.top, item.bottom, u, selected ? Rgba(255, 250, 200) : IM_COL32_WHITE);
-                const char* label = items[static_cast<size_t>(i)].first;
+                const char* label = Label(items[static_cast<size_t>(i)].first);
                 float fs = 32 * u * grow;
                 while (TextSize(g_title, fs, label).x > (b.x - a.x) * 0.84f) fs *= 0.92f;
                 LogoTextCentered(dl, g_title, fs, c.x, c.y - fs * 0.62f, IM_COL32_WHITE, Rgba(255, 240, 190), label,
@@ -614,14 +764,22 @@ int main(int, char**) {
             switch (screen) {
             case Screen::Welcome:
                 if (iso.empty()) {
-                    line(installed ? "El juego ya está instalado. Pulsa JUGAR." : "Elige tu copia de MLB Power Pros 2008 para Wii (USA).", 26 * u, IM_COL32_WHITE);
-                    line("Se aceptan ISO, NKit, RVZ, WBFS, WIA, GCZ y CISO. El juego se traduce y compila en tu PC; "
-                         "no se descarga ni se envía nada del juego.", 21 * u, dim);
+                    line(installed ? Tr("El juego ya está instalado. Pulsa JUGAR.", "The game is already installed. Press PLAY.")
+                                   : Tr("Elige tu copia de MLB Power Pros 2008 para Wii (USA).",
+                                        "Choose your copy of MLB Power Pros 2008 for Wii (USA)."),
+                         26 * u, IM_COL32_WHITE);
+                    line(Tr("Se aceptan ISO, NKit, RVZ, WBFS, WIA, GCZ y CISO. El juego se traduce y compila en tu PC; "
+                            "no se descarga ni se envía nada del juego.",
+                            "Supports ISO, NKit, RVZ, WBFS, WIA, GCZ and CISO. The game is translated and compiled on "
+                            "your PC; nothing from the game is downloaded or sent."),
+                         21 * u, dim);
                 } else {
-                    line("Disco: " + Utf8(fs::u8path(iso).filename()), 25 * u, IM_COL32_WHITE);
-                    line("La primera instalación tarda varios minutos y usa todos los núcleos del procesador.", 21 * u, dim);
+                    line(Tr("Disco: ", "Disc: ") + Utf8(fs::u8path(iso).filename()), 25 * u, IM_COL32_WHITE);
+                    line(Tr("La primera instalación tarda varios minutos y usa todos los núcleos del procesador.",
+                            "The first install takes several minutes and uses every CPU core."),
+                         21 * u, dim);
                 }
-                line("Carpeta: " + Utf8(install), 20 * u, dim);
+                line(Tr("Carpeta: ", "Folder: ") + Utf8(install), 20 * u, dim);
                 break;
             case Screen::Building: {
                 std::lock_guard lock(build.mutex);
@@ -644,22 +802,22 @@ int main(int, char**) {
                 break;
             }
             case Screen::Done:
-                line("¡Listo! MLB Power Pros 2008 está instalado.", 28 * u, IM_COL32_WHITE);
-                line("Ejecutable: " + Utf8(gameExe()), 20 * u, dim);
-                if (shortcut) line("También hay un acceso directo en el escritorio.", 20 * u, dim);
+                line(Tr("¡Listo! MLB Power Pros 2008 está instalado.", "Done! MLB Power Pros 2008 is installed."), 28 * u, IM_COL32_WHITE);
+                line(Tr("Ejecutable: ", "Executable: ") + Utf8(gameExe()), 20 * u, dim);
+                if (shortcut) line(Tr("También hay un acceso directo en el escritorio.", "A desktop shortcut was created too."), 20 * u, dim);
                 break;
             case Screen::Failed: {
                 std::lock_guard lock(build.mutex);
-                line("No se pudo instalar.", 28 * u, Rgba(255, 190, 170));
+                line(Tr("No se pudo instalar.", "Installation failed."), 28 * u, Rgba(255, 190, 170));
                 line(build.error, 22 * u, IM_COL32_WHITE);
-                line("Registro: " + Utf8(install / "setup.log"), 18 * u, dim);
+                line(Tr("Registro: ", "Log: ") + Utf8(install / "setup.log"), 18 * u, dim);
                 break;
             }
             }
             if (screen == Screen::Welcome) {
                 // Options: install folder and desktop shortcut.
                 const float oy = ib.y - 46 * u;
-                const char* folder = "Cambiar carpeta";
+                const char* folder = Tr("Cambiar carpeta", "Change folder");
                 const ImVec2 fa(ix, oy);
                 const ImVec2 fb(ix + TextSize(g_bold, 19 * u, folder).x + 36 * u, oy + 34 * u);
                 const ImVec2 m = ImGui::GetIO().MousePos;
@@ -672,7 +830,7 @@ int main(int, char**) {
                 const ImVec2 cb(ca.x + 24 * u, ca.y + 24 * u);
                 dl->AddRectFilled(ca, cb, IM_COL32_WHITE, 5 * u);
                 if (shortcut) DrawCheck(dl, ImVec2(ca.x + 4 * u, ca.y + 3 * u), 17 * u, Rgba(30, 140, 60));
-                const char* sc = "Crear acceso directo en el escritorio";
+                const char* sc = Tr("Crear acceso directo en el escritorio", "Create a desktop shortcut");
                 ShadowedText(dl, g_text, 20 * u, ImVec2(cb.x + 10 * u, oy + 5 * u), IM_COL32_WHITE, sc);
                 const float scEnd = cb.x + 10 * u + TextSize(g_text, 20 * u, sc).x;
                 if (click && m.x >= ca.x && m.x < scEnd && m.y >= ca.y && m.y < cb.y) shortcut = !shortcut;
@@ -680,17 +838,21 @@ int main(int, char**) {
 
             float hx = w * 0.06f;
             const float hy = h - 50 * u;
-            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), "A", "Aceptar");
-            Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
-            Text(dl, g_text, 17 * u, ImVec2(w * 0.94f - TextSize(g_text, 17 * u, "No incluye nada del juego").x, hy + 4 * u),
-                 Rgba(190, 225, 255), "No incluye nada del juego");
+            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), "A", Tr("Aceptar", "Accept"));
+            Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", Tr("Mover", "Move"));
+            const char* noGame = Tr("No incluye nada del juego", "No game files included");
+            Text(dl, g_text, 17 * u, ImVec2(w * 0.94f - TextSize(g_text, 17 * u, noGame).x, hy + 4 * u), Rgba(190, 225, 255), noGame);
+            languageSwitch(ImVec2(w - 24 * u, 60 * u), u);
         }
 
         // Actions.
         if (activated != nullptr) {
             const std::string a = activated;
-            static const SDL_DialogFileFilter filters[] = {
+            static const SDL_DialogFileFilter filtersEs[] = {
                 {"Imagen de disco de Wii", "iso;rvz;wbfs;wia;gcz;ciso;gcm;nfs"}, {"Todos los archivos", "*"}};
+            static const SDL_DialogFileFilter filtersEn[] = {
+                {"Wii disc image", "iso;rvz;wbfs;wia;gcz;ciso;gcm;nfs"}, {"All files", "*"}};
+            const SDL_DialogFileFilter* filters = g_lang == Lang::En ? filtersEn : filtersEs;
             if (a == "CARPETA") {
                 SDL_ShowOpenFolderDialog(OnDialog, &folderDialog, window, nullptr, false);
             } else if (a == "ELEGIR DISCO" || a == "CAMBIAR DISCO" || a == "OTRO DISCO") {
