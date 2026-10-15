@@ -1,0 +1,1033 @@
+diff --git a/runtime/include/power_pros_ui.h b/runtime/include/power_pros_ui.h
+index 0fb9d28..242e2cc 100644
+--- a/runtime/include/power_pros_ui.h
++++ b/runtime/include/power_pros_ui.h
+@@ -12,9 +12,49 @@
+ #include <initializer_list>
+ #include <iterator>
+ #include <vector>
++#include <cstdlib>
++#include <string_view>
++
++#if defined(_WIN32)
++extern "C" __declspec(dllimport) unsigned short __stdcall GetUserDefaultUILanguage(void);
++#endif
+ 
+ namespace power_pros_ui {
+ 
++// ---- Language ----------------------------------------------------------------------------------
++// Spanish or English. Config.toml [ui] language = "es" / "en"; "auto" (or nothing) follows the
++// system's language: Spanish when it is Spanish, English otherwise.
++enum class Lang { Es, En };
++
++inline Lang SystemLang() {
++#if defined(_WIN32)
++    return (GetUserDefaultUILanguage() & 0x3FF) == 0x0A ? Lang::Es : Lang::En;   // PRIMARYLANGID == LANG_SPANISH
++#else
++    const char* l = std::getenv("LANG");
++    return l && l[0] == 'e' && l[1] == 's' ? Lang::Es : Lang::En;
++#endif
++}
++
++inline Lang LangFromSetting(std::string_view value) {
++    if (value == "es") return Lang::Es;
++    if (value == "en") return Lang::En;
++    return SystemLang();
++}
++
++inline Lang g_lang = SystemLang();
++
++// The text in the current language. Literals only: both stay valid for the whole program.
++inline const char* Tr(const char* es, const char* en) { return g_lang == Lang::En ? en : es; }
++
++// A text in both languages that reads as the current one wherever a const char* is expected
++// (constants, option labels).
++struct Phrase {
++    const char* es;
++    const char* en;
++    const char* get() const { return Tr(es, en); }
++    operator const char*() const { return get(); }
++};
++
+ // ---- Fonts -------------------------------------------------------------------------------------
+ // System fonts only; ImGui's built-in font is the fallback. Baked large and drawn smaller.
+ inline ImFont* g_text = nullptr;
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index c0d2e2d..bf6fa4b 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -60,6 +60,8 @@ struct RuntimeUserConfig {
+     // [mods] native_roster: roster mods enter as unedited players instead of keeping PowerUp+'s
+     // "Custom Player" switch (mods.cpp, launcher.cpp).
+     std::optional<bool> nativeRoster;
++    // [ui] language: "es", "en" or "auto" (the system's) for the launcher, Setup and Texture Studio.
++    std::optional<std::string> uiLanguage;
+     std::optional<uint32_t> disabledPostProcessingPaths;
+     std::optional<float> audioVolume;
+     std::optional<float> audioMusicVolume;
+@@ -489,6 +491,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
+     config.launcherOnStartup = FindConfigValue<bool>(document, "launcher", "show_on_startup");
+     config.enabledMods = FindConfigValue<std::vector<std::string>>(document, "mods", "enabled");
+     config.nativeRoster = FindConfigValue<bool>(document, "mods", "native_roster");
++    config.uiLanguage = FindConfigValue<std::string>(document, "ui", "language");
+     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
+     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
+     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
+@@ -763,6 +766,11 @@ inline bool SetNativeRoster(bool value) {
+     return WriteSetting("mods", "native_roster", value ? "true" : "false");
+ }
+ 
++inline bool SetUiLanguage(std::string value) {
++    Mutable().uiLanguage = value;
++    return WriteSetting("ui", "language", FormatString(value));
++}
++
+ inline bool SetDisabledPostProcessingPaths(uint32_t value) {
+     Mutable().disabledPostProcessingPaths = value;
+     std::ostringstream formatted;
+@@ -1057,6 +1065,10 @@ inline std::string GraphicsApi(std::string fallback = "auto") {
+     return Get().graphicsApi.value_or(std::move(fallback));
+ }
+ 
++inline std::string UiLanguage(std::string fallback = "auto") {
++    return Get().uiLanguage.value_or(std::move(fallback));
++}
++
+ inline std::string DisplayMode(std::string fallback = "windowed") {
+     return Get().displayMode.value_or(std::move(fallback));
+ }
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 3ee2c2b..25e720b 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -171,6 +171,7 @@ constexpr std::array<std::array<float, 4>, 3> kArtSparks{{{-27, -30, -12, -9}, {
+ 
+ struct Art {
+     ImTextureID main = 0;
++    ImTextureID mainEn = 0;  // main.png without its baked Spanish words (EraseArtWords); labels drawn on top
+     ImTextureID settings = 0;
+     ImTextureID mainBlur = 0;  // for the bars of other window shapes
+     ImTextureID settingsBlur = 0;
+@@ -217,7 +218,23 @@ ImTextureID BlurredTexture(const std::vector<unsigned char>& pixels, int w, int
+     return aurora_imgui_add_texture(static_cast<uint32_t>(sw), static_cast<uint32_t>(sh), bytes.data());
+ }
+ 
+-ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred = nullptr) {
++// main.png has the button labels (JUGAR, AJUSTES, MODS, SALIR) and the footer hints painted in. For
++// English they are covered: each label row takes the pill's colour from a clean column just before the
++// arrow (the pills only change colour from top to bottom), and the footer takes the background from
++// further right.
++void EraseArtWords(std::vector<unsigned char>& pixels, int w, int h) {
++    auto px = [&](int x, int y) { return pixels.data() + (static_cast<size_t>(y) * w + x) * 4; };
++    for (const ArtRect& r : kArtButtons) {
++        const int source = static_cast<int>(r.x1) - 64;
++        for (int y = static_cast<int>(r.y0) + 9; y < static_cast<int>(r.y1) - 9 && y < h; ++y)
++            for (int x = static_cast<int>(r.x0) + 118; x < source && x < w; ++x) std::memcpy(px(x, y), px(source, y), 4);
++    }
++    for (int y = 872; y < 928 && y < h; ++y)
++        for (int x = 60; x < 520 && x + 460 < w; ++x) std::memcpy(px(x, y), px(x + 460, y), 4);
++}
++
++ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred = nullptr,
++                        void (*edit)(std::vector<unsigned char>&, int, int) = nullptr) {
+     const std::u8string name = path.u8string();
+     SDL_Surface* loaded = SDL_LoadPNG(reinterpret_cast<const char*>(name.c_str()));
+     if (loaded == nullptr) return 0;
+@@ -230,6 +247,7 @@ ImTextureID LoadTexture(const std::filesystem::path& path, ImTextureID* blurred
+                     static_cast<const unsigned char*>(rgba->pixels) + static_cast<size_t>(y) * static_cast<size_t>(rgba->pitch),
+                     static_cast<size_t>(rgba->w) * 4);
+     }
++    if (edit != nullptr) edit(pixels, rgba->w, rgba->h);
+     const ImTextureID texture = aurora_imgui_add_texture(static_cast<uint32_t>(rgba->w), static_cast<uint32_t>(rgba->h), pixels.data());
+     if (blurred != nullptr) *blurred = BlurredTexture(pixels, rgba->w, rgba->h);
+     SDL_DestroySurface(rgba);
+@@ -242,6 +260,7 @@ Art LoadArt() {
+     if (base == nullptr) return art;
+     const std::filesystem::path dir = std::filesystem::path(reinterpret_cast<const char8_t*>(base)) / "launcher";
+     art.main = LoadTexture(dir / "main.png", &art.mainBlur);
++    art.mainEn = LoadTexture(dir / "main.png", nullptr, EraseArtWords);
+     art.settings = LoadTexture(dir / "settings.png", &art.settingsBlur);
+     art.ok = art.main != 0 && art.settings != 0;
+     return art;
+@@ -262,7 +281,7 @@ constexpr int kOpenRosterEditor = -3;
+ constexpr int kOpenTextureStudio = -4;
+ constexpr int kModsTab = 4;  // after VIDEO, AUDIO, CONTROLES, INTERFAZ; HERRAMIENTAS follows it
+ 
+-constexpr const char* kModsHelp =
++constexpr Phrase kModsHelp{
+     "Abre la carpeta mods. Cada mod va en su propia carpeta, con un mod.toml opcional "
+     "(name, author, version, description) y alguna de estas carpetas:\n\n"
+     "  textures   texturas al estilo Dolphin\n"
+@@ -272,9 +291,19 @@ constexpr const char* kModsHelp =
+     "  roster   roster de PowerUp / PowerUp+ (.dat)\n\n"
+     "Los mods que cambian el roster tienen partidas propias: cada combinación guarda las suyas y, "
+     "sin ellos, vuelven tus partidas normales.\n\n"
+-    "Un mod solo debe traer sus propios archivos, nunca copias del juego.";
++    "Un mod solo debe traer sus propios archivos, nunca copias del juego.",
++    "Opens the mods folder. Each mod goes in its own folder, with an optional mod.toml "
++    "(name, author, version, description) and any of these folders:\n\n"
++    "  textures   Dolphin-style textures\n"
++    "  disc   files that replace the disc's\n"
++    "  riivolution   Riivolution patches (.xml)\n"
++    "  project   .pack packages of project.bin\n"
++    "  roster   a PowerUp / PowerUp+ roster (.dat)\n\n"
++    "Mods that change the roster have their own saves: each combination keeps its own, and "
++    "without them your normal saves come back.\n\n"
++    "A mod must only bring its own files, never copies of the game's."};
+ 
+-constexpr const char* kModsReadme =
++constexpr Phrase kModsReadme{
+     "MLB Power Pros 2008 - mods\r\n\r\n"
+     "Cada mod va en su propia carpeta dentro de esta, por ejemplo mods\\UniformesHD\\.\r\n"
+     "Dentro puede tener:\r\n"
+@@ -290,26 +319,54 @@ constexpr const char* kModsReadme =
+     "Partidas: los mods que cambian el roster (roster\\ o un game_data.pack en project\\) tienen\r\n"
+     "sus propias partidas (MLB Life, Season, League...) para cada combinacion, guardadas en\r\n"
+     "ModSaves junto a los datos del usuario. Sin esos mods vuelven tus partidas normales; los de\r\n"
+-    "texturas y uniformes usan las normales.\r\n";
++    "texturas y uniformes usan las normales.\r\n",
++    "MLB Power Pros 2008 - mods\r\n\r\n"
++    "Each mod goes in its own folder inside this one, for example mods\\HDUniforms\\.\r\n"
++    "It can contain:\r\n"
++    "  mod.toml      name = \"...\", author = \"...\", version = \"...\", description = \"...\"\r\n"
++    "  textures\\     Dolphin-style replacement textures (tex1_<width>x<height>_<hash>..._<format>.png or .dds)\r\n"
++    "  disc\\         files with the same path as on the disc (the disc's files folder)\r\n"
++    "  riivolution\\  Riivolution patches (.xml); the mod's folder is the SD card root\r\n"
++    "  project\\      project.bin packages by name (e.g. PWM_mdl_uniform_MLB_BOS_00.pack)\r\n"
++    "  roster\\       a PowerUp / PowerUp+ roster (.dat of MLB Power Pros 2007); converted at startup\r\n"
++    "                and used in every mode, MLB Life included\r\n\r\n"
++    "Mods are switched on in the launcher (MODS). A mod must only include its own files,\r\n"
++    "never copies of the game's.\r\n\r\n"
++    "Saves: mods that change the roster (roster\\ or a game_data.pack in project\\) have\r\n"
++    "their own saves (MLB Life, Season, League...) for each combination, kept in\r\n"
++    "ModSaves next to the user data. Without those mods your normal saves come back; texture\r\n"
++    "and uniform mods use the normal ones.\r\n"};
+ 
+-constexpr const char* kRosterEditorHelp =
++constexpr Phrase kRosterEditorHelp{
+     "Abre PowerUp+ (editor de rosters) en el navegador, con el roster de tu disco como base.\n\n"
+     "Para editar: Copy Existing Roster, cambia lo que quieras y luego Export Roster > MLB Power Pros "
+     "2008 Mod. El roster queda en la carpeta mods; actívalo en la pestaña MODS. También abre los .dat de "
+     "PowerUp / PowerUp+ (Import Roster).\n\n"
+-    "El editor se cierra junto con el juego.";
++    "El editor se cierra junto con el juego.",
++    "Opens PowerUp+ (roster editor) in the browser, with your disc's roster as the base.\n\n"
++    "To edit: Copy Existing Roster, change what you want, then Export Roster > MLB Power Pros "
++    "2008 Mod. The roster is saved in the mods folder; switch it on in the MODS tab. It also opens "
++    "PowerUp / PowerUp+ .dat files (Import Roster).\n\n"
++    "The editor closes together with the game."};
+ 
+-constexpr const char* kTextureStudioHelp =
++constexpr Phrase kTextureStudioHelp{
+     "Abre Power Pros Wii 2008 Texture Studio: mira las texturas del juego, expórtalas para editarlas "
+-    "(Photoshop, escalado HD) y guárdalas como un mod de texturas sin tocar el juego.";
++    "(Photoshop, escalado HD) y guárdalas como un mod de texturas sin tocar el juego.",
++    "Opens Power Pros Wii 2008 Texture Studio: browse the game's textures, export them to edit them "
++    "(Photoshop, HD upscaling) and save them as a texture mod without touching the game."};
+ 
+-constexpr const char* kRosterPlayersLabel = "JUGADORES DEL ROSTER";
+-constexpr const char* kRosterPlayersHelp =
++constexpr Phrase kRosterPlayersLabel{"JUGADORES DEL ROSTER", "ROSTER PLAYERS"};
++constexpr Phrase kRosterPlayersHelp{
+     "Cómo entran los jugadores de los mods de roster.\n\n"
+     "Nativos: todos como jugadores originales del juego, sin editar.\n\n"
+     "Como en el editor: respeta el interruptor Custom Player de PowerUp+. Los marcados quedan como "
+     "jugadores modificados.\n\n"
+-    "Nota: según lo observado, los jugadores modificados no aparecen en MLB Life.";
++    "Nota: según lo observado, los jugadores modificados no aparecen en MLB Life.",
++    "How the players of roster mods come in.\n\n"
++    "Native: all as the game's original players, unedited.\n\n"
++    "As in the editor: follows PowerUp+'s Custom Player switch. The ones marked come in as "
++    "edited players.\n\n"
++    "Note: as observed, edited players do not appear in MLB Life."};
+ 
+ // A page that waits for PowerUp+'s server and then goes to it, so the browser never shows an error
+ // while the server starts.
+@@ -406,7 +463,7 @@ void OpenModsFolder() {
+     const std::filesystem::path dir = mods::Directory();
+     std::error_code ec;
+     std::filesystem::create_directories(dir, ec);
+-    const std::filesystem::path readme = dir / "LEEME.txt";
++    const std::filesystem::path readme = dir / Tr("LEEME.txt", "README.txt");
+     if (!std::filesystem::exists(readme, ec)) std::ofstream(readme, std::ios::binary) << kModsReadme;
+ #if defined(_WIN32)
+     ShellExecuteW(nullptr, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+@@ -419,17 +476,31 @@ struct Tab {
+     const char* footer = nullptr;
+ };
+ 
+-std::vector<std::string> YesNo() { return {"No", "Sí"}; }
++// The launcher's options are built in one language; after a language change Run() builds them again
++// and comes back to the same page.
++struct Resume {
++    bool active = false;
++    bool settingsOpen = false;
++    bool modsOnly = false;
++    int tab = 0;
++    int row = 0;
++};
++Resume g_resume;
++
++constexpr std::array<const char*, 3> kLanguageCodes{"auto", "es", "en"};
++
++std::vector<std::string> YesNo() { return {"No", Tr("Sí", "Yes")}; }
+ 
+ std::string GameStatusLine(bool& ready) {
+     const std::filesystem::path root = RuntimeConfigFile::ResolvedDvdRoot();
+     std::error_code ec;
+     ready = !root.empty() && std::filesystem::exists(root / "sys" / "main.dol", ec);
+-    if (!ready) return root.empty() ? "No hay disco configurado (paths.dvd_root)." : "No se encontró el disco.";
++    if (!ready) return root.empty() ? Tr("No hay disco configurado (paths.dvd_root).", "No disc configured (paths.dvd_root).")
++                                : Tr("No se encontró el disco.", "Disc not found.");
+     char id[7] = {};
+     std::ifstream boot(root / "sys" / "boot.bin", std::ios::binary);
+     boot.read(id, 6);
+-    const char* region = id[3] == 'E' ? "USA" : id[3] == 'P' ? "Europa" : id[3] == 'J' ? "Japón" : "?";
++    const char* region = id[3] == 'E' ? "USA" : id[3] == 'P' ? Tr("Europa", "Europe") : id[3] == 'J' ? Tr("Japón", "Japan") : "?";
+     return std::string("Wii · ") + region + " · " + id;
+ }
+ 
+@@ -465,6 +536,7 @@ bool Relaunch() {
+ Result Run(int argc, char** argv) {
+     g_argc = argc;
+     g_argv = argv;
++    g_lang = LangFromSetting(RuntimeConfigFile::UiLanguage("auto"));
+     if (AutomatedRun() || !RuntimeConfigFile::LauncherOnStartup(true)) {
+         return Result::Play;
+     }
+@@ -485,95 +557,126 @@ Result Run(int argc, char** argv) {
+         if (option.backend == aurora_get_backend()) runningApi = option.label;
+     }
+ 
+-    Option api{"API GRÁFICA", "Con qué API se dibuja el juego. Automática elige la mejor para tu equipo.", {}};
++    Option api{Tr("API GRÁFICA", "GRAPHICS API"),
++               Tr("Con qué API se dibuja el juego. Automática elige la mejor para tu equipo.",
++                  "Which API draws the game. Automatic picks the best one for your computer."), {}};
+     for (size_t i = 0; i < apis.size(); ++i) {
+-        api.choices.emplace_back(apis[i].label);
++        api.choices.emplace_back(apis[i].backend == BACKEND_AUTO ? Tr("Automática", "Automatic") : apis[i].label);
+         if (RuntimeConfigFile::GraphicsApi("auto") == apis[i].configName) api.value = static_cast<int>(i);
+     }
+-    Option display{"PANTALLA", "Ventana, ventana sin bordes o pantalla completa.",
+-                   {"Ventana", "Sin bordes", "Pantalla completa"}};
++    Option display{Tr("PANTALLA", "DISPLAY"), Tr("Ventana, ventana sin bordes o pantalla completa.",
++                   "Window, borderless window or full screen."),
++                   {Tr("Ventana", "Window"), Tr("Sin bordes", "Borderless"), Tr("Pantalla completa", "Full screen")}};
+     for (size_t i = 0; i < kDisplayModes.size(); ++i) {
+         if (RuntimeConfigFile::DisplayMode("windowed") == kDisplayModes[i]) display.value = static_cast<int>(i);
+     }
+     // The EFB is 528 lines (wider in 16:9), so each step is 528 lines times the multiplier.
+-    Option resolution{"RESOLUCIÓN INTERNA",
+-                      "Resolución a la que se dibuja el juego. 1x es la de Wii; más alta es más nítida y más "
+-                      "exigente para la GPU. 4x dibuja a casi 4K aunque la ventana sea más pequeña.\n\n"
+-                      "Según la ventana dibuja a la resolución de tu ventana o pantalla: la opción más eficiente.",
+-                      {"1x (Wii)", "1.5x (~800p)", "2x (~1080p)", "3x (~1600p)", "4x (~4K)", "Según la ventana"}};
++    Option resolution{Tr("RESOLUCIÓN INTERNA", "INTERNAL RESOLUTION"),
++                      Tr("Resolución a la que se dibuja el juego. 1x es la de Wii; más alta es más nítida y más "
++                         "exigente para la GPU. 4x dibuja a casi 4K aunque la ventana sea más pequeña.\n\n"
++                         "Según la ventana dibuja a la resolución de tu ventana o pantalla: la opción más eficiente.",
++                         "Resolution the game is drawn at. 1x is the Wii's; higher is sharper and harder on the "
++                         "GPU. 4x draws at almost 4K even if the window is smaller.\n\n"
++                         "Match window draws at your window's or screen's resolution: the most efficient option."),
++                      {"1x (Wii)", "1.5x (~800p)", "2x (~1080p)", "3x (~1600p)", "4x (~4K)", Tr("Según la ventana", "Match window")}};
+     const float currentResolution = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+     for (size_t i = 0; i < kResolutions.size(); ++i) {
+         if (kResolutions[i] == currentResolution) resolution.value = static_cast<int>(i);
+     }
+-    Option aspect{"FORZAR 16:9", "Dibuja el juego en panorámico aunque la consola esté en 4:3.", YesNo(),
++    Option aspect{Tr("FORZAR 16:9", "FORCE 16:9"), Tr("Dibuja el juego en panorámico aunque la consola esté en 4:3.",
++                  "Draws the game in widescreen even if the console is set to 4:3."), YesNo(),
+                   RuntimeConfigFile::ForceAspect169Enabled() ? 1 : 0};
+-    Option fps{"MOSTRAR FPS", "Contador de fotogramas por segundo en una esquina.", YesNo(),
++    Option fps{Tr("MOSTRAR FPS", "SHOW FPS"), Tr("Contador de fotogramas por segundo en una esquina.",
++               "Frames-per-second counter in a corner."), YesNo(),
+                RuntimeConfigFile::ShowFps(true) ? 1 : 0};
+-    Option fsr{"ESCALADO",
+-               "Cómo se agranda la imagen del juego hasta tu ventana.\n\n"
+-               "AMD FSR 1 la reescala con bordes nítidos: con una resolución interna baja da casi la "
+-               "nitidez de una alta y cuesta mucho menos. Solo actúa si la imagen del juego es más pequeña "
+-               "que la ventana.",
++    Option fsr{Tr("ESCALADO", "UPSCALING"),
++               Tr("Cómo se agranda la imagen del juego hasta tu ventana.\n\n"
++                  "AMD FSR 1 la reescala con bordes nítidos: con una resolución interna baja da casi la "
++                  "nitidez de una alta y cuesta mucho menos. Solo actúa si la imagen del juego es más pequeña "
++                  "que la ventana.",
++                  "How the game's image is enlarged to your window.\n\n"
++                  "AMD FSR 1 rescales it with sharp edges: with a low internal resolution it gives almost the "
++                  "sharpness of a high one for much less. It only acts when the game's image is smaller "
++                  "than the window."),
+                {"Normal", "AMD FSR 1"}, RuntimeConfigFile::FsrEnabled(false) ? 1 : 0};
+-    Option filtering{"FILTRADO DE TEXTURAS",
+-                     "Nitidez de las texturas vistas de lado (césped, gradas, el campo a lo lejos). Original usa lo "
+-                     "que pide el juego; 16x es lo más nítido. En gráficas integradas, 2x o 4x rinde mejor.",
++    Option filtering{Tr("FILTRADO DE TEXTURAS", "TEXTURE FILTERING"),
++                     Tr("Nitidez de las texturas vistas de lado (césped, gradas, el campo a lo lejos). Original usa lo "
++                        "que pide el juego; 16x es lo más nítido. En gráficas integradas, 2x o 4x rinde mejor.",
++                        "Sharpness of textures seen at an angle (grass, stands, the far field). Original uses what "
++                        "the game asks for; 16x is the sharpest. On integrated graphics, 2x or 4x runs better."),
+                      {"Original", "2x", "4x", "8x", "16x"}};
+     for (size_t i = 0; i < kFilteringLevels.size(); ++i) {
+         if (kFilteringLevels[i] == RuntimeConfigFile::TextureFiltering(0)) filtering.value = static_cast<int>(i);
+     }
+-    Option quality{"CALIDAD",
+-                   "Ajusta de una vez la resolución interna, el escalado y el filtrado.\n\n"
+-                   "Baja: 1x con FSR 1, para equipos modestos o portátiles.\n"
+-                   "Media: 2x con FSR 1 y filtrado 4x.\n"
+-                   "Alta: según la ventana y filtrado 16x.\n\n"
+-                   "Personalizada: lo que hayas elegido en cada opción.",
+-                   {"Personalizada", "Baja", "Media", "Alta"}};
+-    Option volume{"VOLUMEN", "Volumen general del juego.", {}};
++    Option quality{Tr("CALIDAD", "QUALITY"),
++                   Tr("Ajusta de una vez la resolución interna, el escalado y el filtrado.\n\n"
++                      "Baja: 1x con FSR 1, para equipos modestos o portátiles.\n"
++                      "Media: 2x con FSR 1 y filtrado 4x.\n"
++                      "Alta: según la ventana y filtrado 16x.\n\n"
++                      "Personalizada: lo que hayas elegido en cada opción.",
++                      "Sets the internal resolution, upscaling and filtering at once.\n\n"
++                      "Low: 1x with FSR 1, for modest computers or laptops.\n"
++                      "Medium: 2x with FSR 1 and 4x filtering.\n"
++                      "High: match window and 16x filtering.\n\n"
++                      "Custom: whatever you chose in each option."),
++                   {Tr("Personalizada", "Custom"), Tr("Baja", "Low"), Tr("Media", "Medium"), Tr("Alta", "High")}};
++    Option volume{Tr("VOLUMEN", "VOLUME"), Tr("Volumen general del juego.", "The game's overall volume."), {}};
+     for (int v = 0; v <= 100; v += 10) volume.choices.push_back(std::to_string(v) + "%");
+     volume.value = std::clamp(static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 10.0f)), 0, 10);
+-    Option mute{"SILENCIAR", "Silencia todo el audio del juego.", YesNo(), RuntimeConfigFile::AudioMuted(false) ? 1 : 0};
++    Option mute{Tr("SILENCIAR", "MUTE"), Tr("Silencia todo el audio del juego.", "Mutes all the game's audio."), YesNo(), RuntimeConfigFile::AudioMuted(false) ? 1 : 0};
+     // The runtime re-reads these after the launcher (main.cpp, settings_overlay::InitializeRuntimeSettings),
+     // so Play keeps this window; only the API, Wii Remotes and mods need a new process.
+     display.restart = resolution.restart = aspect.restart = fps.restart = volume.restart = mute.restart = false;
+     fsr.restart = filtering.restart = quality.restart = false;
+-    Option wiimote{"WII REMOTE", "Usar Wii Remotes reales por Bluetooth. Déjalo en No si solo usas mando o teclado.",
++    Option wiimote{"WII REMOTE", Tr("Usar Wii Remotes reales por Bluetooth. Déjalo en No si solo usas mando o teclado.",
++                                    "Use real Wii Remotes over Bluetooth. Leave it at No if you only use a controller or keyboard."),
+                    YesNo(), RuntimeConfigFile::WiiRemotesEnabled(true) ? 1 : 0};
+-    Option launcherOption{"MOSTRAR AL INICIAR",
+-                          "Muestra esta pantalla al abrir el juego. Se puede volver a activar en F10.", YesNo(), 1,
++    Option launcherOption{Tr("MOSTRAR AL INICIAR", "SHOW AT STARTUP"),
++                          Tr("Muestra esta pantalla al abrir el juego. Se puede volver a activar en F10.",
++                             "Shows this screen when the game opens. It can be switched back on with F10."), YesNo(), 1,
+                           false};
+ 
++    const std::string savedLanguage = RuntimeConfigFile::UiLanguage("auto");
++    Option language{"IDIOMA / LANGUAGE",
++                    Tr("Idioma de este launcher, del Setup y del editor de texturas. Automático usa el de Windows.",
++                       "Language of this launcher, the Setup and the texture editor. Automatic uses Windows' language."),
++                    {Tr("Automático", "Automatic"), "Español", "English"},
++                    savedLanguage == "es" ? 1 : savedLanguage == "en" ? 2 : 0, false};
++
+     // MODS: one switch per folder under mods/. HERRAMIENTAS: the mods folder and the roster editor.
+     const std::vector<mods::Mod> installedMods = mods::Discover();
+     std::vector<std::string> modHelp;
+     modHelp.reserve(installedMods.size());
+     Tab modsTab{"MODS", {}, installedMods.empty()
+-                                ? "Todavía no hay mods instalados. Ponlos en la carpeta mods (HERRAMIENTAS > "
+-                                  "ABRIR CARPETA DE MODS) o crea un roster con EDITAR ROSTER."
++                                ? Tr("Todavía no hay mods instalados. Ponlos en la carpeta mods (HERRAMIENTAS > "
++                                     "ABRIR CARPETA DE MODS) o crea un roster con EDITAR ROSTER.",
++                                     "No mods installed yet. Put them in the mods folder (TOOLS > "
++                                     "OPEN MODS FOLDER) or make a roster with EDIT ROSTER.")
+                                 : nullptr};
+-    Tab toolsTab{"HERRAMIENTAS", {}};
+-    toolsTab.options.push_back({"ABRIR CARPETA DE MODS", kModsHelp, {"Abrir"}, 0, false, kOpenModsFolder});
+-    toolsTab.options.push_back({"EDITAR ROSTER (PowerUp+)", kRosterEditorHelp, {"Abrir"}, 0, false, kOpenRosterEditor});
+-    toolsTab.options.push_back({"EDITOR DE TEXTURAS", kTextureStudioHelp, {"Abrir"}, 0, false, kOpenTextureStudio});
+-    toolsTab.options.push_back({kRosterPlayersLabel, kRosterPlayersHelp, {"Nativos", "Como en el editor"},
++    Tab toolsTab{Tr("HERRAMIENTAS", "TOOLS"), {}};
++    toolsTab.options.push_back({Tr("ABRIR CARPETA DE MODS", "OPEN MODS FOLDER"), kModsHelp, {Tr("Abrir", "Open")}, 0, false, kOpenModsFolder});
++    toolsTab.options.push_back({Tr("EDITAR ROSTER (PowerUp+)", "EDIT ROSTER (PowerUp+)"), kRosterEditorHelp, {Tr("Abrir", "Open")}, 0, false, kOpenRosterEditor});
++    toolsTab.options.push_back({Tr("EDITOR DE TEXTURAS", "TEXTURE EDITOR"), kTextureStudioHelp, {Tr("Abrir", "Open")}, 0, false, kOpenTextureStudio});
++    toolsTab.options.push_back({kRosterPlayersLabel, kRosterPlayersHelp, {Tr("Nativos", "Native"), Tr("Como en el editor", "As in the editor")},
+                                 RuntimeConfigFile::NativeRoster(true) ? 0 : 1});
+     for (size_t i = 0; i < installedMods.size(); ++i) {
+         const mods::Mod& m = installedMods[i];
+-        std::string help = m.description.empty() ? std::string("Sin descripción.") : m.description;
++        std::string help = m.description.empty() ? std::string(Tr("Sin descripción.", "No description.")) : m.description;
+         if (!m.author.empty() || !m.version.empty()) {
+             help += "\n\n";
+-            if (!m.author.empty()) help += "Autor: " + m.author;
++            if (!m.author.empty()) help += Tr("Autor: ", "Author: ") + m.author;
+             if (!m.author.empty() && !m.version.empty()) help += "   ·   ";
+-            if (!m.version.empty()) help += "Versión " + m.version;
++            if (!m.version.empty()) help += Tr("Versión ", "Version ") + m.version;
+         }
+         std::string contents;
+-        if (m.textures) contents += "texturas";
+-        if (m.disc) contents += std::string(contents.empty() ? "" : ", ") + "archivos del disco";
++        if (m.textures) contents += Tr("texturas", "textures");
++        if (m.disc) contents += std::string(contents.empty() ? "" : ", ") + Tr("archivos del disco", "disc files");
+         if (m.riivolution) contents += std::string(contents.empty() ? "" : ", ") + "Riivolution";
+-        if (m.project) contents += std::string(contents.empty() ? "" : ", ") + "paquetes de project.bin";
+-        if (m.roster) contents += std::string(contents.empty() ? "" : ", ") + "roster de PowerUp (todos los modos, también MLB Life)";
+-        help += "\n\nIncluye: " + (contents.empty() ? std::string("nada reconocible (textures, disc, riivolution, project o roster)") : contents);
+-        if (m.changesRoster) help += "\n\nPartidas propias: cambia el roster, así que lo que juegues con este mod (MLB Life, Season, League...) se guarda aparte.";
++        if (m.project) contents += std::string(contents.empty() ? "" : ", ") + Tr("paquetes de project.bin", "project.bin packages");
++        if (m.roster) contents += std::string(contents.empty() ? "" : ", ") + Tr("roster de PowerUp (todos los modos, también MLB Life)", "PowerUp roster (every mode, MLB Life too)");
++        help += Tr("\n\nIncluye: ", "\n\nContains: ") + (contents.empty() ? std::string(Tr("nada reconocible (textures, disc, riivolution, project o roster)", "nothing recognisable (textures, disc, riivolution, project or roster)")) : contents);
++        if (m.changesRoster) help += Tr("\n\nPartidas propias: cambia el roster, así que lo que juegues con este mod (MLB Life, Season, League...) se guarda aparte.",
++                                        "\n\nOwn saves: it changes the roster, so what you play with this mod (MLB Life, Season, League...) is saved separately.");
+         modHelp.push_back(std::move(help));
+         modsTab.options.push_back({m.name.c_str(), modHelp.back().c_str(), YesNo(), m.enabled ? 1 : 0, true,
+                                    static_cast<int>(i)});
+@@ -582,8 +685,8 @@ Result Run(int argc, char** argv) {
+     std::vector<Tab> tabs{
+         {"VIDEO", {api, quality, display, resolution, fsr, filtering, aspect, fps}},
+         {"AUDIO", {volume, mute}},
+-        {"CONTROLES", {wiimote}},
+-        {"INTERFAZ", {launcherOption}},
++        {Tr("CONTROLES", "CONTROLS"), {wiimote}},
++        {Tr("INTERFAZ", "INTERFACE"), {launcherOption, language}},
+     };
+     tabs.push_back(std::move(modsTab));
+     tabs.push_back(std::move(toolsTab));
+@@ -610,6 +713,7 @@ Result Run(int argc, char** argv) {
+     matchPreset();
+ 
+     bool restart = false;
++    bool languageChanged = false;
+     auto apply = [&](int tab, int index) {
+         const Option& o = option(tab, index);
+         if (o.mod == kOpenModsFolder) {
+@@ -654,7 +758,14 @@ Result Run(int argc, char** argv) {
+         if (label == mute.label) RuntimeConfigFile::SetAudioMuted(o.value != 0);
+         if (label == wiimote.label) RuntimeConfigFile::SetWiiRemotesEnabled(o.value != 0);
+         if (label == launcherOption.label) RuntimeConfigFile::SetLauncherOnStartup(o.value != 0);
+-        if (label == kRosterPlayersLabel) RuntimeConfigFile::SetNativeRoster(o.value == 0);
++        if (label == language.label) {
++            const char* code = kLanguageCodes[static_cast<size_t>(o.value)];
++            RuntimeConfigFile::SetUiLanguage(code);
++            const Lang next = LangFromSetting(code);
++            languageChanged = languageChanged || next != g_lang;
++            g_lang = next;
++        }
++        if (label == kRosterPlayersLabel.get()) RuntimeConfigFile::SetNativeRoster(o.value == 0);
+         restart = restart || o.restart;
+     };
+     auto change = [&](int tab, int index, int delta) {
+@@ -674,7 +785,7 @@ Result Run(int argc, char** argv) {
+     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+     const Art art = LoadArt();
+ 
+-    enum class Choice { None, Play, Quit } choice = Choice::None;
++    enum class Choice { None, Play, Quit, Language } choice = Choice::None;
+     // WIICOMPILED_LAUNCHER_SELECT=<api config name>: pick that API and press Play (scripted tests of
+     // the save-and-relaunch path; the relaunched copy skips the launcher).
+     if (const char* select = std::getenv("WIICOMPILED_LAUNCHER_SELECT"); select != nullptr && *select != '\0') {
+@@ -701,7 +812,7 @@ Result Run(int argc, char** argv) {
+     if (testAction != nullptr && std::strcmp(testAction, "roster-editor") == 0) OpenRosterEditor();
+     if (testAction != nullptr && std::strcmp(testAction, "texture-studio") == 0) OpenTextureStudio();
+ 
+-    constexpr std::array<const char*, 3> kMenu{"JUGAR", "AJUSTES", "SALIR"};
++    const std::array<const char*, 3> kMenu{Tr("JUGAR", "PLAY"), Tr("AJUSTES", "SETTINGS"), Tr("SALIR", "EXIT")};
+     int menu = 0;
+     int tab = page && std::strcmp(page, "controls") == 0 ? 2 : toolsPage ? kModsTab + 1 : modsOnly ? kModsTab : 0;
+     if (tab == 2) settingsOpen = true;
+@@ -711,6 +822,13 @@ Result Run(int argc, char** argv) {
+     int scroll = 0;
+     int pageRows = 6;
+     if (const char* testRow = std::getenv("WIICOMPILED_LAUNCHER_ROW")) row = std::atoi(testRow);
++    if (g_resume.active) {
++        settingsOpen = g_resume.settingsOpen;
++        modsOnly = g_resume.modsOnly;
++        tab = g_resume.tab;
++        row = g_resume.row;
++        g_resume.active = false;
++    }
+     static const bool navProbe = [] {
+         const char* value = std::getenv("WIICOMPILED_LAUNCHER_PROBE");
+         return value && std::strcmp(value, "nav") == 0 && RuntimeConfigFile::PortableRootDirectory().has_value();
+@@ -753,7 +871,8 @@ Result Run(int argc, char** argv) {
+             auto hit = [&](const ArtRect& r) { return Hovered(at(r.x0, r.y0), at(r.x1, r.y1)); };
+             // Other window shapes: a blurred, darkened copy of the art covers the window, and a soft
+             // shadow separates it from the art.
+-            const ImTextureID backdrop = settingsOpen ? art.settings : art.main;
++            const ImTextureID mainArt = g_lang == Lang::En && art.mainEn != 0 ? art.mainEn : art.main;
++            const ImTextureID backdrop = settingsOpen ? art.settings : mainArt;
+             const ImTextureID blur = settingsOpen ? art.settingsBlur : art.mainBlur;
+             const float cover = std::max(w / kArtW, h / kArtH);
+             const ImVec2 co((w - kArtW * cover) * 0.5f, (h - kArtH * cover) * 0.5f);
+@@ -801,7 +920,7 @@ Result Run(int argc, char** argv) {
+                     const float e = 8.0f + 5.0f * pulse;
+                     dl->AddRectFilled(at(c.x - hw - e, c.y - hh - e), at(c.x + hw + e, c.y + hh + e),
+                                       Rgba(255, 246, 150, static_cast<int>(110 + 80 * pulse)), (hh + e) * s);
+-                    dl->AddImageRounded(art.main, at(c.x - hw, c.y - hh),
++                    dl->AddImageRounded(mainArt, at(c.x - hw, c.y - hh),
+                                         at(c.x + hw, c.y + hh), ImVec2(r.x0 / kArtW, r.y0 / kArtH),
+                                         ImVec2(r.x1 / kArtW, r.y1 / kArtH), IM_COL32_WHITE, hh * s);
+                     // The art's yellow "selected" sparks, beside whichever button is selected.
+@@ -813,14 +932,30 @@ Result Run(int argc, char** argv) {
+                         dl->AddLine(a, b, Rgba(255, 222, 40), 9.0f * s);
+                     }
+                 }
++                if (mainArt == art.mainEn) {  // English labels where the art's Spanish ones were
++                    constexpr std::array<const char*, 4> kArtLabels{"PLAY", "SETTINGS", "MODS", "EXIT"};
++                    for (int i = 0; i < static_cast<int>(kArtButtons.size()); ++i) {
++                        const ArtRect& r = kArtButtons[static_cast<size_t>(i)];
++                        const bool selected = i == menu;
++                        const float grow = selected ? 1.04f + 0.005f * (1.0f + std::sin(t * 5.0f)) : 1.0f;
++                        const float cy = (r.y0 + r.y1) * 0.5f + (selected ? std::sin(t * 4.0f) * 2.0f : 0.0f);
++                        const float size = 46.0f * s * grow;
++                        const ImVec2 ts = TextSize(g_title, size, kArtLabels[static_cast<size_t>(i)]);
++                        const ImVec2 pos = at(r.x0 + 136.0f * grow, cy);
++                        LogoText(dl, g_title, size, ImVec2(pos.x, pos.y - ts.y * 0.5f), IM_COL32_WHITE, Rgba(225, 235, 255),
++                                 kArtLabels[static_cast<size_t>(i)], Rgba(22, 44, 120), Rgba(8, 22, 76));
++                    }
++                }
+                 // Info box (its baked example text was erased from main.png).
+-                const char* lines[] = {"¡A jugar! Arranca MLB Power Pros 2008.",
+-                                       "API gráfica, pantalla, resolución, audio y controles.",
+-                                       "Activa o desactiva mods de texturas y archivos.", "Cierra el juego."};
++                const char* lines[] = {Tr("¡A jugar! Arranca MLB Power Pros 2008.", "Play ball! Starts MLB Power Pros 2008."),
++                                       Tr("API gráfica, pantalla, resolución, audio y controles.",
++                                          "Graphics API, display, resolution, audio and controls."),
++                                       Tr("Activa o desactiva mods de texturas y archivos.", "Switches texture and file mods on or off."),
++                                       Tr("Cierra el juego.", "Closes the game.")};
+                 ShadowedText(dl, g_text, 31 * s, at(100, 777), IM_COL32_WHITE, lines[menu]);
+                 if (discReady) {
+                     DrawCheck(dl, at(100, 822), 22 * s, Rgba(120, 230, 110));
+-                    const std::string disc = "Disco listo.   |   " + gameLine;
++                    const std::string disc = std::string(Tr("Disco listo.   |   ", "Disc ready.   |   ")) + gameLine;
+                     ShadowedText(dl, g_text, 25 * s, at(134, 818), IM_COL32_WHITE, disc.c_str());
+                 } else {
+                     ShadowedText(dl, g_text, 25 * s, at(100, 818), Rgba(255, 170, 150), gameLine.c_str());
+@@ -830,13 +965,13 @@ Result Run(int argc, char** argv) {
+                 ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - vw, at(0, 822).y), Rgba(200, 225, 255),
+                              version.c_str());
+                 if (restart) {
+-                    const char* note = "Ajustes cambiados: se aplican al pulsar JUGAR.";
++                    const char* note = Tr("Ajustes cambiados: se aplican al pulsar JUGAR.", "Settings changed: they apply when you press PLAY.");
+                     const float nw = TextSize(g_text, 22 * s, note).x;
+                     ShadowedText(dl, g_text, 22 * s, ImVec2(at(1578, 0).x - nw, at(0, 782).y), Rgba(255, 224, 110), note);
+                 }
+                 float hintX = at(100, 885).x;
+-                hintX = Hint(dl, g_bold, g_text, hintX, at(0, 885).y, s, Rgba(40, 150, 85), launcher_controls::AcceptPrompt(), "Aceptar");
+-                Hint(dl, g_bold, g_text, hintX, at(0, 885).y, s, Rgba(200, 55, 65), launcher_controls::BackPrompt(), "Volver");
++                hintX = Hint(dl, g_bold, g_text, hintX, at(0, 885).y, s, Rgba(40, 150, 85), launcher_controls::AcceptPrompt(), Tr("Aceptar", "Accept"));
++                Hint(dl, g_bold, g_text, hintX, at(0, 885).y, s, Rgba(200, 55, 65), launcher_controls::BackPrompt(), Tr("Volver", "Back"));
+                 ShadowedText(dl, g_text, 22 * s, at(1050, 887), Rgba(200, 225, 255), launcher_controls::DeviceLabel());
+                 const int n = static_cast<int>(kArtButtons.size());
+                 if (Up() || Left()) menu = (menu + n - 1) % n;
+@@ -869,11 +1004,12 @@ Result Run(int argc, char** argv) {
+                 const char* line2;
+             };
+             const std::array<Item, 3> items{{
+-                {"JUGAR", Rgba(255, 206, 96), Rgba(240, 112, 18), Rgba(150, 50, 0), "¡A jugar! Arranca MLB Power Pros 2008.",
+-                 nullptr},
+-                {"AJUSTES", Rgba(160, 244, 120), Rgba(34, 164, 58), Rgba(10, 90, 30),
+-                 "Cambia la API gráfica, la pantalla, el audio y los controles.", "Los cambios se guardan al momento."},
+-                {"SALIR", Rgba(244, 160, 244), Rgba(168, 64, 200), Rgba(90, 20, 120), "Cierra el juego.", nullptr},
++                {Tr("JUGAR", "PLAY"), Rgba(255, 206, 96), Rgba(240, 112, 18), Rgba(150, 50, 0),
++                 Tr("¡A jugar! Arranca MLB Power Pros 2008.", "Play ball! Starts MLB Power Pros 2008."), nullptr},
++                {Tr("AJUSTES", "SETTINGS"), Rgba(160, 244, 120), Rgba(34, 164, 58), Rgba(10, 90, 30),
++                 Tr("Cambia la API gráfica, la pantalla, el audio y los controles.", "Changes the graphics API, display, audio and controls."),
++                 Tr("Los cambios se guardan al momento.", "Changes are saved right away.")},
++                {Tr("SALIR", "EXIT"), Rgba(244, 160, 244), Rgba(168, 64, 200), Rgba(90, 20, 120), Tr("Cierra el juego.", "Closes the game."), nullptr},
+             }};
+             const float pillW = 250 * u;
+             const float pillH = 88 * u;
+@@ -923,7 +1059,7 @@ Result Run(int argc, char** argv) {
+             if (menu == 0) {
+                 if (discReady) {
+                     DrawCheck(dl, ImVec2(ix, ia.y + 72 * u), 20 * u, Rgba(150, 255, 120));
+-                    ShadowedText(dl, g_text, 26 * u, ImVec2(ix + 30 * u, ia.y + 66 * u), IM_COL32_WHITE, "Disco listo.");
++                    ShadowedText(dl, g_text, 26 * u, ImVec2(ix + 30 * u, ia.y + 66 * u), IM_COL32_WHITE, Tr("Disco listo.", "Disc ready."));
+                     ShadowedText(dl, g_text, 22 * u, ImVec2(ix + 190 * u, ia.y + 69 * u), Rgba(190, 225, 255),
+                                  gameLine.c_str());
+                 } else {
+@@ -937,7 +1073,7 @@ Result Run(int argc, char** argv) {
+             ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - vs.x, ib.y - 40 * u), Rgba(190, 225, 255),
+                          version.c_str());
+             if (restart) {
+-                const char* note = "Ajustes cambiados: se aplican al pulsar JUGAR.";
++                const char* note = Tr("Ajustes cambiados: se aplican al pulsar JUGAR.", "Settings changed: they apply when you press PLAY.");
+                 const ImVec2 ns = TextSize(g_text, 20 * u, note);
+                 ShadowedText(dl, g_text, 20 * u, ImVec2(ib.x - 28 * u - ns.x, ia.y + 22 * u), Rgba(255, 224, 120), note);
+             }
+@@ -945,9 +1081,9 @@ Result Run(int argc, char** argv) {
+             // Button hints.
+             float hx = w * 0.06f;
+             const float hy = h - 50 * u;
+-            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), launcher_controls::AcceptPrompt(), "Aceptar");
+-            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), launcher_controls::BackPrompt(), "Volver");
+-            Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", "Mover");
++            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(40, 170, 80), launcher_controls::AcceptPrompt(), Tr("Aceptar", "Accept"));
++            hx = Hint(dl, g_bold, g_text, hx, hy, u, Rgba(220, 50, 60), launcher_controls::BackPrompt(), Tr("Volver", "Back"));
++            Hint(dl, g_bold, g_text, hx, hy, u, Rgba(30, 90, 200), "+", Tr("Mover", "Move"));
+ 
+             if (!settingsOpen) {
+                 const int n = static_cast<int>(items.size());
+@@ -962,6 +1098,7 @@ Result Run(int argc, char** argv) {
+         }
+ 
+         if (launcher_controls::ProbeTick() || (navProbe && navProbeTick())) choice = Choice::Quit;
++        if (languageChanged && choice == Choice::None) choice = Choice::Language;
+         aurora_set_present_schedule(0, 0);
+         aurora_end_frame();
+         nextFrame += std::chrono::microseconds(16667);
+@@ -971,6 +1108,12 @@ Result Run(int argc, char** argv) {
+ 
+     aurora_set_skip_unready_pipelines(savedSkipPipelines);
+     ImGui::GetIO().ConfigFlags = savedNavFlags;
++    if (choice == Choice::Language) {
++        // Every label above was built in the old language: build the launcher again, on the same page.
++        g_resume = {true, settingsOpen, modsOnly, tab, row};
++        const Result again = Run(argc, argv);
++        return restart && again == Result::Play ? Result::Relaunch : again;
++    }
+     if (choice == Choice::Quit) {
+         return Result::Quit;
+     }
+diff --git a/runtime/src/launcher_controls.cpp b/runtime/src/launcher_controls.cpp
+index 7faa9a2..5f029c0 100644
+--- a/runtime/src/launcher_controls.cpp
++++ b/runtime/src/launcher_controls.cpp
+@@ -1,5 +1,6 @@
+ #include "launcher_controls.h"
+ #include "launcher_visuals.h"
++#include "power_pros_ui.h"
+ #include "controller_button_names.h"
+ #include "controller_mapping_wizard.h"
+ #include "runtime_config.h"
+@@ -64,12 +65,12 @@ struct Capture {
+ 
+ // Short names in the chosen prompt family; the persisted config keeps positional names.
+ std::string NativeName(uint32_t value, PADButton action = 0) {
+-    if (value == PAD_NATIVE_BUTTON_DISABLED) return "Sin asignar";
++    if (value == PAD_NATIVE_BUTTON_DISABLED) return power_pros_ui::Tr("Sin asignar", "Unassigned");
+     const bool ps = PlayStationPrompts();
+     if (value == PAD_NATIVE_BUTTON_INVALID) {
+-        if (action == PAD_TRIGGER_L) return ps ? "L2 (predeterminado)" : "LT (predeterminado)";
+-        if (action == PAD_TRIGGER_R) return ps ? "R2 (predeterminado)" : "RT (predeterminado)";
+-        return "Predeterminado";
++        if (action == PAD_TRIGGER_L) return ps ? power_pros_ui::Tr("L2 (predeterminado)", "L2 (default)") : power_pros_ui::Tr("LT (predeterminado)", "LT (default)");
++        if (action == PAD_TRIGGER_R) return ps ? power_pros_ui::Tr("R2 (predeterminado)", "R2 (default)") : power_pros_ui::Tr("RT (predeterminado)", "RT (default)");
++        return power_pros_ui::Tr("Predeterminado", "Default");
+     }
+     if (PADIsAxisButton(value)) {
+         const bool negative = PADAxisButtonNegative(value);
+@@ -106,13 +107,13 @@ std::string NativeName(uint32_t value, PADButton action = 0) {
+ std::string AxisName(const PADAxisMapping& m) {
+     if (m.nativeAxis.nativeAxis >= 0)
+         return NativeName(PADEncodeAxisButton(uint32_t(m.nativeAxis.nativeAxis), m.nativeAxis.sign == AXIS_SIGN_NEGATIVE));
+-    return m.nativeButton < 0 ? "Sin asignar" : NativeName(uint32_t(m.nativeButton));
++    return m.nativeButton < 0 ? std::string(power_pros_ui::Tr("Sin asignar", "Unassigned")) : NativeName(uint32_t(m.nativeButton));
+ }
+ std::string KeyName(int value) {
+-    if (value == PAD_KEY_INVALID) return "Sin asignar";
+-    if (value < -1) return "Ratón " + std::to_string(-value - 1);
++    if (value == PAD_KEY_INVALID) return power_pros_ui::Tr("Sin asignar", "Unassigned");
++    if (value < -1) return power_pros_ui::Tr("Ratón ", "Mouse ") + std::to_string(-value - 1);
+     const char* name = value < SDL_SCANCODE_COUNT ? SDL_GetScancodeName(SDL_Scancode(value)) : "";
+-    return name && *name ? name : "Sin asignar";
++    return name && *name ? name : power_pros_ui::Tr("Sin asignar", "Unassigned");
+ }
+ void PersistButton(uint32_t selectedPort, int row, uint32_t value) {
+     const auto& action = ControllerNames::kGameCubeButtons[row];
+@@ -144,7 +145,7 @@ void Complete(uint32_t value) {
+         uint32_t previous = PAD_NATIVE_BUTTON_DISABLED;
+         for (uint32_t i = 0; i < count; ++i)
+             if (mappings[i].padButton == ControllerNames::kGameCubeButtons[c.row].padButton) previous = mappings[i].nativeButton;
+-        notice = "Botón guardado.";
++        notice = power_pros_ui::Tr("Botón guardado.", "Button saved.");
+         if (value != PAD_NATIVE_BUTTON_DISABLED)
+             for (int i = 0; i < PAD_BUTTON_COUNT; ++i) {
+                 if (i == c.row) continue;
+@@ -152,7 +153,7 @@ void Complete(uint32_t value) {
+                     if (mappings[j].padButton == ControllerNames::kGameCubeButtons[i].padButton &&
+                         PADAxisButtonIdentity(mappings[j].nativeButton) == PADAxisButtonIdentity(value)) {
+                         PersistButton(c.port, i, previous);
+-                        notice = "Se intercambiaron los botones para evitar duplicados.";
++                        notice = power_pros_ui::Tr("Se intercambiaron los botones para evitar duplicados.", "The buttons were swapped to avoid duplicates.");
+                     }
+             }
+         PersistButton(c.port, c.row, value);
+@@ -165,10 +166,10 @@ void Complete(uint32_t value) {
+             if (int(value) != PAD_KEY_INVALID && keys[i].padButton != target && keys[i].scancode == int(value))
+                 PADSetKeyButtonBinding(c.port, {previous, keys[i].padButton});
+         PADSetKeyButtonBinding(c.port, {int(value), target});
+-        notice = "Tecla guardada; los duplicados se intercambian.";
++        notice = power_pros_ui::Tr("Tecla guardada; los duplicados se intercambian.", "Key saved; duplicates are swapped.");
+     } else if (c.kind == CaptureKind::KeyAxis) {
+         PADSetKeyAxisBinding(c.port, {int(value), uint16_t(c.row), 1});
+-        notice = "Dirección guardada.";
++        notice = power_pros_ui::Tr("Dirección guardada.", "Direction saved.");
+     } else if (c.kind == CaptureKind::Axis) {
+         // Like Dolphin, a stick direction or analog trigger may also come from a plain button.
+         if (PADIsAxisButton(value))
+@@ -176,7 +177,7 @@ void Complete(uint32_t value) {
+                                       int(PAD_NATIVE_BUTTON_INVALID), uint16_t(c.row)});
+         else
+             PADSetAxisMapping(c.port, {{-1, AXIS_SIGN_POSITIVE}, int(value), uint16_t(c.row)});
+-        notice = "Dirección guardada.";
++        notice = power_pros_ui::Tr("Dirección guardada.", "Direction saved.");
+     }
+     PADSerializeMappings();
+ }
+@@ -202,10 +203,10 @@ void UpdateCapture() {
+     const int index = PADGetIndexForPort(port);
+     if (waitForRelease && Neutral(index >= 0 ? PADGetSDLGamepadForIndex(index) : nullptr)) waitForRelease = false;
+     if (capture.kind == CaptureKind::None) return;
+-    if (ImGui::GetTime() > capture.deadline) { Cancel(); notice = "Tiempo agotado; se conserva la asignación."; return; }
++    if (ImGui::GetTime() > capture.deadline) { Cancel(); notice = power_pros_ui::Tr("Tiempo agotado; se conserva la asignación.", "Time is up; the assignment is kept."); return; }
+     auto* pad = SDL_GetGamepadFromID(capture.device);
+     if (!pad && (capture.kind == CaptureKind::Button || capture.kind == CaptureKind::Axis)) {
+-        Cancel(); notice = "El mando se desconectó. Vuelve a conectarlo."; return;
++        Cancel(); notice = power_pros_ui::Tr("El mando se desconectó. Vuelve a conectarlo.", "The controller was disconnected. Connect it again."); return;
+     }
+     // Only accept input after the press that started the capture is released.
+     if (Neutral(pad)) capture.released = true;
+@@ -219,7 +220,7 @@ void BindingRow(const char* label, CaptureKind kind, int row, const std::string&
+     ImGui::SameLine(ImGui::GetFontSize() * 5.6f);
+     const bool active = capture.kind == kind && capture.row == row;
+     const std::string text = !active ? bound
+-        : std::string(capture.released ? "Pulsa la entrada... " : "Suelta... ") +
++        : std::string(capture.released ? power_pros_ui::Tr("Pulsa la entrada... ", "Press the input... ") : power_pros_ui::Tr("Suelta... ", "Release... ")) +
+               std::to_string(int(std::ceil(std::max(0.0, capture.deadline - ImGui::GetTime()))));
+     if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.78f, .40f, .08f, 1));
+     if (ImGui::Button((text + "###b").c_str(), ImVec2(-FLT_MIN, 0))) {
+@@ -235,7 +236,7 @@ void BindingRow(const char* label, CaptureKind kind, int row, const std::string&
+         Begin(kind, row);
+         Complete(kind == CaptureKind::Button ? PAD_NATIVE_BUTTON_DISABLED : uint32_t(PAD_KEY_INVALID));
+     }
+-    ImGui::SetItemTooltip(kind == CaptureKind::Axis ? "Clic: asignar" : "Clic: asignar · Clic derecho: quitar");
++    ImGui::SetItemTooltip("%s", kind == CaptureKind::Axis ? power_pros_ui::Tr("Clic: asignar", "Click: assign") : power_pros_ui::Tr("Clic: asignar · Clic derecho: quitar", "Click: assign · Right click: clear"));
+     ImGui::PopID();
+ }
+ // GameCube-style octagonal gate with the dead zone and the signal MLB receives.
+@@ -261,7 +262,7 @@ void DrawGate(const PADStatus& status, bool sub, float deadZone) {
+     const float divisor = sub ? 64.f : 88.f;
+     const ImVec2 aim(c.x + std::clamp(x / divisor, -1.f, 1.f) * r, c.y - std::clamp(y / divisor, -1.f, 1.f) * r);
+     dl->AddCircleFilled(aim, std::max(3.f, size * .045f), IM_COL32(255, 210, 90, 255));
+-    ImGui::TextDisabled("Señal del juego: X %d  Y %d", x, y);
++    ImGui::TextDisabled(power_pros_ui::Tr("Señal del juego: X %d  Y %d", "Game signal: X %d  Y %d"), x, y);
+ }
+ // Groups flow into as many columns as fit, top to bottom, like Dolphin's dialog.
+ template <typename F> void Group(const char* title, F&& body) {
+@@ -319,10 +320,10 @@ bool PlayStationPrompts() {
+     const auto type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
+     return type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
+ }
+-const char* AcceptPrompt() { return !gamepad ? "Enter" : PlayStationPrompts() ? "Cruz" : "A"; }
+-const char* BackPrompt() { return !gamepad ? "Esc" : PlayStationPrompts() ? "Círculo" : "B"; }
++const char* AcceptPrompt() { return !gamepad ? "Enter" : PlayStationPrompts() ? power_pros_ui::Tr("Cruz", "Cross") : "A"; }
++const char* BackPrompt() { return !gamepad ? "Esc" : PlayStationPrompts() ? power_pros_ui::Tr("Círculo", "Circle") : "B"; }
+ const char* TabPrompt() { return !gamepad ? "Q / E" : PlayStationPrompts() ? "L1 / R1" : "LB / RB"; }
+-const char* DeviceLabel() { return !gamepad ? "Teclado / ratón" : PlayStationPrompts() ? "Mando PlayStation" : "Mando"; }
++const char* DeviceLabel() { return !gamepad ? power_pros_ui::Tr("Teclado / ratón", "Keyboard / mouse") : PlayStationPrompts() ? power_pros_ui::Tr("Mando PlayStation", "PlayStation controller") : power_pros_ui::Tr("Mando", "Controller"); }
+ bool Capturing() { return capture.kind != CaptureKind::None || testing || captureGraceFrames > 0 || waitForRelease; }
+ 
+ bool Draw() {
+@@ -345,11 +346,11 @@ bool Draw() {
+             ImGui::TextUnformatted(label);
+             ImGui::SetNextItemWidth(cell);
+         };
+-        next("Jugador");
+-        if (ImGui::Combo("##Jugador", &port, "Jugador 1\0Jugador 2\0Jugador 3\0Jugador 4\0")) Cancel();
+-        next("Dispositivo");
++        next(power_pros_ui::Tr("Jugador", "Player"));
++        if (ImGui::Combo("##Jugador", &port, power_pros_ui::Tr("Jugador 1\0Jugador 2\0Jugador 3\0Jugador 4\0", "Player 1\0Player 2\0Player 3\0Player 4\0"))) Cancel();
++        next(power_pros_ui::Tr("Dispositivo", "Device"));
+         const char* assigned = PADGetName(port);
+-        if (ImGui::BeginCombo("##Dispositivo", keyboard ? "Teclado y ratón" : assigned ? assigned : "Ningún mando")) {
++        if (ImGui::BeginCombo("##Dispositivo", keyboard ? power_pros_ui::Tr("Teclado y ratón", "Keyboard and mouse") : assigned ? assigned : power_pros_ui::Tr("Ningún mando", "No controller"))) {
+             for (uint32_t i = 0; i < PADCount(); ++i) {
+                 ImGui::PushID(int(i));
+                 if (ImGui::Selectable(PADGetNameForControllerIndex(i), !keyboard && padIndex == int(i))) {
+@@ -357,17 +358,17 @@ bool Draw() {
+                 }
+                 ImGui::PopID();
+             }
+-            if (ImGui::Selectable("Teclado y ratón", keyboard)) {
++            if (ImGui::Selectable(power_pros_ui::Tr("Teclado y ratón", "Keyboard and mouse"), keyboard)) {
+                 keyboardView = true;
+                 uint32_t count = 0;
+                 if (!PADGetKeyButtonBindings(port, &count)) { PADSetKeyboardActive(port, true); PADSerializeMappings(); }
+             }
+             ImGui::EndCombo();
+         }
+-        next("Nombres de botones");
+-        if (ImGui::Combo("##Avisos", &promptStyle, "Automático\0PlayStation\0Xbox\0")) std::ofstream(PromptPath()) << promptStyle;
++        next(power_pros_ui::Tr("Nombres de botones", "Button names"));
++        if (ImGui::Combo("##Avisos", &promptStyle, power_pros_ui::Tr("Automático\0PlayStation\0Xbox\0", "Automatic\0PlayStation\0Xbox\0"))) std::ofstream(PromptPath()) << promptStyle;
+         next(" ");
+-        if (ImGui::Button("Predeterminado", ImVec2(cell, 0))) {
++        if (ImGui::Button(power_pros_ui::Tr("Predeterminado", "Default"), ImVec2(cell, 0))) {
+             Cancel();
+             if (keyboard) {
+                 PADClearKeyBindings(port);
+@@ -381,13 +382,13 @@ bool Draw() {
+                             if (mappings[j].padButton == ControllerNames::kGameCubeButtons[i].padButton) PersistButton(port, i, mappings[j].nativeButton);
+             }
+             PADSerializeMappings();
+-            notice = "Asignaciones predeterminadas restauradas.";
++            notice = power_pros_ui::Tr("Asignaciones predeterminadas restauradas.", "Default assignments restored.");
+         }
+         ImGui::EndGroup();
+     }
+     controller_mapping_wizard::DrawSetupList();
+     ImGui::PushTextWrapPos(0);
+-    ImGui::TextDisabled("Clic o %s en una asignación y pulsa la nueva entrada · Esc cancela · clic derecho quita", AcceptPrompt());
++    ImGui::TextDisabled(power_pros_ui::Tr("Clic o %s en una asignación y pulsa la nueva entrada · Esc cancela · clic derecho quita", "Click or %s on an assignment and press the new input · Esc cancels · right click clears"), AcceptPrompt());
+     if (!notice.empty()) ImGui::TextColored(ImVec4(.6f, 1, .7f, 1), "%s", notice.c_str());
+     ImGui::PopTextWrapPos();
+ 
+@@ -399,7 +400,7 @@ bool Draw() {
+     auto* dead = keyboard ? nullptr : PADGetDeadZones(port);
+     auto* response = PADGetStickResponse(port);
+     if (!mappings && !keys) {
+-        ImGui::TextWrapped("Este jugador no tiene mando. Elige uno en Dispositivo o usa Teclado y ratón.");
++        ImGui::TextWrapped("%s", power_pros_ui::Tr("Este jugador no tiene mando. Elige uno en Dispositivo o usa Teclado y ratón.", "This player has no controller. Pick one in Device or use Keyboard and mouse."));
+         controller_mapping_wizard::Draw();
+         return Capturing() || controller_mapping_wizard::IsActive();
+     }
+@@ -412,7 +413,7 @@ bool Draw() {
+ 
+     const auto button = [&](const char* label, int row) {
+         const auto target = ControllerNames::kGameCubeButtons[row].padButton;
+-        std::string bound = "Sin asignar";
++        std::string bound = power_pros_ui::Tr("Sin asignar", "Unassigned");
+         for (uint32_t j = 0; j < count; ++j) {
+             if (mappings && mappings[j].padButton == target) bound = NativeName(mappings[j].nativeButton, target);
+             if (keys && keys[j].padButton == target) bound = KeyName(keys[j].scancode);
+@@ -420,7 +421,7 @@ bool Draw() {
+         BindingRow(label, keyboard ? CaptureKind::Key : CaptureKind::Button, row, bound, &bindingRects[row]);
+     };
+     const auto axis = [&](const char* label, int padAxis) {
+-        std::string bound = "Sin asignar";
++        std::string bound = power_pros_ui::Tr("Sin asignar", "Unassigned");
+         for (uint32_t j = 0; j < axisCount; ++j) {
+             if (axes && axes[j].padAxis == padAxis) bound = AxisName(axes[j]);
+             if (keyAxes && keyAxes[j].padAxis == padAxis) bound = KeyName(keyAxes[j].scancode);
+@@ -438,10 +439,10 @@ bool Draw() {
+         const int base = sub ? PAD_AXIS_RIGHT_X_POS : PAD_AXIS_LEFT_X_POS;
+         u16* zone = dead ? (sub ? &dead->substickDeadZone : &dead->stickDeadZone) : nullptr;
+         DrawGate(status, sub, zone && dead->useDeadzones ? *zone / 32767.f : 0);
+-        axis("Arriba", base + 2);
+-        axis("Abajo", base + 3);
+-        axis("Izquierda", base + 1);
+-        axis("Derecha", base);
++        axis(power_pros_ui::Tr("Arriba", "Up"), base + 2);
++        axis(power_pros_ui::Tr("Abajo", "Down"), base + 3);
++        axis(power_pros_ui::Tr("Izquierda", "Left"), base + 1);
++        axis(power_pros_ui::Tr("Derecha", "Right"), base);
+         if (zone) {
+             float percent = *zone / 327.67f;
+             if (slider(sub ? "##ZonaC" : "##Zona", percent, 0, 40, "Zona muerta %.1f %%")) *zone = u16(percent * 327.67f);
+@@ -455,25 +456,25 @@ bool Draw() {
+     };
+     // Dolphin's dialog, one group per GameCube control, reflowed for the width.
+     const std::array<std::function<void()>, 6> groups{
+-        [&] { Group("Botones", [&] {
++        [&] { Group(power_pros_ui::Tr("Botones", "Buttons"), [&] {
+             for (int row : {0, 1, 2, 3, 5, 4}) button(std::array{"A", "B", "X", "Y", "START", "Z"}[row], row);
+         }); },
+-        [&] { Group("Cruceta", [&] {
+-            button("Arriba", 8); button("Abajo", 9); button("Izquierda", 10); button("Derecha", 11);
++        [&] { Group(power_pros_ui::Tr("Cruceta", "D-pad"), [&] {
++            button(power_pros_ui::Tr("Arriba", "Up"), 8); button(power_pros_ui::Tr("Abajo", "Down"), 9); button(power_pros_ui::Tr("Izquierda", "Left"), 10); button(power_pros_ui::Tr("Derecha", "Right"), 11);
+         }); },
+-        [&] { Group("Stick principal", [&] { stick(false); }); },
++        [&] { Group(power_pros_ui::Tr("Stick principal", "Main stick"), [&] { stick(false); }); },
+         [&] { Group("Stick C", [&] { stick(true); }); },
+-        [&] { Group("Gatillos", [&] {
+-            trigger(6, PAD_AXIS_TRIGGER_L, status.triggerLeft, "L", "L analógico");
+-            trigger(7, PAD_AXIS_TRIGGER_R, status.triggerRight, "R", "R analógico");
++        [&] { Group(power_pros_ui::Tr("Gatillos", "Triggers"), [&] {
++            trigger(6, PAD_AXIS_TRIGGER_L, status.triggerLeft, "L", power_pros_ui::Tr("L analógico", "Analog L"));
++            trigger(7, PAD_AXIS_TRIGGER_R, status.triggerRight, "R", power_pros_ui::Tr("R analógico", "Analog R"));
+         }); },
+-        [&] { Group("Opciones", [&] {
+-            if (dead && ImGui::Checkbox("Aplicar zona muerta", &dead->useDeadzones)) PADSerializeMappings();
+-            if (ImGui::Button(testing ? "Terminar prueba" : "Probar sticks", ImVec2(-FLT_MIN, 0))) testing = !testing;
++        [&] { Group(power_pros_ui::Tr("Opciones", "Options"), [&] {
++            if (dead && ImGui::Checkbox(power_pros_ui::Tr("Aplicar zona muerta", "Apply dead zone"), &dead->useDeadzones)) PADSerializeMappings();
++            if (ImGui::Button(testing ? power_pros_ui::Tr("Terminar prueba", "End test") : power_pros_ui::Tr("Probar sticks", "Test sticks"), ImVec2(-FLT_MIN, 0))) testing = !testing;
+             ImGui::PushTextWrapPos(0);
+-            ImGui::TextDisabled("%s", testing ? "Los sticks ya no mueven el menú. Esc u OPTIONS termina."
+-                                              : "Mientras pruebas, los sticks no mueven el menú.");
+-            ImGui::TextDisabled("Sensibilidad: menos de 1 da precisión cerca del centro; más de 1, respuesta rápida.");
++            ImGui::TextDisabled("%s", testing ? power_pros_ui::Tr("Los sticks ya no mueven el menú. Esc u OPTIONS termina.", "The sticks no longer move the menu. Esc or OPTIONS ends.")
++                                              : power_pros_ui::Tr("Mientras pruebas, los sticks no mueven el menú.", "While you test, the sticks do not move the menu."));
++            ImGui::TextDisabled("%s", power_pros_ui::Tr("Sensibilidad: menos de 1 da precisión cerca del centro; más de 1, respuesta rápida.", "Sensitivity: below 1 gives precision near the centre; above 1, a quick response."));
+             ImGui::PopTextWrapPos();
+         }); },
+     };
+diff --git a/runtime/src/launcher_settings.inc b/runtime/src/launcher_settings.inc
+index 524ffd3..cd8399f 100644
+--- a/runtime/src/launcher_settings.inc
++++ b/runtime/src/launcher_settings.inc
+@@ -121,7 +121,7 @@ auto drawSettings = [&] {
+             ImGui::Separator();
+             ImGui::PopID();
+         }
+-        if (!count) ImGui::TextWrapped("Todavía no hay elementos aquí.");
++        if (!count) ImGui::TextWrapped("%s", Tr("Todavía no hay elementos aquí.", "Nothing here yet."));
+         ImGui::EndChild();
+         const int pages = std::max(1, (count + pageRows - 1) / pageRows);
+         const int currentPage = scroll / pageRows;
+@@ -142,7 +142,7 @@ auto drawSettings = [&] {
+                     if (p == currentPage) ImGui::PopStyleColor();
+                 }
+             }
+-        } else ImGui::TextDisabled("%d ajustes", count);
++        } else ImGui::TextDisabled(Tr("%d ajustes", "%d settings"), count);
+         ImGui::EndChild();
+         if (wide) {
+             ImGui::SameLine();
+@@ -152,22 +152,22 @@ auto drawSettings = [&] {
+                 const auto& selected = current.options[row];
+                 ImGui::TextColored(ImVec4(1, .79f, .35f, 1), "%s", selected.label);
+                 ImGui::Spacing(); ImGui::TextUnformatted(selected.help); ImGui::Spacing();
+-                ImGui::TextDisabled("%s", selected.restart ? "Se aplica al iniciar el juego." : "Se aplica al momento.");
++                ImGui::TextDisabled("%s", selected.restart ? Tr("Se aplica al iniciar el juego.", "Applies when the game starts.") : Tr("Se aplica al momento.", "Applies right away."));
+             }
+             if (current.footer) { ImGui::Spacing(); ImGui::TextUnformatted(current.footer); }
+             ImGui::PopTextWrapPos(); ImGui::EndChild();
+         }
+         if (!wide && count) {
+             // Compact windows keep the explanation reachable by keyboard/pad.
+-            if (launcher_visuals::PillButton("Información del ajuste")) ImGui::OpenPopup("Información");
++            if (launcher_visuals::PillButton(Tr("Información del ajuste", "About this setting"))) ImGui::OpenPopup(Tr("Información", "Information"));
+             ImGui::SetNextWindowSize(ImVec2(std::min(520.f, w - 50), std::min(420.f, h - 80)), ImGuiCond_Appearing);
+             ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(.5f, .5f));
+-            if (ImGui::BeginPopupModal("Información", nullptr, ImGuiWindowFlags_NoResize)) {
++            if (ImGui::BeginPopupModal(Tr("Información", "Information"), nullptr, ImGuiWindowFlags_NoResize)) {
+                 ImGui::BeginChild("Texto", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
+                 ImGui::PushTextWrapPos(0);
+                 ImGui::TextUnformatted(current.options[row].help);
+                 ImGui::PopTextWrapPos(); ImGui::EndChild();
+-                if (launcher_visuals::PillButton("Cerrar") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
++                if (launcher_visuals::PillButton(Tr("Cerrar", "Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                     ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
+                     ImGui::CloseCurrentPopup();
+                 ImGui::EndPopup();
+@@ -179,7 +179,7 @@ auto drawSettings = [&] {
+             if (Down()) row = std::min(count - 1, row + 1);
+             if (Left()) change(tab, row, -1);
+             if (Right() || Accept()) change(tab, row, 1);
+-            if (!wide && Pressed({SDL_SCANCODE_I}, {ImGuiKey_GamepadFaceUp})) ImGui::OpenPopup("Información");
++            if (!wide && Pressed({SDL_SCANCODE_I}, {ImGuiKey_GamepadFaceUp})) ImGui::OpenPopup(Tr("Información", "Information"));
+         }
+         if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+             if (KeyPressed(SDL_SCANCODE_PAGEUP) || ImGui::IsKeyPressed(ImGuiKey_GamepadL2)) row = std::max(0, scroll - pageRows);
+@@ -187,16 +187,16 @@ auto drawSettings = [&] {
+         }
+     }
+     ImGui::Separator();
+-    if (launcher_visuals::PillButton("Volver")) settingsOpen = false;
++    if (launcher_visuals::PillButton(Tr("Volver", "Back"))) settingsOpen = false;
+     ImGui::SameLine();
+     const bool wideList = available >= 800 * scale;
+     if (tab == 2)
+-        ImGui::TextWrapped("Cruceta: moverse · %s: asignar · %s: pestaña · %s: volver", launcher_controls::AcceptPrompt(),
++        ImGui::TextWrapped(Tr("Cruceta: moverse · %s: asignar · %s: pestaña · %s: volver", "D-pad: move · %s: assign · %s: tab · %s: back"), launcher_controls::AcceptPrompt(),
+                            launcher_controls::TabPrompt(), launcher_controls::BackPrompt());
+     else
+-        ImGui::TextWrapped("Arriba/abajo: elegir · Izquierda/derecha o %s: cambiar · %s: pestaña · %s: volver%s",
++        ImGui::TextWrapped(Tr("Arriba/abajo: elegir · Izquierda/derecha o %s: cambiar · %s: pestaña · %s: volver%s", "Up/down: choose · Left/right or %s: change · %s: tab · %s: back%s"),
+                            launcher_controls::AcceptPrompt(), launcher_controls::TabPrompt(), launcher_controls::BackPrompt(),
+-                           wideList ? "" : launcher_controls::UsingGamepad() ? (launcher_controls::PlayStationPrompts() ? " · Triángulo: info" : " · Y: info") : " · I: info");
++                           wideList ? "" : launcher_controls::UsingGamepad() ? (launcher_controls::PlayStationPrompts() ? Tr(" · Triángulo: info", " · Triangle: info") : " · Y: info") : " · I: info");
+     const bool popupNow = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
+     if (!controlsBusy && !popupProtected && !popupNow) {
+         if (Pressed({SDL_SCANCODE_Q}, {ImGuiKey_GamepadL1})) { tab = firstTab+(tab-firstTab+tabCount-1)%tabCount; row = 0; }
