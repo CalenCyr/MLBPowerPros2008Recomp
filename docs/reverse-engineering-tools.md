@@ -1,5 +1,7 @@
 # Herramientas de ingeniería inversa
 
+*English version: [en/reverse-engineering-tools.md](en/reverse-engineering-tools.md)*
+
 ## Instaladas (portables, en `local/tools/`)
 
 | Componente | Versión | Ubicación |

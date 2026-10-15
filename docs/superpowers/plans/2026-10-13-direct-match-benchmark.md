@@ -1,5 +1,7 @@
 # Direct match benchmark implementation plan
 
+*English version: [../../en/superpowers/plans/2026-10-13-direct-match-benchmark.md](../../en/superpowers/plans/2026-10-13-direct-match-benchmark.md)*
+
 > **For agentic workers:** Use inline execution with the executing-plans workflow. Steps use checkbox syntax for tracking.
 
 **Goal:** Start a repeatable Yankees–Colorado match without navigating the launcher or game menus, with live graphics controls and measurements saved for GPU diagnosis.

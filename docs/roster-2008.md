@@ -1,5 +1,7 @@
 # Rosters de MLB Power Pros 2008 y PowerUp / PowerUp+
 
+*English version: [en/roster-2008.md](en/roster-2008.md)*
+
 ## Qué es PowerUp+
 
 [PowerUp+](https://github.com/ogura-connection/PowerUpPlus) es un fork, con licencia GPLv3, de [PowerUp](https://github.com/CSho27/PowerUp), el editor de partidas guardadas de **MLB Power Pros 2007** para Wii.

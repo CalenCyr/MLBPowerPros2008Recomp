@@ -1,0 +1,63 @@
+# Launcher and controls
+
+*Versión en español: [../launcher-controles.md](../launcher-controles.md)*
+
+The local build keeps the original launcher's background, colors and glowing buttons. Video, Audio, Controls and Interface open through their tabs; Mods and Tools keep their entry from the main menu.
+
+## Adaptive layout
+
+The settings panel uses the frame drawn on the background only when the window has an aspect ratio close to 16:9. With other ratios (narrow, tall or 4:3 windows) the panel fills the window over the blurred background, instead of being boxed in. Long lists scroll and pagination is recalculated when the size changes. Pop-up windows are centered when they open.
+
+## Using a controller
+
+- **Main menu:** D-pad or stick to choose, Cross/A to enter.
+- **Settings lists (Video, Audio, Interface, Mods):** up/down choose the row (highlighted in orange); left/right or Cross change its value; L1/R1 switch tabs; L2/R2 change page; Circle/B goes back. In narrow windows, Triangle/Y opens the setting's explanation. The bottom bar shows these keys.
+- **Controls:** the D-pad moves the focus around the grid; Cross assigns; L1/R1 and Circle as above.
+- Accept and Back don't repeat when held, so entering a screen with Cross doesn't also change the first setting.
+- The launcher listens to all connected controllers, not just the first one SDL lists (DS4Windows exposes the physical controller and its virtual Xbox twin).
+- With a keyboard: arrows or WASD, Enter to change, Q/E for tabs, Esc to go back.
+
+## Controls (Dolphin style)
+
+`Settings > Controls` (`Ajustes > Controles`) is a single screen with groups, like Dolphin's GameCube controller dialog:
+
+- **Header:** Player (1–4), Device (connected controllers or Keyboard and mouse), Button names (automatic, PlayStation or Xbox) and Default. It is laid out in 4, 2 or 1 columns depending on the width.
+- **Groups:** Buttons (A, B, X, Y, Z, START), D-pad, Main stick, C stick, Triggers (L, R, analog L, analog R) and Options. They are laid out in 4, 3, 2 or 1 columns depending on the width; if they don't fit, the area scrolls.
+- **Assign:** click (or Cross/A/Enter) on a binding. The button turns orange and waits for the previous input to be released; after that it accepts the new one. Esc, another click on the same button or 8 seconds without input cancel without changing anything. Right-click clears the binding of a button or key.
+- Game buttons accept controller buttons, triggers or stick directions. Stick directions and analog triggers accept an axis or a button. With Keyboard and mouse, keys and mouse buttons too. Duplicates between main buttons are swapped.
+- **Sticks:** each group shows an octagonal gate with the dead zone and the signal MLB receives, using `PADRead` and the port's same conversion to GameCube ranges (87/74, normalized by MLB between 88/64). Below, dead zone and sensitivity. A sensitivity below 1 softens the response near the center; one above 1 speeds it up. Both keep the full range of travel.
+- **Test sticks** (**Probar sticks**) (in Options) stops the sticks from moving the menu while you test them; Esc or OPTIONS ends it.
+
+## Back and closing
+
+Back (Esc, Backspace, K or Circle/B) only counts on the frame it is pressed and never repeats. That way, the press that closes a drop-down or cancels a capture doesn't also close the settings page. Before, holding it for a moment caused those chained closes.
+
+## Language
+
+The launcher is in Spanish or English. By default it follows Windows: Spanish when Windows is in Spanish, English otherwise. To change it: **SETTINGS > INTERFACE > IDIOMA / LANGUAGE** (Automatic, Español or English). The change shows right away and is saved in `Config.toml` (`[ui] language = "auto" | "es" | "en"`); the Setup and Texture Studio use the same setting.
+
+## Saving
+
+The existing mapping files and the `[controller]` section of `Config.toml` are kept. The additional settings are saved under `UserData` in portable installations:
+
+- `stick_response.txt`: sensitivity of both sticks per player; versioned file, with default values of 1 if it is missing or invalid.
+- `launcher_prompts.txt`: chosen button-name family.
+
+The binary format of the existing mappings doesn't change. A stick direction assigned to a button uses the `nativeButton` field that already existed in the axis mapping. The reproducible patch is `tools/patches/wiicompiled-launcher-controls.patch`, applied after the existing patches by `tools/wiicompiled-translate.ps1`.
+
+## Verification
+
+`tools/test-launcher.ps1` creates a private portable copy under `local/analysis/launcher-tests/` and runs a short test with an SDL virtual controller. It checks:
+
+- button-name changes and rejection of small stick noise;
+- sensitivity applied by `PADRead` with the full range of travel;
+- capture on the button itself and swapping of duplicates;
+- stick direction assigned to a button;
+- cancelling with Esc;
+- controller disconnection;
+- reading the settings in a new process;
+- in a third pass, the settings list with the controller: one row per press, changing with right, held Cross that changes only once, and R1 for the next tab.
+
+It doesn't start a game or modify the settings of the user's installation.
+
+The `mkw_stick_response_tests` target checks center, dead-zone edge, diagonals, monotonic response, sensitivity and extremes. The interface was reviewed at 640×480, 800×1061, 1280×720 and 1920×1061. This does not replace a physical check with the user's controller.

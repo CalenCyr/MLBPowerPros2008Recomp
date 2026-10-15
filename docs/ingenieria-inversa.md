@@ -1,5 +1,7 @@
 # MLB Power Pros 2008 (Wii) — Referencia de ingeniería inversa
 
+*English version: [en/ingenieria-inversa.md](en/ingenieria-inversa.md)*
+
 Lo que se sabe del juego por dentro, ordenado por sistema: direcciones, estructuras, formatos de archivo, hilos y el flujo de escenas. Sale del trabajo del proyecto de recompilación nativa y está pensado para la comunidad de mods y para futuros desarrolladores.
 
 - **Versión:** `RL8E54` (EE. UU., NTSC-U). Todas las direcciones son de esta versión.

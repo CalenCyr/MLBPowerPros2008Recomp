@@ -1,5 +1,7 @@
 # Prueba de viabilidad: Wiicompiled con MLB Power Pros 2008
 
+*English version: [en/wiicompiled-feasibility.md](en/wiicompiled-feasibility.md)*
+
 El objetivo es saber si el traductor y el runtime nativo de Wiicompiled (recompilación de Mario Kart Wii, GPL-3.0, `6fa24737`) pueden servir de base para este juego. La alternativa es reimplementar lo mismo sobre DolRecomp y ModernGekko.
 
 El camino actual sigue intacto: es la referencia y aporta el verificador lockstep.

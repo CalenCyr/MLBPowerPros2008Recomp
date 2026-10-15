@@ -1,5 +1,7 @@
 # Launcher y controles
 
+*English version: [en/launcher-controles.md](en/launcher-controles.md)*
+
 La build local conserva el fondo, los colores y los botones brillantes del launcher original. Vídeo, Audio, Controles e Interfaz se abren mediante sus pestañas; Mods y Herramientas conservan su entrada desde el menú principal.
 
 ## Diseño adaptable
@@ -29,6 +31,10 @@ El panel de ajustes usa el marco dibujado del fondo solo cuando la ventana tiene
 ## Volver y cierres
 
 Volver (Esc, Retroceso, K o Círculo/B) solo cuenta en el fotograma en que se pulsa y nunca se repite. Así, la pulsación que cierra un desplegable o cancela una captura no cierra también la página de ajustes. Antes, mantenerla un instante provocaba esos cierres en cadena.
+
+## Idioma
+
+El launcher está en español o en inglés. Por defecto usa el idioma de Windows: español si Windows está en español e inglés en cualquier otro caso. Para cambiarlo: **AJUSTES > INTERFAZ > IDIOMA / LANGUAGE** (Automático, Español o English). El cambio se ve al momento y se guarda en `Config.toml` (`[ui] language = "auto" | "es" | "en"`); el Setup y el Texture Studio usan el mismo ajuste.
 
 ## Guardado
 

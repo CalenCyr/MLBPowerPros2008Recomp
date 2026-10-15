@@ -1,5 +1,7 @@
 # Dependencias de esta prueba
 
+*English version: [THIRD_PARTY.en.md](THIRD_PARTY.en.md)*
+
 El código propio de esta integración se publica bajo GPLv3; consultar `LICENSE`. Los binarios y assets de la copia del juego no se incluyen en el repositorio.
 
 | Dependencia | Versión o revisión usada | Ubicación de trabajo | Uso |

@@ -1,5 +1,7 @@
 # MLB Power Pros 2008 Recomp
 
+*English version: [README.en.md](README.en.md)*
+
 Recompilación nativa no oficial de MLB Power Pros 2008 para Wii (USA, `RL8E54`) sobre el runtime de [Wiicompiled](https://github.com/patchzyy/Wiicompiled).
 
 ## Instalar y jugar (Windows 10/11, 64 bits)
@@ -18,6 +20,8 @@ Desde el launcher (AJUSTES → MODS / HERRAMIENTAS) también se activan mods y s
 **No se incluye ni se descarga nada del juego.** Ni este repositorio ni sus releases contienen la imagen del disco, el ejecutable, assets ni código traducido: el Setup solo trae herramientas (traductor, compilador, código fuente del runtime) y todo lo del juego se genera en tu equipo a partir de tu propia copia. No pidas ni compartas archivos del juego.
 
 Para quien empaqueta una release: `tools/setup/Make-Payload.ps1` arma el paquete (ver su cabecera) y comprueba que no contenga nada del juego; `tools/setup/LocalBuild.ps1` es lo que ejecuta el Setup en la PC del jugador.
+
+El launcher, el Setup, el Texture Studio y el complemento de Blender están en español y en inglés: usan el idioma de Windows (o de Blender) y se cambian con su opción **IDIOMA / LANGUAGE** o la píldora **ES | EN**. La documentación en inglés está en `docs/en/` y en `README.en.md`.
 
 ## Discord
 

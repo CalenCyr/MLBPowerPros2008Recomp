@@ -1,5 +1,7 @@
 # Power Pros Wii 2008 Texture Studio
 
+*English version: [en/texture-studio.md](en/texture-studio.md)*
+
 Programa para crear **mods de texturas** de MLB Power Pros 2008. Con él puedes:
 
 - ver todas las texturas del juego, ordenadas por lo que son;
@@ -29,6 +31,8 @@ La primera vez tarda un segundo en leer las texturas de tu copia del juego (unas
   - Haz clic en cualquiera de las dos para verla grande.
   - Debajo verás el pack de donde sale, su formato, el nombre del archivo y los botones **Exportar PNG**, **Importar PNG...**, **Quitar reemplazo** y **Abrir carpeta**.
 - **Abajo:** **Exportar esta vista**, **Importar carpeta...**, **Capturar en juego** y **Empaquetar .zip**.
+
+**Idioma:** la píldora **ES | EN** de la banda superior cambia el idioma al momento y lo guarda en `Config.toml` (`[ui] language`), el mismo ajuste que el launcher. Sin elegir, usa el idioma de Windows.
 
 ## Crear un pack HD paso a paso
 

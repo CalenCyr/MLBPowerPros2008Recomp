@@ -1,5 +1,7 @@
 # Power Pros Wii 2008 Texture Studio — plan de implementación
 
+*English version: [../../en/superpowers/plans/2026-10-14-texture-studio.md](../../en/superpowers/plans/2026-10-14-texture-studio.md)*
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** una app de escritorio que muestra todas las texturas de MLB Power Pros 2008 con su contexto, las exporta a PNG y guarda los PNG editados (también en HD) como mod de texturas, sin tocar el juego.

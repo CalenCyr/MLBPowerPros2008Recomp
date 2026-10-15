@@ -1,5 +1,7 @@
 # Fase 0 — análisis inicial
 
+*English version: [en/phase0-report.md](en/phase0-report.md)*
+
 Fecha: 7 de octubre de 2026. Proyecto: `D:\MLBPowerPros2008Recomp`.
 
 > **Informe histórico**: describe el punto de partida. Hoy el juego es jugable de forma nativa sobre Wiicompiled (`docs/wiicompiled-feasibility.md`), y `project.bin` y el roster están descifrados (`docs/ingenieria-inversa.md`). Los informes y scripts de DolRecomp/ModernGekko que cita (`cpu-translation-report.md`, `runtime-integration-report.md`, `recompile.ps1`) están en el tag de git `moderngekko-era`. Lo que aquí figura como pendiente (extractor de `project.bin`, archivo de rosters, framerate) ya está resuelto en esos documentos.

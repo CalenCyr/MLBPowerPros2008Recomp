@@ -1,5 +1,7 @@
 # Estadios en Blender
 
+*English version: [en/stadiums.md](en/stadiums.md)*
+
 El complemento **«Estadios de MLB Power Pros 2008»** abre en Blender cualquier estadio de tu juego: cada pieza en su sitio y con sus texturas, y la malla de colisión del campo.
 
 También **exporta**: lo que cambies en las piezas y en la colisión vuelve al juego como un mod. Y puede meter en el juego **un estadio tuyo** hecho en SketchUp, Blender u otro programa (ver «Tu propio modelo»). El formato está descrito en `docs/ingenieria-inversa.md`, sección 5, «Estadios».
@@ -9,6 +11,8 @@ También **exporta**: lo que cambies en las piezas y en la colisión vuelve al j
 1. Necesitas **Blender 4.2 o más nuevo** ([blender.org](https://www.blender.org/download/)).
 2. Consigue el complemento, un zip llamado `powerpros_stadium-<versión>.zip`. Para crearlo desde el repositorio: `python tools/blender/build_addon.py` (queda en `local/build/blender/`).
 3. En Blender: **Editar > Preferencias > Obtener extensiones**. En el menú ⌄ de arriba a la derecha elige **Instalar desde disco…** y selecciona el zip.
+
+**Idioma:** en las preferencias del complemento (**Editar > Preferencias > Complementos**), **Idioma / Language**: Automático (el idioma de la interfaz de Blender), Español o English. Se aplica sin reiniciar Blender.
 
 ## Importar un estadio
 

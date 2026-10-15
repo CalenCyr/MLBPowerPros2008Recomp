@@ -4,6 +4,7 @@
 The PDF is a binary, so it is written under local/docs/ (the pre-commit check keeps binaries
 out of git); share it from there. Needs the Python `markdown` package and Chrome or Edge.
 Usage: build_re_pdf.py [SOURCE_MD] [OUTPUT_PDF]
+English: build_re_pdf.py docs/en/ingenieria-inversa.md  (-> local/docs/MLB-PowerPros-2008-reverse-engineering.pdf)
 """
 import pathlib
 import re
@@ -45,11 +46,13 @@ def browser() -> str:
 
 def main() -> None:
     source = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "ingenieria-inversa.md"
-    output = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "local" / "docs" / "MLB-PowerPros-2008-ingenieria-inversa.pdf"
+    english = source.resolve().parent.name == "en"          # docs/en/ingenieria-inversa.md
+    name = "MLB-PowerPros-2008-reverse-engineering.pdf" if english else "MLB-PowerPros-2008-ingenieria-inversa.pdf"
+    output = (pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "local" / "docs" / name).resolve()  # Chrome needs it absolute
     # GitHub nests lists at 2 spaces; Python-Markdown needs 4.
     text = re.sub(r"^( +)(?=[-*] |\d+\. )", lambda m: m[1] * 2, source.read_text(encoding="utf-8"), flags=re.M)
     body = markdown.markdown(text, extensions=["tables", "fenced_code", "toc", "sane_lists"])
-    html = f"<!doctype html><html lang='es'><head><meta charset='utf-8'><style>{CSS}</style></head><body>{body}</body></html>"
+    html = f"<!doctype html><html lang='{"en" if english else "es"}'><head><meta charset='utf-8'><style>{CSS}</style></head><body>{body}</body></html>"
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         page = pathlib.Path(tmp) / "reference.html"

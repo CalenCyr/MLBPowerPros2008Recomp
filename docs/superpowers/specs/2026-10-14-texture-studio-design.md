@@ -1,5 +1,7 @@
 # Power Pros Wii 2008 Texture Studio — diseño
 
+*English version: [../../en/superpowers/specs/2026-10-14-texture-studio-design.md](../../en/superpowers/specs/2026-10-14-texture-studio-design.md)*
+
 Fecha: 14 de octubre de 2026. Estado: aprobado en conversación, pendiente de revisión escrita.
 
 ## Objetivo
