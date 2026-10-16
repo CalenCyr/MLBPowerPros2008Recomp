@@ -462,7 +462,7 @@ Verified (October 14, 2026):
   - The benchmark match loads and plays at 60 FPS.
   - The model's home plate, batter's box, bases and mound match the players.
   - A ground ball rolls across the new field normally, and no faces are missing nor are back faces visible.
-  - Not seen yet: a batted ball against the fences or a home run (surface 1?).
+  - Checked by the user (October 15): batted balls hit the fences and home runs are scored. But the generated collision did not follow the visible model everywhere: in some spots the ball should have landed in the stands that are drawn there and instead bounced off a wall that is not visible. What the player sees is not always what the game collides with; the collision generator needs work.
   - There are 3 degenerate or duplicate triangles.
 - **Surface IDs** (by geometry in Coors Field and Yankee Stadium; their effect in the game is unchecked):
 

@@ -463,7 +463,7 @@ Verificado (14 de octubre de 2026):
   - El partido del benchmark carga y se juega a 60 FPS.
   - El plato, la caja de bateo, las bases y el montículo del modelo coinciden con los jugadores.
   - Un rodado recorre el campo nuevo con normalidad, y no faltan caras ni se ven las traseras.
-  - Sin ver todavía: un batazo contra las vallas o un home run (¿superficie 1?).
+  - Comprobado por el usuario (15 de octubre): los batazos chocan con las vallas y los home runs cuentan. Pero la colisión generada no seguía al modelo visible en todas partes: en algunos sitios la bola debía caer en las gradas que se ven y en cambio rebotaba contra una pared que no se ve. Lo que ve el jugador no siempre es con lo que choca el juego; el generador de colisión necesita trabajo.
   - Hay 3 triángulos degenerados o repetidos.
 - **IDs de superficie** (por geometría en Coors Field y Yankee Stadium; su efecto en el juego está sin comprobar):
 
