@@ -4,6 +4,7 @@ param(
     [ValidateSet('on', 'off')][string[]]$Force169 = @('on'),
     [ValidateSet('auto', 'd3d12', 'vulkan')][string]$GraphicsApi = 'auto',
     [ValidateRange(5, 600)][int]$Seconds = 30,
+    [ValidateSet(0, 120, 180)][int]$Interpolation = 0,  # frame_interpolation_fps
     [switch]$Interactive
 )
 $ErrorActionPreference = 'Stop'
@@ -14,7 +15,7 @@ $folder = Join-Path $build ('UserData\Benchmarks\monitor-' + (Get-Date -Format '
 New-Item -ItemType Directory -Path $folder -Force | Out-Null
 foreach ($resolution in $Scale) {
     foreach ($aspect in $Force169) {
-        $label = "x$resolution-169-$aspect-$GraphicsApi"
+        $label = "x$resolution-169-$aspect-$GraphicsApi" + $(if ($Interpolation) { "-interp$Interpolation" } else { "" })
         $info = New-Object System.Diagnostics.ProcessStartInfo
         $info.FileName = $exe
         $info.WorkingDirectory = $build
@@ -28,6 +29,7 @@ foreach ($resolution in $Scale) {
         $info.EnvironmentVariables['WIICOMPILED_MATCH_SCALE'] = "$resolution"
         $info.EnvironmentVariables['WIICOMPILED_MATCH_16_9'] = $(if ($aspect -eq 'on') { '1' } else { '0' })
         $info.EnvironmentVariables['WIICOMPILED_MATCH_API'] = $GraphicsApi
+        $info.EnvironmentVariables['WIICOMPILED_MATCH_INTERP'] = "$Interpolation"
         $info.EnvironmentVariables['WIICOMPILED_MATCH_SECONDS'] = $(if ($Interactive) { '0' } else { "$Seconds" })
         $toolchain = Join-Path $PSScriptRoot '..\local\tools\llvm-mingw-20260616-ucrt-x86_64\bin'
         if (Test-Path -LiteralPath $toolchain) { $info.EnvironmentVariables['PATH'] = (Resolve-Path -LiteralPath $toolchain).Path + ';' + $info.EnvironmentVariables['PATH'] }

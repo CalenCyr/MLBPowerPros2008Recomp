@@ -23,7 +23,7 @@ A **static recompilation** of *MLB Power Pros 2008* (Wii, USA, `RL8E54`) into a 
 | Boot → strap screen → menus | works, at 60 FPS |
 | Matches (Exhibition), Home Run, lineups | work; full matches are played. Automated test match: 60 FPS with Direct3D 12 and with Vulkan |
 | Season, League, MLB Life | reachable (MLB Life also with modded rosters); no systematic tests of each mode |
-| Graphics | Direct3D 12 or Vulkan (picked automatically), internal resolution 1x to 4x, AMD FSR 1, anisotropic filtering up to 16x, quality presets |
+| Graphics | Direct3D 12 or Vulkan (picked automatically), internal resolution 1x to 4x, true 16:9 widescreen, fill screen without black strips, AMD FSR 1, anisotropic filtering up to 16x, frame interpolation to 120 or 180 FPS (experimental), quality presets |
 | Audio | complete, commentator included |
 | Controllers | any controller through SDL3, or keyboard and mouse, as a GameCube controller; up to 4 players; Dolphin-style remapping; PlayStation or Xbox button names |
 | Mods | textures (HD too), `project.bin` files (uniforms, for example), 2008 rosters, stadiums edited in Blender and **new stadiums** in Exhibition. Untested: `riivolution/` |
@@ -79,7 +79,7 @@ Every change to the runtime is a **reproducible patch** on Wiicompiled's pinned 
 ## Features
 
 **Own launcher** (before each session, controller-friendly)
-- Video: graphics API, window or fullscreen, internal resolution, AMD FSR 1, anisotropic filtering, quality presets.
+- Video: graphics API, window or fullscreen, internal resolution, AMD FSR 1, anisotropic filtering, force 16:9, fill screen, frame interpolation, quality presets.
 - Audio, Dolphin-style controls (stick gates, dead zone, stick test) and interface options.
 - Mods: one switch per folder.
 - Tools: opens the roster editor and Texture Studio.

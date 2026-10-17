@@ -23,7 +23,7 @@ Una **recompilación estática** de *MLB Power Pros 2008* (Wii, USA, `RL8E54`) a
 | Arranque → correa → menús | funciona, a 60 FPS |
 | Partidos (Exhibición), Home Run, alineaciones | funcionan; se juegan partidos completos. Partido de prueba automático: 60 FPS con Direct3D 12 y con Vulkan |
 | Temporada, Liga, MLB Life | se alcanzan (MLB Life también con rosters de mods); sin pruebas sistemáticas de cada modo |
-| Gráficos | Direct3D 12 o Vulkan (elección automática), resolución interna de 1x a 4x, AMD FSR 1, filtro anisotrópico hasta 16x, ajustes de calidad |
+| Gráficos | Direct3D 12 o Vulkan (elección automática), resolución interna de 1x a 4x, panorámico 16:9 real, llenar pantalla sin franjas negras, AMD FSR 1, filtro anisotrópico hasta 16x, interpolación a 120 o 180 FPS (experimental), ajustes de calidad |
 | Audio | completo, comentarista incluido |
 | Mandos | cualquier mando por SDL3, o teclado y ratón, como mando de GameCube; hasta 4 jugadores; reasignación al estilo de Dolphin; nombres de botones de PlayStation o Xbox |
 | Mods | texturas (también en HD), archivos de `project.bin` (por ejemplo uniformes), rosters de 2008, estadios editados en Blender y **estadios nuevos** en Exhibición. Sin probar: `riivolution/` |
@@ -79,7 +79,7 @@ Todos los cambios al runtime son **parches reproducibles** sobre el commit fijad
 ## Funciones
 
 **Launcher propio** (antes de cada partida, también con mando)
-- Vídeo: API gráfica, ventana o pantalla completa, resolución interna, AMD FSR 1, filtro anisotrópico, ajustes de calidad.
+- Vídeo: API gráfica, ventana o pantalla completa, resolución interna, AMD FSR 1, filtro anisotrópico, forzar 16:9, llenar pantalla, interpolación, ajustes de calidad.
 - Audio, controles al estilo de Dolphin (puertas de los sticks, zona muerta, prueba de sticks) y opciones de interfaz.
 - Mods: se activan o desactivan con un interruptor por carpeta.
 - Herramientas: abre el editor de rosters y el Texture Studio.

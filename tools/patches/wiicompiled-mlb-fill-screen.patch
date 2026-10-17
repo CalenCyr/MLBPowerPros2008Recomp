@@ -1,0 +1,259 @@
+diff --git a/aurora-main/include/aurora/gfx.h b/aurora-main/include/aurora/gfx.h
+index 0550ae3..7ad7154 100644
+--- a/aurora-main/include/aurora/gfx.h
++++ b/aurora-main/include/aurora/gfx.h
+@@ -114,6 +114,11 @@ uint32_t aurora_get_queued_pipeline_count();
+ void aurora_set_disable_copy_filter(bool disabled);
+ bool aurora_get_disable_copy_filter();
+ 
++// Leaves `lines` logical EFB lines off the top and the bottom of every display copy, for games that
++// draw inside a black border. The presented image is the remaining rows; 0 copies the whole frame.
++void aurora_set_display_crop_lines(uint32_t lines);
++uint32_t aurora_get_display_crop_lines();
++
+ // Guest-RAM write tracking. `generation` changes whenever guest RAM covering a host range was
+ // written (or returns AURORA_GUEST_WRITE_UNTRACKED); `notify` reports writes aurora made itself.
+ #define AURORA_GUEST_WRITE_UNTRACKED UINT64_MAX
+diff --git a/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp b/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp
+index e255303..dfa305b 100644
+--- a/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp
++++ b/aurora-main/lib/dolphin/gx/GXFrameBuffer.cpp
+@@ -11,12 +11,17 @@
+ #include "../../webgpu/gpu.hpp"
+ #include "../vi/vi_internal.hpp"
+ 
++#include <aurora/gfx.h>
++
+ #include <algorithm>
++#include <atomic>
+ #include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ 
+ namespace {
++std::atomic_uint32_t g_displayCropLines{0};
++
+ struct CopyClearState {
+   bool clearColor = false;
+   bool clearAlpha = false;
+@@ -425,11 +430,24 @@ void GXCopyDisp(void* dest, GXBool clear) {
+   if (aurora::gx::fifo::get_buffer_size() != 0) {
+     aurora::gx::fifo::drain();
+   }
+-  const auto rect = aurora::gx::map_logical_scissor(g_gxState.dispCopySrc);
++  auto rect = aurora::gx::map_logical_scissor(g_gxState.dispCopySrc);
++  const float renderYScale = static_cast<float>(rect.height) / std::max<float>(g_gxState.dispCopySrc.height, 1.0f);
+   const auto logicalDstWidth =
+       std::max<u32>(g_gxState.dispCopyDstWidth != 0 ? g_gxState.dispCopyDstWidth : static_cast<u32>(g_gxState.dispCopySrc.width), 1);
+-  const auto logicalDstHeight =
++  auto logicalDstHeight =
+       std::max<u32>(g_gxState.dispCopyDstHeight != 0 ? g_gxState.dispCopyDstHeight : static_cast<u32>(g_gxState.dispCopySrc.height), 1);
++  // The cropped edges are interior EFB rows, so the copy filter clamps there instead of blending the border in.
++  bool clampTop = (g_gxState.copyClamp & GX_CLAMP_TOP) != 0;
++  bool clampBottom = (g_gxState.copyClamp & GX_CLAMP_BOTTOM) != 0;
++  const u32 cropLines = g_displayCropLines.load(std::memory_order_relaxed);
++  const u32 srcHeight = g_gxState.dispCopySrc.height;
++  if (cropLines != 0 && srcHeight > 4 * cropLines) {
++    const auto cut = static_cast<int32_t>(std::lround(static_cast<float>(cropLines) * renderYScale));
++    rect.y += cut;
++    rect.height -= 2 * cut;
++    logicalDstHeight = std::max<u32>(logicalDstHeight - logicalDstHeight * 2 * cropLines / srcHeight, 1);
++    clampTop = clampBottom = true;
++  }
+   const auto [dstWidth, dstHeight] = scale_copy_dst(logicalDstWidth, logicalDstHeight);
+ 
+   if (!g_gxState.displayCopyTexture || g_gxState.displayCopyWidth != dstWidth ||
+@@ -447,12 +465,13 @@ void GXCopyDisp(void* dest, GXBool clear) {
+   aurora::gfx::resolve_pass(g_gxState.displayCopyTexture, rect, clearState.clearColor, clearState.clearAlpha,
+                             clearState.clearDepth, clearState.clearColorValue, aurora::gx::clear_depth_value(),
+                             GX_TF_RGBA8, nullptr, false, &copyFilter, false,
+-                            static_cast<float>(rect.height) / std::max<float>(g_gxState.dispCopySrc.height, 1.0f),
+-                            (g_gxState.copyClamp & GX_CLAMP_TOP) != 0,
+-                            (g_gxState.copyClamp & GX_CLAMP_BOTTOM) != 0);
++                            renderYScale, clampTop, clampBottom);
+   aurora::gx::set_display_copy_present_source();
+ }
+ 
++void aurora_set_display_crop_lines(uint32_t lines) { g_displayCropLines.store(lines, std::memory_order_relaxed); }
++uint32_t aurora_get_display_crop_lines() { return g_displayCropLines.load(std::memory_order_relaxed); }
++
+ void GXCopyTex(void* dest, GXBool clear) {
+   // Texture copies must see all earlier draws and state changes.
+   if (aurora::gx::fifo::get_buffer_size() != 0) {
+diff --git a/runtime/include/runtime_config.h b/runtime/include/runtime_config.h
+index bf6fa4b..c8956e1 100644
+--- a/runtime/include/runtime_config.h
++++ b/runtime/include/runtime_config.h
+@@ -38,6 +38,7 @@ struct RuntimeUserConfig {
+     std::optional<bool> widescreen;
+     std::optional<bool> forceAspect169;
+     std::optional<bool> fsr;
++    std::optional<bool> cropBlackBorders;
+     std::optional<uint32_t> textureFiltering;
+     std::optional<int32_t> windowPosX;
+     std::optional<int32_t> windowPosY;
+@@ -317,6 +318,8 @@ inline void EnsureConfigFile() {
+               "force_16_9 = false\n"
+               "# AMD FSR 1 upscaling when the internal resolution is below the window.\n"
+               "fsr = false\n"
++              "# Leave out the black border the game draws around its image (fills the window).\n"
++              "crop_black_borders = true\n"
+               "# Forced anisotropic filtering: 0 (each texture's own), 2, 4, 8 or 16.\n"
+               "texture_filtering = 0\n"
+               "resolution_multiplier = 1.0\n"
+@@ -449,6 +452,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
+     config.widescreen = FindConfigValue<bool>(document, "video", "widescreen");
+     config.forceAspect169 = FindConfigValue<bool>(document, "video", "force_16_9");
+     config.fsr = FindConfigValue<bool>(document, "video", "fsr");
++    config.cropBlackBorders = FindConfigValue<bool>(document, "video", "crop_black_borders");
+     if (auto value = FindConfigUint(document, "video", "texture_filtering");
+         value && (*value == 0 || *value == 2 || *value == 4 || *value == 8 || *value == 16)) {
+         config.textureFiltering = *value;
+@@ -570,6 +574,10 @@ inline const RuntimeUserConfig& Get() {
+             // A benchmark needs complete frames even while new shaders compile.
+             result.skipUnreadyPipelines = false;
+             result.frameInterpolationFps = 0;
++            if (const char* interp = std::getenv("WIICOMPILED_MATCH_INTERP")) {
++                const uint32_t fps = static_cast<uint32_t>(std::strtoul(interp, nullptr, 10));
++                if (IsSupportedFrameInterpolationFps(fps)) result.frameInterpolationFps = fps;
++            }
+         }
+ #endif
+         return result;
+@@ -891,6 +899,15 @@ inline bool SetFsr(bool value) {
+     return WriteSetting("video", "fsr", value ? "true" : "false");
+ }
+ 
++inline bool CropBlackBorders(bool fallback = true) {
++    return Get().cropBlackBorders.value_or(fallback);
++}
++
++inline bool SetCropBlackBorders(bool value) {
++    Mutable().cropBlackBorders = value;
++    return WriteSetting("video", "crop_black_borders", value ? "true" : "false");
++}
++
+ inline uint32_t TextureFiltering(uint32_t fallback = 0) {
+     return Get().textureFiltering.value_or(fallback);
+ }
+diff --git a/runtime/src/launcher.cpp b/runtime/src/launcher.cpp
+index 93339f9..ebdaef4 100644
+--- a/runtime/src/launcher.cpp
++++ b/runtime/src/launcher.cpp
+@@ -69,6 +69,7 @@ constexpr std::array<ApiOption, 5> kApis{{
+ constexpr std::array<const char*, 3> kDisplayModes{"windowed", "borderless", "exclusive"};
+ constexpr std::array<float, 6> kResolutions{1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 0.0f};
+ constexpr std::array<uint32_t, 5> kFilteringLevels{0, 2, 4, 8, 16};  // FILTRADO DE TEXTURAS choices
++constexpr std::array<uint32_t, 3> kInterpolationFps{0, 120, 180};     // INTERPOLACIÓN choices
+ 
+ bool AutomatedRun() {
+     for (const char* env : {"WIICOMPILED_MATCH_BENCH", "WIICOMPILED_SKIP_LAUNCHER", "WIICOMPILED_BENCH", "WIICOMPILED_PAD_SCRIPT",
+@@ -596,6 +597,23 @@ Result Run(int argc, char** argv) {
+     Option aspect{Tr("FORZAR 16:9", "FORCE 16:9"), Tr("Dibuja el juego en panorámico aunque la consola esté en 4:3.",
+                   "Draws the game in widescreen even if the console is set to 4:3."), YesNo(),
+                   RuntimeConfigFile::ForceAspect169Enabled() ? 1 : 0};
++    Option fill{Tr("LLENAR PANTALLA", "FILL SCREEN"),
++                Tr("Quita las franjas negras que el juego deja arriba y abajo de su imagen, para que ocupe toda la "
++                   "ventana. En una pantalla 16:9 la imagen queda un 8 % más alta que en la Wii.",
++                   "Removes the black strips the game leaves above and below its image, so it fills the whole "
++                   "window. On a 16:9 screen the image ends up 8% taller than on the Wii."),
++                YesNo(), RuntimeConfigFile::CropBlackBorders(true) ? 1 : 0};
++    Option interpolation{Tr("INTERPOLACIÓN", "FRAME INTERPOLATION"),
++                         Tr("Crea imágenes intermedias entre los 60 fotogramas del juego para un movimiento más "
++                            "fluido en pantallas de 120 Hz o más. El juego sigue funcionando a 60.\n\n"
++                            "Experimental: puede verse algún defecto en lo que se mueve rápido. Pide más GPU.",
++                            "Creates in-between images among the game's 60 frames for smoother motion on 120 Hz "
++                            "or faster screens. The game itself still runs at 60.\n\n"
++                            "Experimental: fast-moving things may show some glitches. It needs more GPU."),
++                         {"No", "120 FPS", "180 FPS"}};
++    for (size_t i = 0; i < kInterpolationFps.size(); ++i) {
++        if (RuntimeConfigFile::FrameInterpolationFps(0) == kInterpolationFps[i]) interpolation.value = static_cast<int>(i);
++    }
+     Option fps{Tr("MOSTRAR FPS", "SHOW FPS"), Tr("Contador de fotogramas por segundo en una esquina.",
+                "Frames-per-second counter in a corner."), YesNo(),
+                RuntimeConfigFile::ShowFps(true) ? 1 : 0};
+@@ -637,7 +655,7 @@ Result Run(int argc, char** argv) {
+     // The runtime re-reads these after the launcher (main.cpp, settings_overlay::InitializeRuntimeSettings),
+     // so Play keeps this window; only the API, Wii Remotes and mods need a new process.
+     display.restart = resolution.restart = aspect.restart = fps.restart = volume.restart = mute.restart = false;
+-    fsr.restart = filtering.restart = quality.restart = false;
++    fsr.restart = filtering.restart = quality.restart = fill.restart = interpolation.restart = false;
+     Option wiimote{"WII REMOTE", Tr("Usar Wii Remotes reales por Bluetooth. Déjalo en No si solo usas mando o teclado.",
+                                     "Use real Wii Remotes over Bluetooth. Leave it at No if you only use a controller or keyboard."),
+                    YesNo(), RuntimeConfigFile::WiiRemotesEnabled(true) ? 1 : 0};
+@@ -693,7 +711,7 @@ Result Run(int argc, char** argv) {
+     }
+ 
+     std::vector<Tab> tabs{
+-        {"VIDEO", {api, quality, display, resolution, fsr, filtering, aspect, fps}},
++        {"VIDEO", {api, quality, display, resolution, fsr, filtering, aspect, fill, interpolation, fps}},
+         {"AUDIO", {volume, mute}},
+         {Tr("CONTROLES", "CONTROLS"), {wiimote}},
+         {Tr("INTERFAZ", "INTERFACE"), {launcherOption, language}},
+@@ -752,6 +770,8 @@ Result Run(int argc, char** argv) {
+         if (label == resolution.label) RuntimeConfigFile::SetResolutionMultiplier(kResolutions[static_cast<size_t>(o.value)]);
+         if (label == aspect.label) RuntimeConfigFile::SetForceAspect169(o.value != 0);
+         if (label == fsr.label) RuntimeConfigFile::SetFsr(o.value != 0);
++        if (label == fill.label) RuntimeConfigFile::SetCropBlackBorders(o.value != 0);
++        if (label == interpolation.label) RuntimeConfigFile::SetFrameInterpolationFps(kInterpolationFps[static_cast<size_t>(o.value)]);
+         if (label == filtering.label) RuntimeConfigFile::SetTextureFiltering(kFilteringLevels[static_cast<size_t>(o.value)]);
+         if (label == quality.label && o.value > 0) {
+             const Preset& p = kPresets[static_cast<size_t>(o.value - 1)];
+diff --git a/runtime/src/settings_overlay.cpp b/runtime/src/settings_overlay.cpp
+index f36577a..80447ed 100644
+--- a/runtime/src/settings_overlay.cpp
++++ b/runtime/src/settings_overlay.cpp
+@@ -101,7 +101,7 @@ bool g_audioMuted = RuntimeConfigFile::AudioMuted(false);
+ int32_t g_muteHotkey = RuntimeConfigFile::MuteHotkey(SDL_SCANCODE_BACKSLASH);
+ bool g_audioMixWorker = RuntimeConfigFile::AudioMixWorkerEnabled(true);
+ bool g_attenuateMusicWhenMediaPlays = RuntimeConfigFile::AttenuateMusicWhenMediaPlays(false);
+-int g_frameInterpolationMode = [] {
++int ConfiguredFrameInterpolationMode() {
+     switch (RuntimeConfigFile::FrameInterpolationFps(0)) {
+     case 120:
+         return 1;
+@@ -110,7 +110,12 @@ int g_frameInterpolationMode = [] {
+     default:
+         return 0;
+     }
+-}();
++}
++int g_frameInterpolationMode = ConfiguredFrameInterpolationMode();
++// MLB draws its 640x480 frame inside a black border 16 lines tall at the top and at the bottom; the
++// line next to it is half dark, so one more goes too.
++constexpr uint32_t kGameBorderLines = 17;
++bool g_cropBlackBorders = RuntimeConfigFile::CropBlackBorders(true);
+ int ConfiguredDisplayMode() {
+     const std::string mode = RuntimeConfigFile::DisplayMode("windowed");
+     if (mode == "borderless") {
+@@ -1053,6 +1058,11 @@ void DrawGraphicsSettings() {
+         RuntimeConfigFile::SetForceAspect169(g_forceAspect169);
+     }
+     ImGui::TextDisabled("Keep a 16:9 image with black bars when the window has another shape.");
++    if (ImGui::Checkbox("Crop black borders", &g_cropBlackBorders)) {
++        aurora_set_display_crop_lines(g_cropBlackBorders ? kGameBorderLines : 0);
++        RuntimeConfigFile::SetCropBlackBorders(g_cropBlackBorders);
++    }
++    ImGui::TextDisabled("Leave out the black border the game draws above and below its image.");
+     bool fsr = aurora_get_fsr();
+     if (ImGui::Checkbox("AMD FSR 1 upscaling", &fsr)) {
+         aurora_set_fsr(fsr, 0.2f);
+@@ -1120,7 +1130,7 @@ void DrawGraphicsSettings() {
+     const char* currentFrameInterpolationMode =
+         kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)];
+     bool frameInterpolationModeChanged = false;
+-    if (ImGui::BeginCombo("Race frame interpolation (experimental)", currentFrameInterpolationMode)) {
++    if (ImGui::BeginCombo("Frame interpolation (experimental)", currentFrameInterpolationMode)) {
+         for (int mode = 0; mode < static_cast<int>(kFrameInterpolationModes.size()); ++mode) {
+             const bool selected = g_frameInterpolationMode == mode;
+             if (ImGui::Selectable(kFrameInterpolationModes[static_cast<size_t>(mode)], selected)) {
+@@ -1569,6 +1579,9 @@ void InitializeRuntimeSettings() noexcept {
+     g_showFps = RuntimeConfigFile::ShowFps(true);
+     g_forceAspect169 = RuntimeConfigFile::ForceAspect169Enabled();
+     aurora_set_fsr(RuntimeConfigFile::FsrEnabled(false), 0.2f);
++    g_cropBlackBorders = RuntimeConfigFile::CropBlackBorders(true);
++    aurora_set_display_crop_lines(g_cropBlackBorders ? kGameBorderLines : 0);
++    g_frameInterpolationMode = ConfiguredFrameInterpolationMode();
+     aurora_set_forced_anisotropy(static_cast<uint16_t>(RuntimeConfigFile::TextureFiltering(0)));
+     PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
+     InputBindings::Reload();
