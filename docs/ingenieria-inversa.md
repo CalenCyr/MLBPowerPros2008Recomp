@@ -719,7 +719,7 @@ Fuentes: `wiicompiled-match-benchmark.patch` (`match_benchmark.cpp`), `docs/wiic
 
 ## 8. Gráficos (GX y VI)
 
-- **Panorámico nativo:** el juego consulta `SCGetAspectRatio` (`0x800D3374`) desde `0x8004D994`, `0x80055928`, `0x80062D24` y, en el REL, `0x807AB5D4` y `0x80CCAE3C`, y adapta la imagen a 16:9 (los objetos redondos siguen redondos). Código traducido y observación, `RL8E54`.
+- **Panorámico nativo:** el juego consulta `SCGetAspectRatio` (`0x800D3374`) desde `0x8004D994`, `0x80055928`, `0x80062D24` y, en el REL, `0x807AB5D4` y `0x80CCAE3C`, y adapta la imagen a 16:9 (los objetos redondos siguen redondos). Código traducido y observación, `RL8E54`. **Hasta el 17 de octubre de 2026 no se activaba en el recomp:** la respuesta propia de Wiicompiled a `SCGetAspectRatio` lleva la dirección de Mario Kart Wii y no se enganchaba, y la función original lee `IPL.AR` de un SYSCONF que la instalación no tiene, así que devolvía 4:3 y «Forzar 16:9» solo estiraba una imagen 4:3 (lo notó un jugador). Arreglo: nativo `hle/mlb/sc_aspect_ratio.cpp` en `0x800D3374` (parche `wiicompiled-mlb-widescreen`), que contesta según los ajustes de vídeo. Comprobado en el partido de prueba: el juego registra `SCGetAspectRatio -> 16:9`, la bola sale redonda y el texto del HUD con sus proporciones.
 - `GXInit` `0x800C25CC`, `GXCopyDisp` `0x800C61F8`.
 - Variables globales de GX:
   - `FifoObj` `0x802D2AC0`

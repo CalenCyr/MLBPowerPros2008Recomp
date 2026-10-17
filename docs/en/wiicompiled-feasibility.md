@@ -765,7 +765,7 @@ Audit of the whole runtime looking for Mario Kart Wii addresses, `r13`/`r2` offs
 - **No effect in MLB** (code not bound or disabled): audio mixing, ISFS, EGG/GX, SC, ES, Mario Kart system threads, Retro Rewind mod loader.
 - **Reviewed afterwards, same day:**
   - **IOS:** the disc's TMD asks for IOS33 (`0x21`); the runtime declared IOS36. Now `GameProfile::kIosVersion` gives `0x00210E18` (Dolphin's value for IOS33; same date and memory as IOS36). The game confirms it at boot: "Firmware: 33.14.24" (previously 36.14.24).
-  - **Widescreen:** MLB supports it natively: it queries `SCGetAspectRatio` (`0x800D3374`) in 5 places, 2 of them in its REL, and in 16:9 round objects stay round. 16:9 is kept as the default.
+  - **Widescreen:** MLB supports it natively: it queries `SCGetAspectRatio` (`0x800D3374`) in 5 places, 2 of them in its REL, and in 16:9 round objects stay round. 16:9 is kept as the default. *(Correction, October 17: it was not being turned on; see "Native widescreen" in `docs/en/reverse-engineering.md`. It is now, with the patch `wiicompiled-mlb-widescreen`.)*
   - **Volumes:** the music, effects, interface and voice volumes in the on-screen menu depend on the Mario Kart sound manager and do nothing in MLB. For MLB they are hidden and only the master volume remains (the launcher already offered only that one).
   - **Frames:** MLB runs at 60 FPS natively: each 16.7 ms frame carries its full drawing (346-357 calls, none empty) and the logic runs at normal speed; the runtime does not interpolate (`frame_interpolation_fps = 0`).
 

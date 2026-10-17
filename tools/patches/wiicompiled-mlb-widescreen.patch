@@ -1,0 +1,31 @@
+diff --git a/runtime/src/hle/mlb/sc_aspect_ratio.cpp b/runtime/src/hle/mlb/sc_aspect_ratio.cpp
+new file mode 100644
+index 0000000..ac467f4
+--- /dev/null
++++ b/runtime/src/hle/mlb/sc_aspect_ratio.cpp
+@@ -0,0 +1,25 @@
++// MLB Power Pros 2008 (RL8E54): SCGetAspectRatio (0x800D3374).
++//
++// The game draws in 16:9 when the Wii settings say the TV is widescreen: it asks
++// SCGetAspectRatio from five places (0x8004D994, 0x80055928, 0x80062D24 and, in the REL,
++// 0x807AB5D4 and 0x80CCAE3C). The original reads "IPL.AR" from SYSCONF, which a fresh
++// install does not have, so it returned 0 (4:3) and "Force 16:9" only stretched a 4:3
++// image. Wiicompiled's own SC hook carries Mario Kart Wii's address and stays unbound
++// here; this native answers from the launcher's video settings instead.
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++
++#include "abi_bridge.h"
++#include "aurora_events.h"
++#include "runtime_config.h"
++
++extern "C" void MLB_SCGetAspectRatio_800D3374(CpuContext* ctx) {
++    const bool widescreen = RuntimeConfigFile::WidescreenEnabled(true) || MkwForceAspect169Requested();
++    static std::atomic<bool> logged{false};
++    if (!logged.exchange(true)) {
++        std::fprintf(stderr, "[sc] SCGetAspectRatio -> %s\n", widescreen ? "16:9" : "4:3");
++    }
++    ctx->gpr[3] = widescreen ? 1u : 0u;
++}
++PPC_NATIVE_OVERRIDE_VOID(800D3374, MLB_SCGetAspectRatio_800D3374, (CpuContext* ctx), (ctx));

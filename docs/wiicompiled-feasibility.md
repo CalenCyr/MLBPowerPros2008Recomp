@@ -765,7 +765,7 @@ Auditoría de todo el runtime buscando direcciones, desplazamientos de `r13`/`r2
 - **Sin efecto en MLB** (código no enlazado o desactivado): mezcla de audio, ISFS, EGG/GX, SC, ES, hilos del sistema de Mario Kart, cargador de mods de Retro Rewind.
 - **Revisado después, mismo día:**
   - **IOS:** el TMD del disco pide IOS33 (`0x21`); el runtime declaraba IOS36. Ahora `GameProfile::kIosVersion` da `0x00210E18` (valor de Dolphin para IOS33; misma fecha y memoria que IOS36). El juego lo confirma al arrancar: «Firmware: 33.14.24» (antes 36.14.24).
-  - **Panorámico:** MLB lo soporta de forma nativa: consulta `SCGetAspectRatio` (`0x800D3374`) en 5 sitios, 2 de su REL, y en 16:9 los objetos redondos siguen redondos. Se mantiene 16:9 por defecto.
+  - **Panorámico:** MLB lo soporta de forma nativa: consulta `SCGetAspectRatio` (`0x800D3374`) en 5 sitios, 2 de su REL, y en 16:9 los objetos redondos siguen redondos. Se mantiene 16:9 por defecto. *(Corrección del 17 de octubre: no se activaba; ver «Panorámico nativo» en `docs/ingenieria-inversa.md`. Ahora sí, con el parche `wiicompiled-mlb-widescreen`.)*
   - **Volúmenes:** música, efectos, interfaz y voces del menú en pantalla dependen del gestor de sonido de Mario Kart y no hacen nada en MLB. Para MLB se ocultan y queda solo el volumen general (el launcher ya solo ofrecía ese).
   - **Fotogramas:** MLB va a 60 FPS de forma nativa: cada fotograma de 16,7 ms trae su dibujado completo (346-357 llamadas, ninguno vacío) y la lógica va a velocidad normal; el runtime no interpola (`frame_interpolation_fps = 0`).
 
